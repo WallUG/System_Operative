@@ -120,7 +120,7 @@ void call_constructors() {
 ```
 
 ## Checklist antes de avanzar a Fase 3
-- [ ] El kernel compila sin warnings sobre símbolos indefinidos de libc
-- [ ] `kmain` se ejecuta y escribe correctamente en memoria de video (verificar en pantalla de QEMU)
-- [ ] El binario final respeta el layout definido en `linker.ld` (verificar con `objdump -h kernel.elf`)
-- [ ] (Si C++) constructores globales se ejecutan correctamente antes de la lógica principal
+- [x] El kernel compila sin warnings sobre símbolos indefinidos de libc
+- [x] `kmain` se ejecuta y escribe correctamente en memoria de video (verificar en pantalla de QEMU)
+- [x] El binario final respeta el layout definido en `linker.ld` (verificar con `objdump -h kernel.elf`)
+- [x] (Si C++) constructores globales se ejecutan correctamente antes de la lógica principal

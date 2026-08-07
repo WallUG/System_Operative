@@ -113,7 +113,7 @@ void kfree(void* ptr) {
 Convención común en x86_64: mitad superior del espacio virtual (`0xFFFF800000000000` en adelante) para el kernel, mitad inferior para cada proceso de usuario. Cada proceso tiene su propio PML4, pero todas comparten el mismo mapeo de la mitad superior (el kernel siempre visible, aunque solo accesible en ring 0 gracias al bit `PAGE_USER` ausente en esas entradas).
 
 ## Checklist antes de avanzar a Fase 5
-- [ ] El PMM reporta correctamente memoria total/usada/libre coincidiendo con el mapa E820
-- [ ] `map_page`/`unmap_page` verificados con una prueba: mapear una dirección virtual arbitraria a un frame físico conocido y confirmar lectura/escritura correcta
-- [ ] `kmalloc`/`kfree` probados con múltiples asignaciones y liberaciones sin corromper el heap (agregar una función de "walk the heap" para debug)
-- [ ] Page fault handler (excepción 14) implementado y probado deliberadamente (acceder a una dirección no mapeada debe dar diagnóstico, no triple fault)
+- [x] El PMM reporta correctamente memoria total/usada/libre coincidiendo con el mapa E820
+- [x] `map_page`/`unmap_page` verificados con una prueba: mapear una dirección virtual arbitraria a un frame físico conocido y confirmar lectura/escritura correcta
+- [x] `kmalloc`/`kfree` probados con múltiples asignaciones y liberaciones sin corromper el heap (agregar una función de "walk the heap" para debug)
+- [x] Page fault handler (excepción 14) implementado y probado deliberadamente (acceder a una dirección no mapeada debe dar diagnóstico, no triple fault)

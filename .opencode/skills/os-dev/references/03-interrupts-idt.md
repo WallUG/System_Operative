@@ -122,6 +122,6 @@ void irq_handler(registers_t regs) {
 - **Teclado (IRQ1)**: leer scancode desde el puerto 0x60 en el handler, traducirlo con una tabla scancode→ASCII, y colocarlo en un buffer circular que el resto del kernel consulta.
 
 ## Checklist antes de avanzar a Fase 4
-- [ ] Una excepción provocada intencionalmente (p. ej. división por cero) es capturada por el handler y muestra diagnóstico en vez de reiniciar la VM
-- [ ] El PIC está remapeado y las IRQ 0 y 1 (timer, teclado) generan interrupciones visibles (contador incrementando, teclas impresas en pantalla)
-- [ ] `sti` se ejecuta solo después de que la IDT y el PIC estén completamente configurados
+- [x] Una excepción provocada intencionalmente (p. ej. división por cero) es capturada por el handler y muestra diagnóstico en vez de reiniciar la VM
+- [x] El PIC está remapeado y las IRQ 0 y 1 (timer, teclado) generan interrupciones visibles (contador incrementando, teclas impresas en pantalla)
+- [x] `sti` se ejecuta solo después de que la IDT y el PIC estén completamente configurados

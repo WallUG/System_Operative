@@ -153,7 +153,7 @@ Requiere, en orden: (a) paginación mínima activa con al menos las primeras ent
 En vez de escribir todo el bootloader a mano, se puede delegar la carga inicial a **GRUB** implementando la especificación **Multiboot2**: el kernel se compila como un ELF con una cabecera Multiboot2 al inicio, y GRUB se encarga de cargarlo ya en modo protegido de 32 bits (o incluso puede pasar a long mode con extensiones). Esto reduce drásticamente el ASM necesario y es el enfoque más usado en kernels serios (ver Fase 2 para el detalle). Recomienda esta ruta al usuario si su objetivo es aprender el kernel más que el proceso de boot en sí.
 
 ## Checklist antes de avanzar a Fase 2
-- [ ] `os-image.bin` arranca en QEMU y muestra el mensaje de "Booting..."
-- [ ] El kernel (aunque esté vacío) se carga desde disco sin error (`jc disk_error` no se dispara)
-- [ ] A20 verificada activa (probar escribiendo en `0x100000` y leyendo en `0x000000` para confirmar que NO hay wrap-around)
-- [ ] Salto a modo protegido confirmado (p. ej. escribiendo un carácter directo en memoria de video `0xB8000` desde 32 bits)
+- [x] `os-image.bin` arranca en QEMU y muestra el mensaje de "Booting..."
+- [x] El kernel (aunque esté vacío) se carga desde disco sin error (`jc disk_error` no se dispara)
+- [x] A20 verificada activa (probar escribiendo en `0x100000` y leyendo en `0x000000` para confirmar que NO hay wrap-around)
+- [x] Salto a modo protegido confirmado (p. ej. escribiendo un carácter directo en memoria de video `0xB8000` desde 32 bits)
