@@ -1,11 +1,27 @@
-# Makefile MyOS - Fase 1 (i386, bootloader + kernel stub ASM)
-# El kernel en C llegara en la Fase 2 (gcc -m32 freestanding).
+# Makefile MyOS - Fase 2 (i386, kernel en C freestanding)
+# Toolchain: gcc/ld del host en modo freestanding -m32 (ver DESIGN.md).
 
 ASM       = nasm
+CC        = gcc
+LD        = ld
+OBJCOPY   = objcopy
 QEMU      = qemu-system-i386
-KERNEL_SECTORS = 64              # tamano de kernel en sectores (1 = 512 bytes)
+KERNEL_SECTORS = 64             # tamano de kernel en sectores (1 = 512 bytes)
 
 BUILD     = build
+CFLAGS    = -m32 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
+            -fno-builtin -fno-asynchronous-unwind-tables -Wall -Wextra -O2 \
+            -Ikernel -Ilibc -c
+LDFLAGS   = -m elf_i386 -T linker.ld -nostdlib
+
+OBJS      = $(BUILD)/entry.o \
+            $(BUILD)/kmain.o \
+            $(BUILD)/drivers/vga.o \
+            $(BUILD)/drivers/serial.o \
+            $(BUILD)/libc/string.o
+
+# VPATH: las fuentes .c viven en kernel/ o libc/; los .o replican su ruta
+VPATH     = kernel:libc
 
 all: os-image.bin
 
@@ -14,10 +30,20 @@ $(BUILD)/boot.bin: boot/boot.asm
 	$(ASM) -f bin $< -o $@
 	@test $$(wc -c < $@) -eq 512 || (echo "ERROR: boot.bin no mide 512 bytes"; exit 1)
 
-$(BUILD)/kernel.bin: kernel/entry.asm
-	mkdir -p $(BUILD)
-	$(ASM) -f bin $< -o $@
-	@truncate -s $$(( $(KERNEL_SECTORS) * 512 )) $@   # pad a 64 sectores
+$(BUILD)/%.o: kernel/%.asm
+	@mkdir -p $(dir $@)
+	$(ASM) -f elf32 $< -o $@
+
+$(BUILD)/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $< -o $@
+
+kernel.elf: $(OBJS)
+	$(LD) $(LDFLAGS) -o $@ $(OBJS)
+
+$(BUILD)/kernel.bin: kernel.elf
+	$(OBJCOPY) -O binary $< $@
+	@truncate -s $$(( $(KERNEL_SECTORS) * 512 )) $@
 
 os-image.bin: $(BUILD)/boot.bin $(BUILD)/kernel.bin
 	cat $^ > $@
@@ -26,18 +52,16 @@ os-image.bin: $(BUILD)/boot.bin $(BUILD)/kernel.bin
 run: os-image.bin
 	$(QEMU) -drive format=raw,file=$<
 
-# Ejecucion headless: VGA oculto, salida por COM1 a stdout.
 test: os-image.bin
 	$(QEMU) -display none -monitor none -serial stdio -no-reboot \
 	        -drive format=raw,file=$<
 
-# Depuracion remota: pausa QEMU a la espera de GDB en :1234
 debug: os-image.bin
 	$(QEMU) -s -S -drive format=raw,file=$< &
 	@echo "Conecta con: gdb -ex 'target remote localhost:1234'"
 	@sleep 1
 
 clean:
-	rm -rf $(BUILD) os-image.bin
+	rm -rf $(BUILD) os-image.bin kernel.elf
 
 .PHONY: all run test debug clean

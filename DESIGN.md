@@ -49,9 +49,14 @@ estructura de boot info pasada en registro/pila si hace falta (equivalente a mul
 
 - [x] Fase 0 - Toolchain instalada y Makefile base (i386)
 - [x] Fase 1 - Bootloader: mensaje BIOS, carga LBA, A20, GDT, salto a modo protegido
-- [ ] Fase 2 - Kernel C freestanding (`kmain`), linker script, VGA driver
+- [x] Fase 2 - Kernel C freestanding (`kmain`), linker script (0x10000), drivers VGA/serial, mini-libc (`libc/string.c`)
 - [ ] Fase 3 - IDT, ISR/IRQ, PIC, teclado, PIT
 - [ ] Fase 4 - Gestión de memoria física, paginación, heap
 - [ ] Fase 5 - Multitarea, scheduler, drivers
 - [ ] Fase 6 - Filesystem, modo usuario, shell
 - [ ] Fase 7 - Pruebas, GDB, CI
+
+## Notas de implementación (bitácora)
+
+- **Fase 2**: se evita la división entera en C (requeriría `__udivsi3`/`__umodsi3` de libgcc, no disponible con `ld -nostdlib`). Si se necesita: implementar helpers en `libc/` o linkear `-lgcc` 32 bits. Layout verificado con `objdump -h` (`.text` VMA=LMA=0x10000).
+- **Fase 2**: `kernel/entry.asm` define la pila en `.bss` (16 KB alineada); `_start` fija `esp` y llama a `kmain`. El bootloader ya no provee pila al kernel.
