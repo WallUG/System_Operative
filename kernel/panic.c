@@ -35,9 +35,19 @@ static void append_str(char *buf, int *pos, const char *s)
         buf[(*pos)++] = *s++;
 }
 
+static void print_and_halt(char *buf) __attribute__((noreturn));
+static void print_and_halt(char *buf)
+{
+    vga_puts(buf);
+    serial_puts(buf);
+    for (;;) {
+        __asm__ volatile("cli; hlt");
+    }
+}
+
 void kpanic(const char *name, registers_t *regs)
 {
-    char buf[96];
+    char buf[160];
     int p = 0;
 
     /* Construir un unico bloque y emitirlo igual a VGA y COM1 */
@@ -56,10 +66,26 @@ void kpanic(const char *name, registers_t *regs)
     append_str(buf, &p, "\nSistema detenido.\n");
     buf[p] = '\0';
 
-    vga_puts(buf);
-    serial_puts(buf);
+    print_and_halt(buf);
+}
 
-    for (;;) {
-        __asm__ volatile("cli; hlt");
-    }
+void kpanic_page_fault(uint32_t cr2, registers_t *regs)
+{
+    char buf[160];
+    int p = 0;
+
+    append_str(buf, &p, "\n*** KERNEL PANIC ***\nEvento: Page fault (int 14)\ncr2=");
+    append_hex(buf, &p, cr2);
+    append_str(buf, &p, "\nint_no=14 err=");
+    append_dec(buf, &p, regs->err_code);
+    append_str(buf, &p, " eip=");
+    append_hex(buf, &p, regs->eip);
+    append_str(buf, &p, " cs=");
+    append_dec(buf, &p, regs->cs);
+    append_str(buf, &p, " eflags=");
+    append_dec(buf, &p, regs->eflags);
+    append_str(buf, &p, "\nSistema detenido.\n");
+    buf[p] = '\0';
+
+    print_and_halt(buf);
 }

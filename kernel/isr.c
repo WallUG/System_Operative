@@ -25,6 +25,12 @@ static const char *const exception_names[32] = {
 
 void isr_handler(registers_t *regs)
 {
+    if (regs->int_no == 14) {
+        /* Page fault: CR2 tiene la direccion que causo el fallo */
+        uint32_t cr2;
+        __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+        kpanic_page_fault(cr2, regs);
+    }
     if (regs->int_no < 32) {
         kpanic(exception_names[regs->int_no], regs);
     }

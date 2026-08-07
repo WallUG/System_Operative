@@ -23,6 +23,10 @@ OBJS      = $(BUILD)/entry.o \
             $(BUILD)/pic.o \
             $(BUILD)/panic.o \
             $(BUILD)/kprint.o \
+            $(BUILD)/mem/mmap.o \
+            $(BUILD)/mem/pmm.o \
+            $(BUILD)/mem/paging.o \
+            $(BUILD)/mem/heap.o \
             $(BUILD)/drivers/vga.o \
             $(BUILD)/drivers/serial.o \
             $(BUILD)/drivers/timer.o \

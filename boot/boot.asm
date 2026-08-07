@@ -15,6 +15,8 @@ KERNEL_OFFSET    equ 0x0000
 KERNEL_SECTORS   equ 64            ; 64 sectores = 32 KB (kernel pad a ese tamano)
 CODE_SEG         equ gdt_code - gdt_start
 DATA_SEG         equ gdt_data - gdt_start
+MMAP_ADDR        equ 0x7E00        ; buffer E820: dword contador + entradas de 20 B
+MMAP_ENTRIES     equ 32
 
 start:
     cli
@@ -32,6 +34,8 @@ start:
     call load_kernel            ; lee KERNEL_SECTORS sectores a 0x10000
     mov si, msg_kernel_ok
     call print_string
+
+    call get_mmap               ; E820: mapa de memoria de la BIOS -> 0x7E00
 
     call enable_a20             ; metodo 8042 (portable); QEMU lo soporta
     call check_a20
@@ -73,6 +77,42 @@ disk_error:
     mov si, msg_disk_err
     call print_string
     jmp halt
+
+; ------------------------------------------------------------------
+; Recoge el mapa de memoria E820 de la BIOS (int 0x15, EAX=0xE820).
+; Buffer: dword contador en 0x7E00 + hasta MMAP_ENTRIES entradas de
+; 20 bytes (base_low, base_high, len_low, len_high, type) en 0x7E04.
+; Lo parsea el kernel en Fase 4 (kernel/mem/mmap.c).
+; ------------------------------------------------------------------
+get_mmap:
+    mov di, MMAP_ADDR + 4
+    xor ebx, ebx                ; continuacion de iteracion (empezar en 0)
+    xor bp, bp                  ; contador de entradas
+    mov es, bx                  ; es = 0 (bx ya es 0)
+    mov eax, 0xE820
+    mov edx, 0x534D4150         ; 'SMAP'
+    mov ecx, 20
+.next_entry:
+    int 0x15
+    jc .done                    ; error: usar lo recogido hasta ahora
+    cmp eax, 0x534D4150         ; BIOS debe responder con 'SMAP' en eax
+    jne .fail
+    inc bp
+    add di, 20                  ; siguiente entrada
+    test ebx, ebx               ; ebx=0 -> no hay mas entradas
+    jz .done
+    cmp bp, MMAP_ENTRIES        ; limite del buffer
+    jge .done
+    mov eax, 0xE820
+    mov edx, 0x534D4150
+    mov ecx, 20
+    jmp .next_entry
+.done:
+    mov [MMAP_ADDR], bp         ; ds=0 -> contador en 0x7E00
+    ret
+.fail:
+    xor bp, bp
+    jmp .done
 
 ; ------------------------------------------------------------------
 ; A20 via controlador de teclado (8042): leer output port, poner bit 1,
@@ -161,11 +201,11 @@ print_string:
 ; ------------------------------------------------------------------
 BOOT_DRIVE db 0
 
-msg_boot       db "MyOS: BIOS boot OK (16-bit), cargando kernel por LBA...", 13, 10, 0
-msg_kernel_ok  db "Kernel cargado en 0x10000 (32 KB).", 13, 10, 0
-msg_a20_ok     db "A20 habilitada (8042).", 13, 10, 0
-msg_a20_fail   db "ERROR: A20 no se pudo habilitar.", 13, 10, 0
-msg_disk_err   db "ERROR: fallo de lectura de disco (int 0x13).", 13, 10, 0
+msg_boot       db "MyOS: BIOS OK, LBA load...", 13, 10, 0
+msg_kernel_ok  db "Kernel en 0x10000.", 13, 10, 0
+msg_a20_ok     db "A20 OK.", 13, 10, 0
+msg_a20_fail   db "ERROR: A20 fallo.", 13, 10, 0
+msg_disk_err   db "ERROR: fallo de disco (int 0x13).", 13, 10, 0
 
 dap:                            ; Disk Address Packet (int 0x13, ah=0x42)
     db 0x10                     ; tamano del paquete (16 bytes)

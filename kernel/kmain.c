@@ -1,59 +1,125 @@
 /* MyOS - kernel/kmain.c
  * Punto de entrada del kernel en C (llamado desde kernel/entry.asm).
- * Fase 3: IDT + PIC remapeado + PIT (IRQ0) + teclado (IRQ1).
- * Demo: 1) status del subsistema de interrupciones; 2) ventana de 3
- * segundos de teclado (echo); 3) excepcion #DE intencional -> kpanic. */
+ * Fase 4: memoria - E820 -> PMM bitmap -> paginacion PSE 4 MiB
+ * (identity 0-1 GiB) -> heap first-fit -> #PF intencional. Mantiene
+ * las demos de interrupciones de la Fase 3 (PIT + teclado). */
 
 #include <stdint.h>
 #include "io.h"
 #include "idt.h"
 #include "pic.h"
 #include "kprint.h"
+#include "mem/mmap.h"
+#include "mem/pmm.h"
+#include "mem/paging.h"
+#include "mem/heap.h"
 #include "drivers/vga.h"
 #include "drivers/serial.h"
 #include "drivers/timer.h"
 #include "drivers/keyboard.h"
-#include "string.h"
 
 void kmain(void)
 {
     serial_init();
     vga_init();
 
+    kprint("MyOS 0.4.0 - gestion de memoria\n");
+
+    /* --- Memoria fisica: E820 -> PMM bitmap -> heap --- */
+    mmap_init();
+    pmm_init();
+    heap_init();
+    {
+        uint32_t total_mb = (uint32_t)(mmap_total_usable() >> 20);
+        kprint("E820: ");
+        kprint_uint(e820_count());
+        kprint(" entradas, RAM usable ~");
+        kprint_uint(total_mb);
+        kprint(" MiB\n");
+        kprint("PMM: bitmap en 0x20000, frames libres = ");
+        kprint_uint(pmm_free_count());
+        kprint("\n");
+    }
+
+    /* --- Demo 1: PMM alloc/free round-trip --- */
+    {
+        uint32_t a = pmm_alloc_frame();
+        uint32_t b = pmm_alloc_frame();
+        uint32_t c = pmm_alloc_frame();
+        kprint("PMM: frames ");
+        kprint_hex32(a);
+        kprint(" ");
+        kprint_hex32(b);
+        kprint(" ");
+        kprint_hex32(c);
+        kprint("\n");
+        pmm_free_frame(b);
+        pmm_free_frame(a);
+        pmm_free_frame(c);
+        kprint("PMM: liberados 3 frames, libres = ");
+        kprint_uint(pmm_free_count());
+        kprint("\n");
+    }
+
+    /* --- Paginacion: PSE, identity map 0-1 GiB con paginas de 4 MiB --- */
+    paging_init();
+    {
+        volatile uint32_t *p = (volatile uint32_t *)0x1000000;  /* 16 MiB */
+        *p = 0x11223344u;
+        kprint("Paginacion: PD en ");
+        kprint_hex32(paging_pd_addr());
+        kprint(", write/read en 16 MiB -> ");
+        kprint_hex32(*p);
+        kprint("\n");
+    }
+
+    /* --- Heap: first-fit con split y reutilizacion --- */
+    heap_dump();
+    {
+        void *b1 = kmalloc(1024);
+        void *b2 = kmalloc(4096);
+        void *b3 = kmalloc(64);
+        kprint("Heap: kmalloc(1024)=");
+        kprint_hex32((uint32_t)b1);
+        kprint(" kmalloc(4096)=");
+        kprint_hex32((uint32_t)b2);
+        kprint(" kmalloc(64)=");
+        kprint_hex32((uint32_t)b3);
+        kprint("\n");
+        kfree(b2);
+        {
+            void *b4 = kmalloc(2048);   /* reutiliza el bloque libre de b2 */
+            kprint("Heap: kfree(4096) y kmalloc(2048)=");
+            kprint_hex32((uint32_t)b4);
+            kprint("\n");
+            kfree(b4);
+        }
+        kfree(b1);
+        kfree(b3);
+        heap_dump();
+    }
+
+    /* --- Interrupciones (Fase 3): PIT + teclado --- */
     idt_init();
     pic_remap();
     timer_init(100);            /* 100 ticks/segundo */
     keyboard_init();
 
-    vga_puts("MyOS 0.3.0 - interrupciones activas\n");
-    serial_puts("MyOS 0.3.0 - interrupciones activas\n");
-    vga_puts("IDT: 256 gates (excepciones 0-31, IRQ 32-47)\n");
-    serial_puts("IDT: 256 gates (excepciones 0-31, IRQ 32-47)\n");
-    vga_puts("PIC remapeado: IRQ0-15 -> vectores 0x20-0x2F\n");
-    serial_puts("PIC remapeado: IRQ0-15 -> vectores 0x20-0x2F\n");
-    vga_puts("PIT: 100 Hz. Teclado: PS/2 IRQ1.\n");
-    serial_puts("PIT: 100 Hz. Teclado: PS/2 IRQ1.\n");
-
     sti();                      /* solo ahora: IDT y PIC listos */
 
-    /* --- Demo 1: PIT. Espera ~1s y muestra el tick counter --- */
     {
         uint32_t start = timer_get_ticks();
         while (timer_get_ticks() - start < 100)
             halt();             /* las IRQ despiertan el hlt */
-        vga_puts("PIT OK: 100 ticks en 1 s. ticks=");
-        serial_puts("PIT OK: 100 ticks en 1 s. ticks=");
+        kprint("PIT OK: 100 ticks en 1 s. ticks=");
         kprint_uint(timer_get_ticks());
-        vga_puts("\n");
-        serial_puts("OK\n");
+        kprint("\n");
     }
 
-    /* --- Demo 2: teclado. Ventana de 3 s; echo de lo pulsado --- */
     {
         uint32_t start = timer_get_ticks();
         int keys = 0;
-        vga_puts("Ventana de teclado (3 s) - pulsa algo...\n");
-        serial_puts("Ventana de teclado (3 s)...\n");
+        kprint("Ventana de teclado (3 s) - pulsa algo...\n");
         while (timer_get_ticks() - start < 300) {
             int c = keyboard_read();
             if (c >= 0) {
@@ -63,25 +129,17 @@ void kmain(void)
             }
             halt();
         }
-        vga_puts("\nTeclas recibidas: ");
-        serial_puts("\nTeclas recibidas: ");
+        kprint("\nTeclas recibidas: ");
         kprint_uint((uint32_t)keys);
-        vga_puts("\n");
-        serial_puts("\n");
+        kprint("\n");
     }
 
-    /* --- Demo 3: excepcion intencional (#DE = division by zero).
-     * 100 / 0 compila a divl inline; la CPU lanza vector 0 y la IDT lo
-     * captura: kpanic muestra el diagnostico y detiene el sistema.
-     * Nota: el resultado se imprime para evitar que -O2 elimine la
-     * division como codigo muerto. --- */
-    vga_puts("Provocando #DE: division por cero...\n");
-    serial_puts("Provocando #DE: division por cero...\n");
-    {
-        volatile uint32_t zero = 0;
-        uint32_t r = 100u / zero;   /* nunca deberia retornar */
-        kprint_uint(r);              /* inalcanzable: #DE dispara antes */
-    }
+    /* --- Demo final: #PF intencional en 0x50000000 (no mapeado).
+     * Con paginacion activa, PDE 320 = 0 -> la CPU lanza vector 14;
+     * isr_handler lee CR2 y kpanic_page_fault imprime el diagnostico.
+     * La escritura no deberia retornar nunca. --- */
+    kprint("Provocando #PF: escritura en 0x50000000 (no mapeado)...\n");
+    *(volatile uint32_t *)0x50000000u = 0xDEADBEEFu;
 
     for (;;) {
         halt();
