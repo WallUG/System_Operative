@@ -23,4 +23,19 @@ static inline void io_wait(void)
     outb(0x80, 0);
 }
 
+static inline void sti(void)
+{
+    __asm__ volatile("sti");
+}
+
+static inline void cli(void)
+{
+    __asm__ volatile("cli");
+}
+
+static inline void halt(void)
+{
+    __asm__ volatile("hlt");
+}
+
 #endif

@@ -10,14 +10,23 @@ KERNEL_SECTORS = 64             # tamano de kernel en sectores (1 = 512 bytes)
 
 BUILD     = build
 CFLAGS    = -m32 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
-            -fno-builtin -fno-asynchronous-unwind-tables -Wall -Wextra -O2 \
+            -fno-builtin -fno-asynchronous-unwind-tables \
+            -fno-optimize-sibling-calls -Wall -Wextra -O2 \
             -Ikernel -Ilibc -c
 LDFLAGS   = -m elf_i386 -T linker.ld -nostdlib
 
 OBJS      = $(BUILD)/entry.o \
             $(BUILD)/kmain.o \
+            $(BUILD)/idt.o \
+            $(BUILD)/isr.o \
+            $(BUILD)/isr_handlers.o \
+            $(BUILD)/pic.o \
+            $(BUILD)/panic.o \
+            $(BUILD)/kprint.o \
             $(BUILD)/drivers/vga.o \
             $(BUILD)/drivers/serial.o \
+            $(BUILD)/drivers/timer.o \
+            $(BUILD)/drivers/keyboard.o \
             $(BUILD)/libc/string.o
 
 # VPATH: las fuentes .c viven en kernel/ o libc/; los .o replican su ruta
@@ -35,6 +44,12 @@ $(BUILD)/%.o: kernel/%.asm
 	$(ASM) -f elf32 $< -o $@
 
 $(BUILD)/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $< -o $@
+
+# kernel/isr.c no puede usar la regla patron: build/isr.o ya lo ocupa
+# kernel/isr.asm (stubs). Handler en C -> isr_handlers.o.
+$(BUILD)/isr_handlers.o: kernel/isr.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $< -o $@
 

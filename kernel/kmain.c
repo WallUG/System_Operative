@@ -1,47 +1,89 @@
 /* MyOS - kernel/kmain.c
  * Punto de entrada del kernel en C (llamado desde kernel/entry.asm).
- * C freestanding: sin libc del host, solo <stdint.h>/<stddef.h>.
- * Nota: se evita la division entera (necesitaria __udivsi3 de libgcc);
- * hasta la Fase 4 se usa aritmetica de shifts (hex). */
+ * Fase 3: IDT + PIC remapeado + PIT (IRQ0) + teclado (IRQ1).
+ * Demo: 1) status del subsistema de interrupciones; 2) ventana de 3
+ * segundos de teclado (echo); 3) excepcion #DE intencional -> kpanic. */
 
 #include <stdint.h>
+#include "io.h"
+#include "idt.h"
+#include "pic.h"
+#include "kprint.h"
 #include "drivers/vga.h"
 #include "drivers/serial.h"
+#include "drivers/timer.h"
+#include "drivers/keyboard.h"
 #include "string.h"
-
-/* Imprime un entero sin signo en hexadecimal (0x..). */
-static void print_hex(uint32_t n)
-{
-    const char *digits = "0123456789ABCDEF";
-    vga_puts("0x");
-    for (int shift = 28; shift >= 0; shift -= 4)
-        vga_putc(digits[(n >> shift) & 0xF]);
-}
 
 void kmain(void)
 {
-    char dst[16];
-
     serial_init();
     vga_init();
 
-    vga_puts("MyOS 0.2.0 - kmain() en C freestanding\n");
-    serial_puts("MyOS 0.2.0 - kmain() en C freestanding\n");
+    idt_init();
+    pic_remap();
+    timer_init(100);            /* 100 ticks/segundo */
+    keyboard_init();
 
-    /* Evidencia de la mini-libc y del layout de memoria */
-    vga_puts("mini-libc: strlen(\"freestanding\") = ");
-    print_hex((uint32_t)strlen("freestanding"));
-    vga_puts(" (0xB = 11)\n");
+    vga_puts("MyOS 0.3.0 - interrupciones activas\n");
+    serial_puts("MyOS 0.3.0 - interrupciones activas\n");
+    vga_puts("IDT: 256 gates (excepciones 0-31, IRQ 32-47)\n");
+    serial_puts("IDT: 256 gates (excepciones 0-31, IRQ 32-47)\n");
+    vga_puts("PIC remapeado: IRQ0-15 -> vectores 0x20-0x2F\n");
+    serial_puts("PIC remapeado: IRQ0-15 -> vectores 0x20-0x2F\n");
+    vga_puts("PIT: 100 Hz. Teclado: PS/2 IRQ1.\n");
+    serial_puts("PIT: 100 Hz. Teclado: PS/2 IRQ1.\n");
 
-    memcpy(dst, "memcpy funciona", 15);
-    dst[15] = '\0';
-    vga_puts(dst);
-    vga_puts("\n");
+    sti();                      /* solo ahora: IDT y PIC listos */
 
-    vga_puts("Kernel en 0x10000, pila en .bss, VGA 80x25 + COM1 115200\n");
-    serial_puts("mini-libc + VGA + COM1 OK. Fase 3: IDT\n");
+    /* --- Demo 1: PIT. Espera ~1s y muestra el tick counter --- */
+    {
+        uint32_t start = timer_get_ticks();
+        while (timer_get_ticks() - start < 100)
+            halt();             /* las IRQ despiertan el hlt */
+        vga_puts("PIT OK: 100 ticks en 1 s. ticks=");
+        serial_puts("PIT OK: 100 ticks en 1 s. ticks=");
+        kprint_uint(timer_get_ticks());
+        vga_puts("\n");
+        serial_puts("OK\n");
+    }
+
+    /* --- Demo 2: teclado. Ventana de 3 s; echo de lo pulsado --- */
+    {
+        uint32_t start = timer_get_ticks();
+        int keys = 0;
+        vga_puts("Ventana de teclado (3 s) - pulsa algo...\n");
+        serial_puts("Ventana de teclado (3 s)...\n");
+        while (timer_get_ticks() - start < 300) {
+            int c = keyboard_read();
+            if (c >= 0) {
+                vga_putc((char)c);
+                serial_putc((char)c);
+                keys++;
+            }
+            halt();
+        }
+        vga_puts("\nTeclas recibidas: ");
+        serial_puts("\nTeclas recibidas: ");
+        kprint_uint((uint32_t)keys);
+        vga_puts("\n");
+        serial_puts("\n");
+    }
+
+    /* --- Demo 3: excepcion intencional (#DE = division by zero).
+     * 100 / 0 compila a divl inline; la CPU lanza vector 0 y la IDT lo
+     * captura: kpanic muestra el diagnostico y detiene el sistema.
+     * Nota: el resultado se imprime para evitar que -O2 elimine la
+     * division como codigo muerto. --- */
+    vga_puts("Provocando #DE: division por cero...\n");
+    serial_puts("Provocando #DE: division por cero...\n");
+    {
+        volatile uint32_t zero = 0;
+        uint32_t r = 100u / zero;   /* nunca deberia retornar */
+        kprint_uint(r);              /* inalcanzable: #DE dispara antes */
+    }
 
     for (;;) {
-        __asm__ volatile("hlt");
+        halt();
     }
 }
