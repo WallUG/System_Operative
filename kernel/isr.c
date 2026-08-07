@@ -10,6 +10,7 @@
 #include "io.h"
 #include "drivers/timer.h"
 #include "drivers/keyboard.h"
+#include "task/task.h"
 
 static const char *const exception_names[32] = {
     "Division by zero", "Debug", "Non-maskable interrupt",
@@ -47,5 +48,10 @@ void irq_handler(registers_t *regs)
         keyboard_irq();
     /* IRQs 2-15 sin driver aun */
 
+    /* EOI ANTES del scheduler: sched_tick puede cambiar de pila y nunca
+     * volver aqui (iret de la otra tarea); el PIC debe quedar liberado. */
     pic_send_eoi(irq);
+
+    if (irq == 0)
+        sched_tick(regs);       /* scheduler round-robin (Fase 5) */
 }

@@ -17,6 +17,45 @@
 #include "drivers/serial.h"
 #include "drivers/timer.h"
 #include "drivers/keyboard.h"
+#include "task/task.h"
+
+/* --- Fase 5: tareas de prueba del scheduler round-robin --- */
+static volatile uint32_t cnt_a, cnt_b;
+
+static void task_print_line(const char *name, uint32_t v)
+{
+    /* print atomico (IF off): evita intercalar caracteres entre tareas */
+    __asm__ volatile("cli");
+    kprint(name);
+    kprint(": ");
+    kprint_uint(v);
+    kprint("\n");
+    __asm__ volatile("sti");
+}
+
+static void task_a(void)
+{
+    uint32_t last = timer_get_ticks();
+    for (;;) {
+        cnt_a++;
+        if (timer_get_ticks() - last >= 10) {
+            last = timer_get_ticks();
+            task_print_line("T-A", cnt_a);
+        }
+    }
+}
+
+static void task_b(void)
+{
+    uint32_t last = timer_get_ticks();
+    for (;;) {
+        cnt_b++;
+        if (timer_get_ticks() - last >= 10) {
+            last = timer_get_ticks();
+            task_print_line("T-B", cnt_b);
+        }
+    }
+}
 
 void kmain(void)
 {
@@ -132,6 +171,22 @@ void kmain(void)
         kprint("\nTeclas recibidas: ");
         kprint_uint((uint32_t)keys);
         kprint("\n");
+    }
+
+    /* --- Fase 5: multitarea round-robin (IRQ0) ---
+     * kmain continua como tarea idle (hlt); A y B son contadores que
+     * imprimen cada ~10 ticks (100 ms). El scheduler cambia de tarea en
+     * cada tick del PIT, alternando A/B/idle visiblemente. */
+    sched_init();
+    task_create("A", task_a);
+    task_create("B", task_b);
+    sched_start();
+
+    {
+        /* idle: dejar correr las tareas ~3 s, luego el demo de #PF */
+        uint32_t start = timer_get_ticks();
+        while (timer_get_ticks() - start < 300)
+            halt();
     }
 
     /* --- Demo final: #PF intencional en 0x50000000 (no mapeado).

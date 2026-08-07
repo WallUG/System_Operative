@@ -54,7 +54,7 @@ estructura de boot info pasada en registro/pila si hace falta (equivalente a mul
 - [x] Fase 2 - Kernel C freestanding (`kmain`), linker script (0x10000), drivers VGA/serial, mini-libc (`libc/string.c`)
 - [x] Fase 3 - IDT, ISR/IRQ stubs, PIC 8259 remapeado, kpanic, PIT (IRQ0) y teclado (IRQ1)
 - [x] Fase 4 - Gestión de memoria física, paginación, heap
-- [ ] Fase 5 - Multitarea, scheduler, drivers
+- [x] Fase 5 - Multitarea, scheduler, drivers
 - [ ] Fase 6 - Filesystem, modo usuario, shell
 - [ ] Fase 7 - Pruebas, GDB, CI
 
@@ -68,3 +68,5 @@ estructura de boot info pasada en registro/pila si hace falta (equivalente a mul
 - **Fase 4**: memoria física vía E820 (int 0x15) → PMM bitmap (frames 4 KiB en 0x20000) → paginación identity 0-1 GiB con PSE (páginas 4 MiB, PD = 1 frame del PMM) → heap first-fit en 0x2000000 (4 MiB). Demo final: #PF intencional en 0x50000000 (PDE 320 = 0) capturado por `kpanic_page_fault` (CR2 + err code).
 - **Fase 4 (bug crítico, corregido)**: `CR4_PSE` estaba mal definido (`0x4` = bit TSD en vez de `0x10` = bit 4 PSE). Sin CR4.PSE real, la CPU/QEMU interpreta cada PDE con PS=1 como puntero a tabla de páginas: con `pde & ~0xfff` = 0 la IVT actúa como PT → el kernel se mapea a la ROM BIOS y cualquier acceso a memoria > 1 GiB lee PTE=0 → #PF e=0000 → triple fault. Diagnóstico: `info tlb` del monitor QEMU (camina la memoria guest) mostraba los vectores de la IVT como páginas (`0x11000 → 0xf000f000`). Fix: `CR4_PSE 0x10`.
 - **Fase 4 (nota)**: `PAGES_4MB` = 256 páginas → identity 0-1 GiB; la demo de #PF requiere que 0x50000000 quede sin mapear (PDE 320 = 0).
+- **Fase 5**: scheduler round-robin preemptivo sobre IRQ0. Diseño clave: el epilogo de `irq_common_stub` (`pop ds/es`, `popad`, `add esp 8`, `iret`) ya restaura todo el estado de la tarea interrumpida; el switch (`kernel/task/switch.asm`) solo guarda el puntero al marco `registers_t` en `task->esp`, carga el de la siguiente tarea y ejecuta ese mismo epilogo. `task_create` fabrica un marco falso (eip = entry, cs = 0x8, eflags = 0x202) en un frame del PMM (pila propia, identity map). EOI del PIC se envía ANTES de `sched_tick` (el switch nunca vuelve a `irq_handler`).
+- **Fase 5 (nota)**: `sched_tick` no es `noreturn` porque retorna cuando la multitarea está desactivada (antes de `sched_start`). Las tareas demo (A/B) imprimen con IF apagado para no intercalar caracteres.

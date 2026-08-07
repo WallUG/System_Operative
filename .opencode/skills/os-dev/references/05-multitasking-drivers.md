@@ -90,7 +90,7 @@ void serial_putc(char c) {
 ```
 
 ## Checklist antes de avanzar a Fase 6
-- [ ] Dos o más tareas de prueba (p. ej. contadores infinitos que imprimen distinto texto) se alternan visiblemente por el scheduler
-- [ ] El context switch no corrompe registros (verificar con valores conocidos antes/después del switch)
-- [ ] El driver serial funciona y se usa activamente como canal de log (`qemu ... -serial stdio`)
-- [ ] Teclado responde a pulsaciones y el texto aparece correctamente en pantalla
+- [x] Dos o más tareas de prueba (p. ej. contadores infinitos que imprimen distinto texto) se alternan visiblemente por el scheduler
+- [x] El context switch no corrompe registros (verificar con valores conocidos antes/despues del switch)
+- [x] El driver serial funciona y se usa activamente como canal de log (`qemu ... -serial stdio`)
+- [x] Teclado responde a pulsaciones y el texto aparece correctamente en pantalla

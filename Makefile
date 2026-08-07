@@ -27,6 +27,8 @@ OBJS      = $(BUILD)/entry.o \
             $(BUILD)/mem/pmm.o \
             $(BUILD)/mem/paging.o \
             $(BUILD)/mem/heap.o \
+            $(BUILD)/task/task.o \
+            $(BUILD)/task/switch.o \
             $(BUILD)/drivers/vga.o \
             $(BUILD)/drivers/serial.o \
             $(BUILD)/drivers/timer.o \
@@ -56,6 +58,15 @@ $(BUILD)/%.o: %.c
 $(BUILD)/isr_handlers.o: kernel/isr.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $< -o $@
+
+# Lo mismo para kernel/task/: task.c y switch.asm comparten nombre base.
+$(BUILD)/task/task.o: kernel/task/task.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $< -o $@
+
+$(BUILD)/task/switch.o: kernel/task/switch.asm
+	@mkdir -p $(dir $@)
+	$(ASM) -f elf32 $< -o $@
 
 kernel.elf: $(OBJS)
 	$(LD) $(LDFLAGS) -o $@ $(OBJS)
