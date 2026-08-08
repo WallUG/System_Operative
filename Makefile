@@ -7,7 +7,7 @@ LD        = ld
 OBJCOPY   = objcopy
 QEMU      = qemu-system-i386
 KERNEL_SECTORS = 128            # tamano de kernel en sectores (1 = 512 bytes)
-FS_SECTORS     = 256            # fs.bin rellenado a 256 sectores (boot.asm usa el mismo valor)
+FS_SECTORS     = 448            # fs.bin rellenado a 448 sectores (boot.asm usa el mismo valor)
 
 BUILD     = build
 CFLAGS    = -m32 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
@@ -98,18 +98,18 @@ DLL_SRCS  = user/win32/kernel32.c user/win32/user32.c user/win32/ntdll.c \
 DLL_ELFS  = $(patsubst user/win32/%.c,$(BUILD)/user/win32/%.elf,$(DLL_SRCS))
 
 # Fase 9: .exe compilado con la toolchain REAL de Windows (CRT de
-# mingw-w64). Se usa solo para pruebas manuales; no entra en fs.bin.
+# mingw-w64). Se usan como pruebas incluidas en fs.bin/ISO.
 MINGW32   = i686-w64-mingw32-gcc
-WIN_HELLO = $(BUILD)/user/win32/hello_win.exe
+WIN_APPS  = $(BUILD)/user/win32/hello_win.exe $(BUILD)/user/win32/dir.exe
 
-$(WIN_HELLO): user/win32/hello_win.c
+$(BUILD)/user/win32/%.exe: user/win32/%.c
 	@mkdir -p $(dir $@)
-	$(MINGW32) -m32 -static -O2 -Wl,--image-base,0x80000000 \
-	           -Wl,--subsystem,console -o $@ $<
+	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
+	           -Wl,--subsystem,console -s -o $@ $<
 
-win_hello: $(WIN_HELLO)
-	@echo "OK: $< (imports reales de Windows)"
-	@i686-w64-mingw32-objdump -p $< | sed -n '/The Import Tables/,/^$$/p'
+win_hello: $(WIN_APPS)
+	@echo "OK: $(WIN_APPS) (imports reales de Windows)"
+	@i686-w64-mingw32-objdump -p $(BUILD)/user/win32/dir.exe | sed -n '/The Import Tables/,/^$$/p'
 
 $(BUILD)/user/%.elf: user/%.c tools/user.ld
 	@mkdir -p $(dir $@)
@@ -136,9 +136,11 @@ $(BUILD)/user/%.exe: $(BUILD)/user/%.elf tools/makepe.py
 # Filesystem MEFS: superbloque + directorio + datos (solo lectura).
 # Se rellena a FS_SECTORS para que boot.asm pueda copiarlo entero a RAM
 # en el arranque por CD (la imagen os-image.bin lo lleva en LBA 129..).
-$(BUILD)/fs.bin: $(USER_ELFS) $(USER_EXES) $(DLL_ELFS) $(WIN_HELLO)
+$(BUILD)/fs.bin: $(USER_ELFS) $(USER_EXES) $(DLL_ELFS) $(WIN_APPS) \
+                 user/win32/readme.txt
 	@mkdir -p $(dir $@)
-	python3 tools/makefs.py $(USER_ELFS) $(USER_EXES) $(DLL_ELFS) $(WIN_HELLO) -o $@
+	python3 tools/makefs.py $(USER_ELFS) $(USER_EXES) $(DLL_ELFS) $(WIN_APPS) \
+	                        user/win32/readme.txt -o $@
 	@truncate -s $$(( $(FS_SECTORS) * 512 )) $@
 
 kernel.elf: $(OBJS)

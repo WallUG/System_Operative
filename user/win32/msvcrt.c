@@ -31,7 +31,7 @@
 #define SYS_EXIT   2
 #define SYS_WRITE  7
 #define SYS_MALLOC 10
-#define SYS_FREE   12
+#define SYS_FREE   11
 
 /* --- util --- */
 
@@ -398,50 +398,95 @@ static void vfprintf_stdout(const char *fmt, va_list_crt ap)
         if (c == 0)
             break;
         if (c == '%') {
-            char spec = *fmt++;
-            if (spec == '%') { putchar('%'); continue; }
-            if (spec == 'l' || spec == 'z' || spec == 'j' ||
-                spec == 'h' || spec == 't') {
-                spec = *fmt++;      /* longitud: siempre leemos 32 bit */
-                if (spec == 'l')    spec = *fmt++;
-                if (spec == 0)      break;
+            int left = 0, width = 0;
+            char spec;
+            c = *fmt++;                 /* flags / ancho */
+            for (;;) {
+                if (c == '-') { left = 1; c = *fmt++; }
+                else if (c == '0')      { c = *fmt++; }
+                else if (c == '+')      { c = *fmt++; }
+                else if (c == '.')      { c = *fmt++; }
+                else if (c >= '0' && c <= '9') {
+                    width = width * 10 + (c - '0');
+                    c = *fmt++;
+                } else {
+                    break;
+                }
             }
-            switch (spec) {
-            case 'd':
-            case 'i':
-                emit_number(*(int *)ap, 1, 0);
-                ap += 4;
-                break;
-            case 'u':
-                emit_number(*(unsigned int *)ap, 0, 0);
-                ap += 4;
-                break;
-            case 'x':
-            case 'X':
-                emit_number(*(unsigned int *)ap, 0, 1);
-                ap += 4;
-                break;
-            case 'c':
-                putchar(*(int *)ap);
-                ap += 4;
-                break;
-            case 's': {
+            if (c == 'l' || c == 'z' || c == 'j' || c == 'h' || c == 't') {
+                c = *fmt++;             /* longitud: siempre leemos 32 bit */
+                if (c == 'l')    c = *fmt++;
+            }
+            spec = c;
+            if (spec == '%') { putchar('%'); continue; }
+            if (spec == 's') {
                 const char *s = *(const char **)ap;
+                int n = 0;
                 ap += 4;
                 if (s != 0)
+                    n = (int)u_strlen(s);
+                if (!left)
+                    for (; n < width; n++) putchar(' ');
+                if (s != 0)
                     write_str(s);
-                break;
+                if (left)
+                    for (n = (int)u_strlen(s); n < width; n++) putchar(' ');
+                continue;
             }
-            case 'p':
+            if (spec == 'c') {
+                putchar(*(int *)ap);
+                ap += 4;
+                for (; width > 1; width--) putchar(' ');
+                continue;
+            }
+            if (spec == 'd' || spec == 'i') {
+                unsigned int v = *(unsigned int *)ap;
+                int neg = 0, n = 0, t, i;
+                ap += 4;
+                if ((int)v < 0) { neg = 1; v = 0u - v; }
+                t = (int)v;
+                do { n++; t /= 10; } while (t);
+                if (neg) n++;
+                if (!left)
+                    for (; n < width; n++) putchar(' ');
+                if (neg) putchar('-');
+                emit_uint((unsigned long)v, 0);
+                if (left)
+                    for (; n < width; n++) putchar(' ');
+                (void)i;
+                continue;
+            }
+            if (spec == 'u' || spec == 'x' || spec == 'X') {
+                unsigned int v = *(unsigned int *)ap;
+                int hex = (spec != 'u');
+                int n = 0, t = (int)v, i;
+                ap += 4;
+                if (v == 0) n = 1;
+                else {
+                    while (t) { n++; t = hex ? t / 16 : t / 10; }
+                    if (hex && v == 0) n = 1;
+                }
+                if (!left)
+                    for (; n < width; n++) putchar(' ');
+                emit_uint((unsigned long)v, hex);
+                if (left)
+                    for (; n < width; n++) putchar(' ');
+                (void)i;
+                continue;
+            }
+            if (spec == 'p') {
+                unsigned int v = *(unsigned int *)ap;
+                ap += 4;
+                if (!left)
+                    for (; 10 < width; width--) putchar(' ');
                 putchar('0');
                 putchar('x');
-                emit_number(*(unsigned int *)ap, 0, 1);
-                ap += 4;
-                break;
-            default:
-                putchar(spec);
-                break;
+                emit_number(v, 0, 1);
+                if (left)
+                    for (; 10 < width; width--) putchar(' ');
+                continue;
             }
+            putchar(spec);
         } else {
             putchar(c);
         }
@@ -461,6 +506,20 @@ int fprintf(FILE *f, const char *fmt, ...)
     (void)f;
     vfprintf_stdout(fmt, ap);
     return 0;
+}
+
+int printf(const char *fmt, ...)
+{
+    char *ap = (char *)(&fmt + 1);
+    vfprintf_stdout(fmt, ap);
+    return 0;
+}
+
+int fwrite(const void *buf, unsigned int size, unsigned int count, FILE *f)
+{
+    (void)f;
+    sys_write((const char *)buf, size * count);
+    return (int)count;
 }
 
 /* --- tabla de exports (formato kernel/win32.h) --- */
@@ -491,7 +550,9 @@ win32_export_t __exports[] __attribute__((section(".exports"))) = {
     { "calloc",             (uint32_t)calloc },
     { "exit",               (uint32_t)exit },
     { "fflush",             (uint32_t)fflush },
+    { "fwrite",             (uint32_t)fwrite },
     { "fprintf",            (uint32_t)fprintf },
+    { "printf",             (uint32_t)printf },
     { "fputc",              (uint32_t)fputc },
     { "free",               (uint32_t)free },
     { "fputs",              (uint32_t)fputs },

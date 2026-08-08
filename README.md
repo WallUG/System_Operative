@@ -18,21 +18,22 @@ mingw-w64 en ring 3, gracias a shims de `kernel32.dll` y `msvcrt.dll`.
 | 7    | Arranque por CD (ISO9660 + El Torito), boot_info, pruebas QEMU/gdb |
 | 8    | PE32 (.exe), modulos Win32 fixed ring 3, run dual MZ/ELF |
 | 9    | **`.exe` mingw real**: imports PE estándar + shims kernel32/msvcrt → `run hello_win.exe` imprime y devuelve `exit:42` |
+| 10   | **APIs de fichero Win32**: syscalls DREAD/DLIST, `CreateFileA`/`ReadFile`/`FindFirstFileA` en kernel32 + `dir.exe` real incluido en el ISO |
 
 ## Requisitos
 
 - `gcc -m32` / `ld` / `nasm` / `qemu-system-i386` / `python3` (host Linux)
-- `i686-w64-mingw32-gcc` (solo para generar el `.exe` de prueba de la Fase 9)
+- `i686-w64-mingw32-gcc` (para generar los `.exe` de prueba de las Fases 9-10)
 - `xorriso` (solo target `iso`/`test_cd`)
 
 ## Compilar y probar
 
 ```sh
-make os-image.bin -j4   # boot + kernel + fs.bin (MEFS, 17 archivos)
+make os-image.bin -j4   # boot + kernel + fs.bin (MEFS, 19 archivos)
 make run                # QEMU con disco raw (ventana + teclado)
 make test               # headless: consola por serial (shell por COM1)
 make iso && make test_cd
-make win_hello          # compila el exe de la Fase 9 e imprime sus imports
+make win_hello          # compila los exe de las Fases 9-10 e imprime sus imports
 ```
 
 Prueba de la Fase 9 (headless, shell por serial):
@@ -46,6 +47,18 @@ timeout 40 sh -c '(sleep 6; printf "run hello_win.exe\n"; sleep 5) | \
 Salida esperada: `Hello from a REAL Windows-CRT exe!`, `argc = 1`,
 `malloc: 10 bytes = 'heap works'`, `bye` y `exit:42`.
 
+Prueba de la Fase 10 (APIs de fichero de Win32 dentro del ISO):
+
+```sh
+timeout 40 sh -c '(sleep 6; printf "run dir.exe\n"; sleep 5) | \
+  qemu-system-i386 -display none -monitor none -serial stdio -no-reboot \
+  -drive format=raw,file=os-image.bin'
+```
+
+Salida esperada: lista de los 19 archivos del MEFS (con `FindFirstFileA`)
+y el contenido de `readme.txt` (leído con `CreateFileA` + `ReadFile`),
+terminando en `exit:0`.
+
 ## Estructura
 
 ```
@@ -57,7 +70,8 @@ kernel/win32.c   modulos Win32 fixed (kernel32/user32/ntdll/msvcrt),
                  TIB del CRT (FS), resolución case-insensitive
 user/            programas de usuario (ELF y .exe myos)
 user/win32/      shims de DLLs: kernel32.dll, user32.dll, ntdll.dll,
-                 msvcrt.dll y hello_windows.exe (CRT mingw real)
+                 msvcrt.dll, dir.exe (listado FS vía API Win32) y
+                 hello_win.exe (CRT mingw real)
 tools/           makepe.py (ELF → PE MyOS), makeiso.py, makefs.py
 DESIGN.md        decisiones de diseño y bitácora por fases (leer primero)
 ```
@@ -96,5 +110,9 @@ Todos los detalles, decisiones y bugs encontrados están en `DESIGN.md`.
 
 - Fase 9 completada: `hello_win.exe` (CRT mingw) corre end-to-end y
   devuelve `exit:42`; todos los tests de regresión (ELF y PE MyOS) pasan.
-- Roadmap tentativo: long mode (64 bits), ATA con escritura de archivos,
-  más DLLs/shims (user32 gráfico), y multiplataforma, según el interés.
+- Fase 10 completada: `dir.exe` (mingw real) lista el FS y lee un
+  archivo con `FindFirstFileA`/`CreateFileA`/`ReadFile`; ejecutable y
+  `readme.txt` van dentro del ISO.
+- Roadmap tentativo: long mode (64 bits), ATA con escritura de archivos
+  (CreateFileA con GENERIC_WRITE), argv real desde la shell, más
+  DLLs/shims (user32 gráfico), según el interés.

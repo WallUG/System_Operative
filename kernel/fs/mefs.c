@@ -137,3 +137,46 @@ int mefs_read(const char *name, uint8_t *buffer, uint32_t max)
     }
     return size < max ? (int)size : (int)max;
 }
+
+int mefs_read_off(const char *name, uint8_t *buffer, uint32_t off,
+                  uint32_t max)
+{
+    int idx = -1;
+    for (int i = 0; i < file_count; i++)
+        if (strcmp(entries[i].name, name) == 0) {
+            idx = i;
+            break;
+        }
+    if (idx < 0)
+        return -1;
+
+    uint32_t size = entries[idx].size;
+    uint32_t lba  = entries[idx].lba;
+    uint32_t left, skip;
+
+    if (off >= size)
+        return 0;               /* EOF */
+    left = size - off < max ? size - off : max;
+
+    /* salta los sectores anteriores a off y el byte dentro del primero */
+    lba  += off / 512;
+    skip  = off % 512;
+    while (left > 0) {
+        if (fs_read_sector(lba++, sector_buf) != 0)
+            return -1;
+        uint32_t chunk = 512 - skip < left ? 512 - skip : left;
+        memcpy(buffer, sector_buf + skip, chunk);
+        buffer += chunk;
+        left  -= chunk;
+        skip   = 0;
+    }
+    return size - off < max ? (int)(size - off) : (int)max;
+}
+
+int mefs_dir_get(uint32_t i, char *name, uint32_t *size)
+{
+    if (mefs_list(i, name) != 0)
+        return -1;
+    *size = (uint32_t)mefs_size(name);
+    return 0;
+}

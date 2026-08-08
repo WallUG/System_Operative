@@ -41,5 +41,10 @@ int  mefs_list(uint32_t i, char *name);
 int  mefs_size(const char *name);
 /* Copia 'max' bytes del archivo a buffer; devuelve bytes leidos o -1. */
 int  mefs_read(const char *name, uint8_t *buffer, uint32_t max);
+/* Igual pero empezando en 'off' (lectura posicional, para ReadFile). */
+int  mefs_read_off(const char *name, uint8_t *buffer, uint32_t off,
+                   uint32_t max);
+/* Entrada i-esima del directorio: nombre (hasta 16) + tamano; -1 si no. */
+int  mefs_dir_get(uint32_t i, char *name, uint32_t *size);
 
 #endif

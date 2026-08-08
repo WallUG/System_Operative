@@ -294,6 +294,55 @@ void syscall_handler(registers_t *regs)
     case SYS_FREE:
         regs->eax = 0;
         break;
+    case SYS_DREAD: { /* ebx=nombre, ecx=buf, edx=off, esi=max: lectura
+                       * posicional (soporte ReadFile de Win32) */
+        char name[32];
+        char *dest = (char *)regs->ecx;
+        uint32_t off = regs->edx, len = regs->esi;
+        void *tmp;
+        int32_t got;
+        if (user_strcpy(name, sizeof(name), (const char *)regs->ebx, pd) != 0
+            || len > 0x100000) {
+            regs->eax = -1;
+            break;
+        }
+        tmp = kmalloc(len ? len : 1);
+        if (tmp == NULL) {
+            regs->eax = -1;
+            break;
+        }
+        got = (int32_t)mefs_read_off(name, tmp, off, len);
+        if (got < 0) {
+            kfree(tmp);
+            regs->eax = -1;
+            break;
+        }
+        if (user_memcpy_out(dest, tmp, (uint32_t)got, pd) != 0)
+            regs->eax = -1;
+        else
+            regs->eax = got;
+        kfree(tmp);
+        break;
+    }
+    case SYS_DLIST: { /* ebx=idx dir, ecx=name[16], edx=&size: entrada
+                       * del directorio (FindFirstFile/FindNextFile) */
+        uint32_t idx = regs->ebx;
+        char *name = (char *)regs->ecx;
+        uint32_t *size = (uint32_t *)regs->edx;
+        char tmp_name[16];
+        uint32_t tmp_size;
+        if (mefs_dir_get(idx, tmp_name, &tmp_size) != 0) {
+            regs->eax = -1;         /* no hay mas entradas */
+            break;
+        }
+        if (user_memcpy_out(name, tmp_name, 16, pd) != 0 ||
+            user_memcpy_out(size, &tmp_size, 4, pd) != 0) {
+            regs->eax = -1;
+            break;
+        }
+        regs->eax = 0;
+        break;
+    }
     default:
         break;
     }

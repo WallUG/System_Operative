@@ -17,8 +17,13 @@
 
 #define SYS_EXIT   2
 #define SYS_WRITE  7
-#define SYS_MALLOC 11
-#define SYS_FREE   12
+#define SYS_MALLOC 10
+#define SYS_FREE   11
+#define SYS_FSIZE  8
+#define SYS_DREAD  12
+#define SYS_DLIST  13
+
+#define INVALID_HANDLE_VALUE ((uint32_t)-1)
 
 /* --- util --- */
 
@@ -380,6 +385,238 @@ void GetStartupInfo(void *si)
     }
 }
 
+/* --- archivos (MEFS readonly via SYS_FSIZE/SYS_DREAD/SYS_DLIST) ---
+ * Fase 9: CreateFileA/ReadFile/FindFirstFileA reales sobre el
+ * filesystem. Los handles son enteros 0x100+i: la tabla guarda el
+ * nombre del archivo y la posicion de lectura, el kernel lee de RAM
+ * (solo lectura). EL archivo se abre con CreateFileA -> pos=0. */
+
+typedef struct {
+    char     name[40];
+    uint32_t size;
+    uint32_t pos;
+} win32_file_t;
+
+static win32_file_t open_files[16];
+
+static int sys_fsize(const char *name)
+{
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_FSIZE), "b"(name)
+                     : "memory");
+    return r;
+}
+
+static int sys_dread(const char *name, void *buf, uint32_t off, uint32_t max)
+{
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_DREAD), "b"(name), "c"(buf), "d"(off),
+                       "S"(max)
+                     : "memory");
+    return r;
+}
+
+static int sys_dlist(uint32_t idx, char *name, uint32_t *size)
+{
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_DLIST), "b"(idx), "c"(name), "d"(size)
+                     : "memory");
+    return r;
+}
+
+/* Abre un archivo del FS. Devuelve HANDLE (0x100+slot) o -1. */
+void *CreateFileA(const char *name, uint32_t access, uint32_t share,
+                  uint32_t sec_attrs, uint32_t creation, uint32_t flags,
+                  uint32_t tmpl)
+{
+    int i, sz;
+    (void)access; (void)share; (void)sec_attrs; (void)creation;
+    (void)flags; (void)tmpl;
+    if (name == 0)
+        return (void *)INVALID_HANDLE_VALUE;
+    sz = sys_fsize(name);
+    if (sz < 0)
+        return (void *)INVALID_HANDLE_VALUE;
+    for (i = 0; i < 16; i++)
+        if (open_files[i].name[0] == 0)
+            break;
+    if (i == 16)
+        return (void *)INVALID_HANDLE_VALUE;
+    {
+        uint32_t k = 0;
+        while (k < 39 && name[k]) {
+            open_files[i].name[k] = name[k];
+            k++;
+        }
+        open_files[i].name[k] = 0;
+    }
+    open_files[i].size = (uint32_t)sz;
+    open_files[i].pos  = 0;
+    return (void *)(uint32_t)(0x100 + i);
+}
+
+/* Lee 'n' bytes desde la posicion del handle. */
+uint32_t ReadFile(void *h, void *buf, uint32_t n, uint32_t *read,
+                  uint32_t ovl)
+{
+    int i = (int)(uint32_t)h - 0x100;
+    int r;
+    (void)ovl;
+    if (i < 0 || i >= 16 || open_files[i].name[0] == 0) {
+        if (read) *read = 0;
+        return 0;
+    }
+    r = sys_dread(open_files[i].name, buf, open_files[i].pos, n);
+    if (r <= 0) {
+        if (read) *read = 0;
+        return 0;
+    }
+    open_files[i].pos += (uint32_t)r;
+    if (read) *read = (uint32_t)r;
+    return 1;
+}
+
+uint32_t GetFileSize(void *h, uint32_t *high)
+{
+    int i = (uint32_t)h - 0x100;
+    if (i < 0 || i >= 16 || open_files[i].name[0] == 0)
+        return INVALID_HANDLE_VALUE;
+    if (high) *high = 0;
+    return open_files[i].size;
+}
+
+uint32_t CloseHandle(void *h)
+{
+    int i = (uint32_t)h - 0x100;
+    if (i >= 0 && i < 16)
+        open_files[i].name[0] = 0;
+    return 1;
+}
+
+/* --- FindFirstFileA / FindNextFileA / FindClose ---
+ * Itera el directorio MEFS por indices (SYS_DLIST): el handle guarda
+ * el indice actual. Soporta patrones '*' y '?' sobre el nombre. */
+
+typedef struct {
+    uint32_t idx;
+    char     pat[64];
+} find_state_t;
+
+static find_state_t find_st[4];
+static int find_st_n = 0;
+
+static int name_match(const char *pat, const char *name)
+{
+    while (*pat && *name) {
+        if (*pat == '*') {
+            pat++;
+            if (*pat == 0)
+                return 1;
+            while (*name && !name_match(pat, name))
+                name++;
+            return name_match(pat, name);
+        }
+        if (*pat != '?' && *pat != *name)
+            return 0;
+        pat++;
+        name++;
+    }
+    while (*pat == '*')
+        pat++;
+    return *pat == 0 && *name == 0;
+}
+
+/* Rellena una entrada WIN32_FIND_DATAA (estructura sdk). */
+typedef struct {
+    uint32_t dwFileAttributes;
+    uint32_t ftCreationTime_low, ftCreationTime_high;
+    uint32_t ftLastAccess_low, ftLastAccess_high;
+    uint32_t ftLastWrite_low, ftLastWrite_high;
+    uint32_t nFileSizeHigh, nFileSizeLow;
+    uint32_t dwReserved0, dwReserved1;
+    char     cFileName[260];
+    char     cAlternateFileName[14];
+} WIN32_FIND_DATAA;
+
+static int find_next_entry(find_state_t *st, const char *pat,
+                           WIN32_FIND_DATAA *fd)
+{
+    char     name[16];
+    uint32_t sz;
+    while (sys_dlist(st->idx, name, &sz) == 0) {
+        st->idx++;
+        if (name_match(pat, name)) {
+            uint32_t i;
+            for (i = 0; i < sizeof(*fd); i++)
+                ((char *)fd)[i] = 0;
+            fd->nFileSizeLow  = sz;
+            fd->nFileSizeHigh = 0;
+            for (i = 0; i < 16 && name[i]; i++)
+                fd->cFileName[i] = name[i];
+            fd->cFileName[i] = 0;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void *FindFirstFileA(const char *pat, WIN32_FIND_DATAA *fd)
+{
+    find_state_t *st;
+    if (find_st_n >= 4)
+        return (void *)INVALID_HANDLE_VALUE;
+    st = &find_st[find_st_n++];
+    st->idx = 0;
+    {
+        uint32_t k = 0;
+        while (k < 63 && pat[k]) {
+            st->pat[k] = pat[k];
+            k++;
+        }
+        st->pat[k] = 0;
+    }
+    if (find_next_entry(st, st->pat, fd))
+        return (void *)(uint32_t)(0x200 + (find_st_n - 1));
+    find_st_n--;
+    return (void *)INVALID_HANDLE_VALUE;
+}
+
+int FindNextFileA(void *h, WIN32_FIND_DATAA *fd)
+{
+    int i = (uint32_t)h - 0x200;
+    if (i < 0 || i >= find_st_n)
+        return 0;
+    return find_next_entry(&find_st[i], find_st[i].pat, fd);
+}
+
+uint32_t FindClose(void *h)
+{
+    int i = (uint32_t)h - 0x200;
+    if (i >= 0 && i < find_st_n)
+        find_st_n--;
+    return 1;
+}
+
+void GetCurrentDirectoryA(uint32_t n, char *buf)
+{
+    (void)n;
+    if (buf)
+        buf[0] = 0;
+}
+
+void GetCurrentDirectoryW(uint32_t n, uint16_t *buf)
+{
+    (void)n;
+    if (buf)
+        buf[0] = 0;
+}
+
+void SetCurrentDirectoryA(const char *d) { (void)d; }
+void SetCurrentDirectoryW(const uint16_t *d) { (void)d; }
+
 /* --- tabla de exports --- */
 
 win32_export_t __exports[] __attribute__((section(".exports"))) = {
@@ -427,5 +664,16 @@ win32_export_t __exports[] __attribute__((section(".exports"))) = {
     { "HeapReAlloc",           (uint32_t)&HeapReAlloc },
     { "HeapSize",              (uint32_t)&HeapSize },
     { "GetStartupInfoA",       (uint32_t)&GetStartupInfo },
+    { "CreateFileA",           (uint32_t)&CreateFileA },
+    { "ReadFile",              (uint32_t)&ReadFile },
+    { "GetFileSize",           (uint32_t)&GetFileSize },
+    { "CloseHandle",           (uint32_t)&CloseHandle },
+    { "FindFirstFileA",        (uint32_t)&FindFirstFileA },
+    { "FindNextFileA",         (uint32_t)&FindNextFileA },
+    { "FindClose",             (uint32_t)&FindClose },
+    { "GetCurrentDirectoryA",  (uint32_t)&GetCurrentDirectoryA },
+    { "GetCurrentDirectoryW",  (uint32_t)&GetCurrentDirectoryW },
+    { "SetCurrentDirectoryA",  (uint32_t)&SetCurrentDirectoryA },
+    { "SetCurrentDirectoryW",  (uint32_t)&SetCurrentDirectoryW },
     { "", 0 },
 };

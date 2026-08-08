@@ -15,6 +15,8 @@
 #define SYS_FREAD   9   /* ebx=nombre, ecx=buf, edx=input: bytes o -1 */
 #define SYS_MALLOC  10  /* ebx = bytes -> ptr de usuario o 0          */
 #define SYS_FREE    11  /* ebx = ptr (heap bump; no-op por ahora)     */
+#define SYS_DREAD   12  /* ebx=nombre, ecx=buf, edx=off, esi=max      */
+#define SYS_DLIST   13  /* ebx=idx dir, ecx=name[16], edx=&size       */
 
 void syscall_init(void);            /* registra el gate 0x80 (DPL=3) */
 void syscall_handler(registers_t *regs);
