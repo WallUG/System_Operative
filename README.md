@@ -1,0 +1,100 @@
+# MyOS - Sistema operativo didáctico (x86)
+
+Kernel propio desde cero para PC x86 (IA-32): bootloader en NASM, kernel en
+C freestanding, estándar + multitarea, filesystem propio y modo usuario.
+Incluye un cebo: **ejecutar `.exe` de Windows** (PE32) con el CRT real de
+mingw-w64 en ring 3, gracias a shims de `kernel32.dll` y `msvcrt.dll`.
+
+## Qué hay implementado
+
+| Fase | Contenido |
+|------|-----------|
+| 0-1  | Toolchain i386, bootloader (LBA, A20, GDT, modo protegido) |
+| 2    | Kernel C freestanding, drivers VGA/serial, mini-libc |
+| 3    | IDT, ISR/IRQ, PIC 8259, PIT (tick), teclado, kpanic |
+| 4    | PMM (E820 + bitmap), paginación (PSE 4 MiB + 4 KiB), heap |
+| 5    | Multitarea preemptiva (scheduler round-robin) |
+| 6    | Filesystem MEFS, userland ring 3, syscalls `int 0x80`, shell |
+| 7    | Arranque por CD (ISO9660 + El Torito), boot_info, pruebas QEMU/gdb |
+| 8    | PE32 (.exe), modulos Win32 fixed ring 3, run dual MZ/ELF |
+| 9    | **`.exe` mingw real**: imports PE estándar + shims kernel32/msvcrt → `run hello_win.exe` imprime y devuelve `exit:42` |
+
+## Requisitos
+
+- `gcc -m32` / `ld` / `nasm` / `qemu-system-i386` / `python3` (host Linux)
+- `i686-w64-mingw32-gcc` (solo para generar el `.exe` de prueba de la Fase 9)
+- `xorriso` (solo target `iso`/`test_cd`)
+
+## Compilar y probar
+
+```sh
+make os-image.bin -j4   # boot + kernel + fs.bin (MEFS, 17 archivos)
+make run                # QEMU con disco raw (ventana + teclado)
+make test               # headless: consola por serial (shell por COM1)
+make iso && make test_cd
+make win_hello          # compila el exe de la Fase 9 e imprime sus imports
+```
+
+Prueba de la Fase 9 (headless, shell por serial):
+
+```sh
+timeout 40 sh -c '(sleep 6; printf "run hello_win.exe\n"; sleep 5) | \
+  qemu-system-i386 -display none -monitor none -serial stdio -no-reboot \
+  -drive format=raw,file=os-image.bin'
+```
+
+Salida esperada: `Hello from a REAL Windows-CRT exe!`, `argc = 1`,
+`malloc: 10 bytes = 'heap works'`, `bye` y `exit:42`.
+
+## Estructura
+
+```
+boot/            bootloader NASM (sector 0) + arranque por CD
+kernel/          núcleo: entrada, IDT, PMM, paginación, multitarea,
+                 syscalls, shell, MEFS, drivers (VGA/serial/PIT/PS2/ATA)
+kernel/pe.c      loader PE32: cabeceraMZ, secciones, imports PE estándar
+kernel/win32.c   modulos Win32 fixed (kernel32/user32/ntdll/msvcrt),
+                 TIB del CRT (FS), resolución case-insensitive
+user/            programas de usuario (ELF y .exe myos)
+user/win32/      shims de DLLs: kernel32.dll, user32.dll, ntdll.dll,
+                 msvcrt.dll y hello_windows.exe (CRT mingw real)
+tools/           makepe.py (ELF → PE MyOS), makeiso.py, makefs.py
+DESIGN.md        decisiones de diseño y bitácora por fases (leer primero)
+```
+
+## Cómo funciona lo de los .exe (Fase 8-9)
+
+1. **Solo lectura, nada de Windows**: el loader PE32 (`kernel/pe.c`)
+   valida la cabecera MZ/PE, mapea en espacio USER una página por la
+   cabecera, las secciones y las bases. Los imports se resuelven contra
+   módulos fijados **dentro** del propio MyOS.
+2. **DLLs fijadas en ring 3**: `kernel32.dll`, `user32.dll`, `ntdll.dll`
+   y `msvcrt.dll` son ELF32 enlazados a bases fijas
+   (0xB0000000...0xB3000000, `tools/dll32.ld`) con una tabla `.exports`
+   (nombre → VA). `win32_map_all()` los mapea en el PD de cada tarea.
+3. **Imports estándar**: `pe_resolve_imports_std` camina
+   `IMAGE_IMPORT_DESCRIPTOR` + FIRST thunk (IAT) del `.exe`, y escribe
+   la VA de cada export (case-insensitive) en el slot de la IAT. El formato
+   histórico `.idata` de makepe.py queda como fallback.
+4. **CRT de mingw**: la Fase 9 se ocupa de lo que exige un exe
+   compilado con la toolchain real: el TIB (`%fs:0x18` via GDT 0x33),
+   `__getmainargs`/`_initterm`/`atexit`/media (shim msvcrt), el
+   va_list `char*` de MSVCRT, `malloc` vía SYS_MALLOC, y el retorno
+   final (`_crt_ret` escribe `main()`→`exit()`, verificado `exit:42`).
+
+Todos los detalles, decisiones y bugs encontrados están en `DESIGN.md`.
+
+## Pruebas
+
+- `make test` / `make test_cd`: QEMU headless, shell por serial,
+  ejecuta `run` + `hello.elf/winapi/hello_win`... y verifica ausencia de
+  panic/#PF.
+- Scheduler de demo T-A/T-B desactiva el demo impreso al entrar en el
+  shell: se activa con el syscall de debug de kmain si quieres.
+
+## Estado
+
+- Fase 9 completada: `hello_win.exe` (CRT mingw) corre end-to-end y
+  devuelve `exit:42`; todos los tests de regresión (ELF y PE MyOS) pasan.
+- Roadmap tentativo: long mode (64 bits), ATA con escritura de archivos,
+  más DLLs/shims (user32 gráfico), y multiplataforma, según el interés.
