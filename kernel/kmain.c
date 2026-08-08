@@ -23,6 +23,7 @@
 #include "syscall.h"
 #include "fs/mefs.h"
 #include "shell.h"
+#include "win32.h"
 
 /* --- Fase 5: tareas de prueba del scheduler round-robin --- */
 static volatile uint32_t cnt_a, cnt_b;
@@ -214,6 +215,9 @@ void kmain(uint32_t boot_info_ptr)
             kprint("MEFS: error leyendo filesystem\n");
         }
     }
+
+    /* --- Soporte Windows: modulos Win32 ring 3 fijos (Fase 8) --- */
+    win32_init();
 
     /* --- Fase 5: multitarea round-robin (IRQ0) ---
      * kmain continua como tarea idle (hlt); A y B son contadores que

@@ -7,7 +7,7 @@ LD        = ld
 OBJCOPY   = objcopy
 QEMU      = qemu-system-i386
 KERNEL_SECTORS = 128            # tamano de kernel en sectores (1 = 512 bytes)
-FS_SECTORS     = 64             # fs.bin rellenado a 64 sectores (boot.asm usa el mismo valor)
+FS_SECTORS     = 128            # fs.bin rellenado a 128 sectores (boot.asm usa el mismo valor)
 
 BUILD     = build
 CFLAGS    = -m32 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
@@ -34,6 +34,8 @@ OBJS      = $(BUILD)/entry.o \
             $(BUILD)/gdt_asm.o \
             $(BUILD)/syscall.o \
             $(BUILD)/elf.o \
+            $(BUILD)/pe.o \
+            $(BUILD)/win32.o \
             $(BUILD)/shell.o \
             $(BUILD)/fs/mefs.o \
             $(BUILD)/drivers/vga.o \
@@ -79,9 +81,20 @@ $(BUILD)/task/switch.o: kernel/task/switch.asm
 # Fase 7: programas de usuario como ELF32 ET_EXEC enlazados en
 # 0x80000000 (region de usuario del kernel). El kernel los mapea en un
 # PD aislado (proteccion de memoria ring 3).
+# Soporte Windows (.exe): cada .elf se convierte ademas a PE32 con
+# tools/makepe.py -> .exe (misma image base, mismo entry). El shell
+# "run" detecta el formato por la magia (MZ vs ELF).
+# Capa Win32 (Fase 8): modulos ring 3 fijos kernel32/user32/ntdll en
+# la region WIN32_REGION_BASE (0xB0000000, tools/dll32.ld) y el
+# programa de prueba con imports (user/winapi.c).
 USER_TEXT = 0x80000000
-USER_SRCS = user/hello.c user/fork.c user/exec.c user/console.c
+USER_SRCS = user/hello.c user/fork.c user/exec.c user/console.c user/winapi.c user/quick.c
 USER_ELFS = $(patsubst user/%.c,$(BUILD)/user/%.elf,$(USER_SRCS))
+USER_EXES = $(patsubst user/%.c,$(BUILD)/user/%.exe,$(USER_SRCS))
+
+WIN32_REGION = 0xB0000000
+DLL_SRCS  = user/win32/kernel32.c user/win32/user32.c user/win32/ntdll.c
+DLL_ELFS  = $(patsubst user/win32/%.c,$(BUILD)/user/win32/%.elf,$(DLL_SRCS))
 
 $(BUILD)/user/%.elf: user/%.c tools/user.ld
 	@mkdir -p $(dir $@)
@@ -89,12 +102,27 @@ $(BUILD)/user/%.elf: user/%.c tools/user.ld
 	      -fno-asynchronous-unwind-tables -Wall -Wextra -O2 -c $< -o $(BUILD)/user/$*.o
 	$(LD) -m elf_i386 -nostdlib -T tools/user.ld -o $@ $(BUILD)/user/$*.o
 
+$(BUILD)/user/win32/%.elf: user/win32/%.c tools/dll32.ld
+	@mkdir -p $(dir $@)
+	$(CC) -m32 -ffreestanding -fno-pic -fno-stack-protector -fno-builtin \
+	      -fno-asynchronous-unwind-tables -Wall -Wextra -O2 -c $< -o $(BUILD)/user/win32/$*.o
+	$(LD) -m elf_i386 -nostdlib -T tools/dll32.ld \
+	      -defsym=DLL_BASE=$$(case $* in \
+	        kernel32) echo $(WIN32_REGION) ;; \
+	        user32)   echo $$(( $(WIN32_REGION) + 0x100000 )) ;; \
+	        ntdll)    echo $$(( $(WIN32_REGION) + 0x200000 )) ;; \
+	        *) echo $(WIN32_REGION) ;; esac) \
+	      -o $@ $(BUILD)/user/win32/$*.o
+
+$(BUILD)/user/%.exe: $(BUILD)/user/%.elf tools/makepe.py
+	python3 tools/makepe.py $< -o $@
+
 # Filesystem MEFS: superbloque + directorio + datos (solo lectura).
 # Se rellena a FS_SECTORS para que boot.asm pueda copiarlo entero a RAM
 # en el arranque por CD (la imagen os-image.bin lo lleva en LBA 129..).
-$(BUILD)/fs.bin: $(USER_ELFS)
+$(BUILD)/fs.bin: $(USER_ELFS) $(USER_EXES) $(DLL_ELFS)
 	@mkdir -p $(dir $@)
-	python3 tools/makefs.py $(USER_ELFS) -o $@
+	python3 tools/makefs.py $(USER_ELFS) $(USER_EXES) $(DLL_ELFS) -o $@
 	@truncate -s $$(( $(FS_SECTORS) * 512 )) $@
 
 kernel.elf: $(OBJS)

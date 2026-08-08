@@ -23,6 +23,8 @@
 #include "mem/paging.h"
 #include "mem/heap.h"
 #include "elf.h"
+#include "pe.h"
+#include "win32.h"
 #include "drivers/serial.h"
 #include "drivers/keyboard.h"
 #include "fs/mefs.h"
@@ -91,6 +93,7 @@ static void sys_exec(const char *name, registers_t *regs)
 {
     void *buf;
     uint32_t size, entry;
+    int is_pe, r;
 
     size = (uint32_t)mefs_size(name);
     if (size == 0 || size > 0x100000) {
@@ -107,7 +110,11 @@ static void sys_exec(const char *name, registers_t *regs)
         regs->eax = -1;
         return;
     }
-    if (elf_load_into(sched_current_cr3(), buf, size, &entry) != 0) {
+    is_pe = (size >= 2 && ((uint8_t *)buf)[0] == 'M'
+             && ((uint8_t *)buf)[1] == 'Z');
+    r = is_pe ? pe_load_into(sched_current_cr3(), buf, size, &entry)
+              : elf_load_into(sched_current_cr3(), buf, size, &entry);
+    if (r != 0) {
         /* El ELF es invalido y el espacio de usuario anterior ya se
          * libero: la tarea no puede seguir -> se mata. */
         kfree(buf);
@@ -116,8 +123,10 @@ static void sys_exec(const char *name, registers_t *regs)
     }
     kfree(buf);
 
-    /* Remapear la pila de usuario (elf_load_into libero el espacio) y
-     * reiniciar esp: el programa nuevo arranca con la pila vacia. */
+    /* Remapear los modulos Win32 fijos y la pila de usuario
+     * (elf_load_into libero el espacio) y reiniciar esp: el programa
+     * arranca con la pila vacia. */
+    win32_map_all(sched_current_cr3());
     paging_user_map(sched_current_cr3(), USER_ESP0_TOP - PAGE_SIZE, PAGE_SIZE);
     regs->esp = USER_ESP0_TOP;
     regs->user_esp = USER_ESP0_TOP;

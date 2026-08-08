@@ -44,6 +44,12 @@ void isr_handler(registers_t *regs)
              * accion. Matar la tarea y seguir con las demas. */
             kprint("USER #PF en 0x");
             kprint_hex32(cr2);
+            kprint(" eip=");
+            kprint_hex32(regs->eip);
+            kprint(" esp=");
+            kprint_hex32(regs->user_esp);
+            kprint(" ss=");
+            kprint_hex32(regs->user_ss);
             kprint(" - tarea eliminada (proteccion de memoria)\n");
             sched_kill_current();
             /* iret a task_stub_exit en ring 0 (marco con cs=0x08). */

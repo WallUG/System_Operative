@@ -15,6 +15,8 @@
 #include "mem/pmm.h"
 #include "mem/heap.h"
 #include "elf.h"
+#include "pe.h"
+#include "win32.h"
 #include "task/task.h"
 
 static volatile int shell_run = 1;
@@ -152,19 +154,32 @@ void shell_loop(void)
                 continue;
             }
             uint32_t pd, entry;
-            if (elf_load(buf, size, &pd, &entry) != 0) {
-                kprint("ELF invalido\n");
+            int is_pe = (size >= 2 && ((uint8_t *)buf)[0] == 'M'
+                         && ((uint8_t *)buf)[1] == 'Z');
+            int r = is_pe ? pe_load(buf, size, &pd, &entry)
+                          : elf_load(buf, size, &pd, &entry);
+            if (r != 0) {
+                kprint(is_pe ? "PE invalido\n" : "ELF invalido\n");
                 kfree(buf);
                 continue;
             }
+            int mapr = win32_map_all(pd);
+            kprint_uint((uint32_t)mapr);
+            kprint("(map) ");
             kfree(buf);
             if (task_create_user("user", pd, entry) < 0) {
                 paging_free_pd(pd);
                 kprint("no se pudo crear la tarea\n");
                 continue;
             }
+            kprint("ok(create)\n");
             kprint("Ejecutando ");
-            kprint(line + 4);
+            { char nm[32];
+              int k = 0;
+              while (k < 31 && line[4 + k]) { nm[k] = line[4 + k]; k++; }
+              nm[k] = 0;
+              kprint(nm);
+            }
             kprint(" en ring 3 (PD aislado)...\n");
         } else if (strcmp(line, "pf") == 0) {
             kprint("Provocando #PF: escritura en 0x50000000 (no mapeado)...\n");

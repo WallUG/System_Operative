@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include "pmm.h"
 #include "mmap.h"
+#include "kprint.h"
 
 static uint8_t *bitmap = (uint8_t *)PMM_BITMAP_ADDR;
 static uint32_t max_frames = PMM_MAX_MEM / PMM_BLOCK_SIZE;   /* 0x20000 */
@@ -67,6 +68,11 @@ void pmm_init(void)
             free_frames++;
         }
     }
+
+    /* El kernel arranca desde 1 MiB: reservar el rango bajo completo
+     * (PD/PT del kernel, pilas de las tareas de arranque) para que el
+     * asignador nunca entregue dos veces una misma pagina de esa zona. */
+    pmm_reserve_range(0x100000, 0x80000);
 }
 
 uint32_t pmm_free_count(void)
@@ -78,6 +84,8 @@ uint32_t pmm_alloc_frame(void)
 {
     uint32_t i;
     for (i = 0; i < max_frames; i++) {
+        if (i * PMM_BLOCK_SIZE < PMM_FIRST_FREE)
+            continue;               /* nunca entregar < 1 MiB (kernel) */
         if (!bit_test(i)) {
             bit_set(i);
             free_frames--;
