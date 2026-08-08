@@ -8,3 +8,7 @@ os-image.bin
 # Editor/OS
 *.swp
 .DS_Store
+
+# Python
+__pycache__/
+*.pyc

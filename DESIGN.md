@@ -26,10 +26,11 @@ no deben cambiar sin actualizar este archivo.
 | 0x00090000-0x0009FFFF | **Pila del kernel** (crece hacia abajo desde 0x90000) |
 | 0x000B8000-0x000BFFFF | **VGA texto** (80x25, attr 2 bytes/char)    |
 | 0x000C0000-0x000FFFFF | ROMs adaptador - reservado                 |
-| 0x00100000-0x00101FFF | **PD de paginación** (1 frame, Fase 4)     |
+| 0x00100000-0x00101FFF | **PD de paginación, kernel** (1 frame, Fase 4) |
+| 0x00100000-0x00107FFF | **Banda baja reservada** (Fase 8): PD/PT del kernel, pilas de kernel de las tareas de arranque y tablas tempranas; el PMM no la reutiliza |
 | 0x00200000-0x0023FFFF | **Heap del kernel** (4 MiB, Fase 4)        |
 | 0x00100000+           | RAM alta (PMM: resto de frames libres)     |
-| 0x80000000-0x8000FFFF | **Espacio de usuario** (ELF32 ring 3, PD aislado, Fase 7) |
+| 0x80000000-0xBFFFFFFF | **Espacio de usuario** (PD aislado, Fases 7-8): exe ELF/PE en 0x80000000, heap de usuario 0x90000000-0xA0000000 (bump SYS_MALLOC), modulos Win32 fijos 0xB0000000-0xB2FFFFFF (1 MiB por DLL), pila de usuario en 0xC0000000 (1 página, crece hacia abajo) |
 
 Límite práctico del kernel antes de chocar con la pila: 0x90000 − 0x10000 = 512 KB.
 
@@ -92,6 +93,7 @@ kernel lo usa para elegir la fuente del filesystem: `mefs_init_mem`
 - [x] Fase 5 - Multitarea, scheduler, drivers
 - [x] Fase 6 - Filesystem MEFS, modo usuario (ring 3), syscalls, shell
 - [x] Fase 7 - Arranque por CD (ISO9660 + El Torito), boot_info, pruebas/regresión QEMU+gdb
+- [x] Fase 8 - Soporte Windows: `.exe` PE32 (cabecera MZ) con imports `.idata`, modulos Win32 ring 3 fijos (kernel32.dll/user32.dll/ntdll.dll en 0xB0000000), shell `run` detecta MZ vs ELF, `SYS_EXEC` dual
 
 ## Notas de implementación (bitácora)
 
@@ -113,3 +115,8 @@ kernel lo usa para elegir la fuente del filesystem: `mefs_init_mem`
 - **Fase 7 (shell, entrada por serial)**: el kernel solo leía PS/2 (IRQ1) — con QEMU headless (`-serial stdio`) todo lo que se teclea va a COM1 y no pasaba nada. Ahora `serial_read_char()` (serial.c, poll de LSR bit 0, sin IRQ) es fallback en `read_line` del shell y en la ventana de teclado de kmain: permite operar la shell desde la consola serial. Nota: `sendkey` del monitor QEMU no genera IRQ1 en este entorno; con serial la shell se prueba con `timeout N qemu ... -serial stdio` escribiendo el stdin.
 - **Fase 7 (demo silenciada)**: las tareas de prueba del scheduler (T-A/T-B) imprimían indefinidamente e invadían la consola durante el uso del shell. `demo_print` (kmain.c) se pone a 0 justo antes de `shell_loop()`: las tareas siguen corriendo pero dejan de imprimir.
 - **Fase 7 (pruebas/regresión)**: `make test` (disco raw) y `make test_cd` (ISO/CD) headless con serial; en gdb, break en `*0x7ced` (primer `int 0x15`) + dump de 0x10000 (`8b 04 24 bc`), 0x50000 (`MEFS…`) e IVT (53 ff 00 f0) confirma las copias del modo CD.
+- **Fase 8**: `.exe` PE32 generados desde el ELF32 de usuario con `tools/makepe.py` (magia MZ + tabla de imports `.idata`: nombre DLL + función + dirección resuelta). El shell `run` y `SYS_EXEC` detectan el formato por la magia (MZ → `pe_load`/`pe_load_into`, `7F ELF` → `elf_load`). La tabla `.idata` vive en la VA fija 0x82000000 (`tools/user.ld`); `kernel/pe.c` la recorre y resuelve cada import contra `win32_resolve()`.
+- **Fase 8**: modulos Win32 ring 3 fijos (decisión de diseño): kernel32.dll/user32.dll/ntdll.dll se compilan como ELF32 enlazados a las bases fijas 0xB0000000/0xB1000000/0xB2000000 (`tools/dll32.ld`) con una tabla `.exports` (nombre → VA absoluta). El kernel los lee del FS en `win32_init()` y los mapea a **cada** PD de usuario en `win32_map_all()` → ningún `.exe` necesita relocaciones: la resolución de imports es escribir en el slot `.idata` la VA fija ya conocida.
+- **Fase 8 (bug crítico, corregido)**: el viejo `map_module` mapeaba el binario de la DLL **linealmente** (`VA = base + file_offset`): la cabecera ELF quedaba en 0xB0000000 y el código real en 0xB0001000; un export apuntaba a bytes de cabecera y el `.exe` "ejecutaba" ese ruido (`addb %dh,0x34(%eax)` con `eax=&w` → 0xBFFFFFF0+0x34 = 0xC0000024 no mapeado → `USER #PF` con eip=0xB000001A). Fix: mapear los segmentos **PT_LOAD** con su `p_vaddr`/`p_offset`/`p_filesz` (verificado con `objdump -h`: LOAD a offset 0x1000 → vaddr base).
+- **Fase 8 (bug crónico del scheduler, corregido)**: la GPF intermitente en el `iret` de `sched_switch` (marco de la tarea entrante "todo ceros", dependiente del timing) resultó ser una **doble asignación de frames** del PMM: la banda 0x100000-0x108000 (PD/PT del kernel + pilas de las tareas de arranque T-A/T-B) no estaba reservada, y la primera tarea de usuario recibía en `cr3` un frame que ya era la pila de kernel de la tarea demo B (`stack_base=0x103000` = `cr3=0x103000`); el `memset` del PD nuevo borraba la pila de B y su `iret` posterior restauraba el marco a ceros → `#GP`. Diagnóstico con gdb: dump de `tasks[]` (frames) + contenido del frame/PD. Fix: `pmm_reserve_range(0x100000, 0x80000)` en `pmm_init()`.
+- **Fase 8 (validación final)**: `run winapi.exe` imprime `A1`/`A2` y `BB` (import `kernel32.WriteFile` resuelto y llamada vía la DLL fija, cola a `SYS_WRITE`) y sale limpio; `quick.exe` (2 prints), `fork.exe` (padre/hijo) y `hello.exe` (0-9 + exit) pasan 2 ciclos completos y 7/7 runs sin panics.
