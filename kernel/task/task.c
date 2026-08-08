@@ -195,6 +195,7 @@ int task_create_user(const char *name, uint32_t pd, uint32_t entry)
     t->stack_base = stack_frame;
     t->esp0 = stack_frame + 0x1000;
     t->cr3 = pd;
+    t->heap_cur = USER_HEAP_BASE;
 
     return task_init(t, name);
 }
@@ -237,6 +238,7 @@ int task_fork(registers_t *regs)
     t->stack_base = stack_frame;
     t->esp0 = stack_frame + 0x1000;
     t->cr3 = pd;
+    t->heap_cur = current->heap_cur;
 
     return task_init(t, "user");
 }
@@ -309,4 +311,15 @@ const char *sched_current_name(void)
 uint32_t sched_current_cr3(void)
 {
     return current ? current->cr3 : 0;
+}
+
+uint32_t sched_user_heap(void)
+{
+    return current ? current->heap_cur : 0;
+}
+
+void sched_user_heap_set(uint32_t p)
+{
+    if (current)
+        current->heap_cur = p;
 }

@@ -34,3 +34,11 @@ void serial_puts(const char *s)
     while (*s)
         serial_putc(*s++);
 }
+
+int serial_read_char(void)
+{
+    /* LSR bit 0 = RX data ready (sin bloqueo: no RX IRQ habilitado) */
+    if (!(inb(COM1 + 5) & 0x01))
+        return -1;
+    return inb(COM1) & 0xFF;
+}

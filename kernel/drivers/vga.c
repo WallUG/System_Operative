@@ -64,6 +64,10 @@ void vga_putc(char c)
     case '\t':
         vga_col = (vga_col + 8) & ~7;
         break;
+    case '\b':
+        if (vga_col > 0)
+            vga_col--;
+        break;
     default:
         {
             uint16_t *cell = (uint16_t *)VGA_BASE + vga_row * VGA_WIDTH + vga_col;

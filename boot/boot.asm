@@ -158,31 +158,36 @@ load_kernel_ram:
 ; ------------------------------------------------------------------
 get_mmap:
     mov di, MMAP_ADDR + 4
-    xor bx, bx                  ; continuacion de iteracion (empezar en 0)
-    xor bp, bp                  ; contador de entradas
-    mov es, bx                  ; es = 0 (bx ya es 0)
-    mov eax, 0xE820
+    xor bx, bx                  ; bx = 0: continuacion de iteracion (y es)
+    mov es, bx                  ; es = 0 (buffer en memoria baja)
     mov edx, 0x534D4150         ; 'SMAP'
     xor ecx, ecx
-    mov cl, 20
+    mov cl, 20                  ; tam de la entrada (bytes)
+    xor bp, bp                  ; contador de entradas
 .next_entry:
+    ; ~OBLIGATORIO~ re-declarar eax en cada iteracion: la BIOS DEVUELVE
+    ; eax='SMAP' tras la llamada, asi que la segunda llamada no se
+    ; reconoce (cf=1) y el mapa se corta tras la primera entrada.
+    mov eax, 0xE820
     int 0x15
     jc .done                    ; error: usar lo recogido hasta ahora
     cmp eax, 0x534D4150         ; BIOS debe responder con 'SMAP' en eax
     jne .fail
     inc bp
     add di, 20                  ; siguiente entrada
-    test ebx, ebx               ; ebx=0 -> no hay mas entradas
+    test bx, bx                 ; ebx=0 -> no hay mas entradas
     jz .done
     cmp bp, MMAP_ENTRIES        ; limite del buffer
     jge .done
     jmp .next_entry
-.done:
-    mov [MMAP_ADDR], bp         ; ds=0 -> contador en 0x7E00
-    ret
 .fail:
-    xor bp, bp
-    jmp .done
+    xor bp, bp                  ; entrada invalida: mapa vacio
+.done:
+    ; dword completo: evita que los bytes altos del buffer (imagen del
+    ; kernel en el caso CD) ensucien el uint32 que lee el kernel.
+    movzx eax, bp
+    mov [MMAP_ADDR], eax
+    ret
 
 ; ------------------------------------------------------------------
 ; A20 via controlador de teclado (8042): leer output port, poner bit 1,

@@ -26,9 +26,14 @@
 
 /* --- Fase 5: tareas de prueba del scheduler round-robin --- */
 static volatile uint32_t cnt_a, cnt_b;
+/* Las tareas demo imprimen solas durante la ventana de demostracion; al
+ * arrancar el shell se silencian para no invadir la consola. */
+static volatile int demo_print = 1;
 
 static void task_print_line(const char *name, uint32_t v)
 {
+    if (!demo_print)
+        return;
     /* print atomico (IF off): evita intercalar caracteres entre tareas */
     __asm__ volatile("cli");
     kprint(name);
@@ -167,6 +172,8 @@ void kmain(uint32_t boot_info_ptr)
         kprint("Ventana de teclado (3 s) - pulsa algo...\n");
         while (timer_get_ticks() - start < 300) {
             int c = keyboard_read();
+            if (c < 0)
+                c = serial_read_char();     /* entrada alternativa por COM1 */
             if (c >= 0) {
                 vga_putc((char)c);
                 serial_putc((char)c);
@@ -226,6 +233,8 @@ void kmain(uint32_t boot_info_ptr)
 
     /* --- Shell interactiva (tarea idle) ---
      * kmain ya no termina: lee teclado y ejecuta comandos. El demo de
-     * #PF intencional ahora es el comando 'pf'. */
+     * #PF intencional ahora es el comando 'pf'. Las tareas demo quedan
+     * calladas (demo_print=0) para no ensuciar la consola. */
+    demo_print = 0;
     shell_loop();
 }

@@ -25,12 +25,25 @@ static void echo_line(const char *line)
     kprint("\n");
 }
 
+/* Imprime un byte como 2 digitos hex (xx, sin 0x). */
+static void hex_byte(uint8_t b)
+{
+    static const char *digits = "0123456789ABCDEF";
+    char s[3];
+    s[0] = digits[b >> 4];
+    s[1] = digits[b & 0xF];
+    s[2] = 0;
+    kprint(s);
+}
+
 static void read_line(char *line, int max)
 {
     int pos = 0;
     line[0] = 0;
     for (;;) {
         int c = keyboard_read();
+        if (c < 0)
+            c = serial_read_char();     /* entrada alternativa por COM1 */
         if (c < 0) {
             halt();
             continue;
@@ -40,7 +53,7 @@ static void read_line(char *line, int max)
             kprint("\n");
             return;
         }
-        if (c == '\b') {
+        if (c == '\b' || c == 0x7F) {
             if (pos > 0) {
                 pos--;
                 kprint("\b \b");
@@ -111,8 +124,7 @@ void shell_loop(void)
                         kprint_hex32((uint32_t)i);
                         kprint("  ");
                     }
-                    kprint_hex32(buf[i] >> 4 & 0xF);
-                    kprint_hex32(buf[i] & 0xF);
+                    hex_byte(buf[i]);
                     if (i % 16 == 15)
                         kprint("\n");
                     else

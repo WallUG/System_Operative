@@ -48,7 +48,7 @@ def build(files, out):
     for path in files:
         with open(path, "rb") as f:
             blob = f.read()
-        data += blob.ljust(512, b"\0")
+        data += blob.ljust(((len(blob) + 511) // 512) * 512, b"\0")
 
     with open(out, "wb") as f:
         f.write(sb)

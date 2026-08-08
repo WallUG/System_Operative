@@ -33,6 +33,9 @@
 #define TASK_RUNNING    2
 #define TASK_DEAD       3
 
+#define USER_HEAP_BASE  0x90000000u     /* heap de usuario (bump allocator) */
+#define USER_HEAP_END   0xA0000000u
+
 typedef struct task {
     uint32_t esp;               /* puntero al marco registers_t en su pila */
     uint32_t pid;
@@ -40,6 +43,7 @@ typedef struct task {
     uint32_t stack_base;        /* base de su pila de kernel (frame PMM) */
     uint32_t esp0;              /* tope de la pila de kernel (TSS), user */
     uint32_t cr3;               /* PD (kernel_pd para tareas ring 0) */
+    uint32_t heap_cur;          /* puntero del heap de usuario (bump) */
     char     name[TASK_NAME_LEN];
     struct task *next;          /* lista circular (round-robin) */
 } task_t;
@@ -68,6 +72,12 @@ uint32_t sched_task_count(void);
 uint32_t sched_current_pid(void);
 const char *sched_current_name(void);
 uint32_t sched_current_cr3(void);
+/* Heap de usuario de la tarea actual (SYS_MALLOC).
+ * heap_current()/heap_set(): consulta y avanza el puntero bump.
+ * El kernel reserva [heap_current, heap_current+size) mapeando paginas
+ * USER con paging_user_map; el bump nunca decrece (sin free por ahora). */
+uint32_t sched_user_heap(void);
+void     sched_user_heap_set(uint32_t p);
 /* Llamado desde el handler IRQ0 (timer): guarda el marco actual y
  * restaura el de la siguiente tarea de la lista circular. Retorna solo
  * cuando la multitarea no esta activa (vuelve al epilogo del stub). */

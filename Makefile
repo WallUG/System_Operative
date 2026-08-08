@@ -80,7 +80,7 @@ $(BUILD)/task/switch.o: kernel/task/switch.asm
 # 0x80000000 (region de usuario del kernel). El kernel los mapea en un
 # PD aislado (proteccion de memoria ring 3).
 USER_TEXT = 0x80000000
-USER_SRCS = user/hello.c user/fork.c user/exec.c
+USER_SRCS = user/hello.c user/fork.c user/exec.c user/console.c
 USER_ELFS = $(patsubst user/%.c,$(BUILD)/user/%.elf,$(USER_SRCS))
 
 $(BUILD)/user/%.elf: user/%.c tools/user.ld

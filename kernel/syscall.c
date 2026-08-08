@@ -15,6 +15,7 @@
 
 #include <stdint.h>
 #include <string.h>
+#include "io.h"
 #include "syscall.h"
 #include "idt.h"
 #include "kprint.h"
@@ -22,6 +23,8 @@
 #include "mem/paging.h"
 #include "mem/heap.h"
 #include "elf.h"
+#include "drivers/serial.h"
+#include "drivers/keyboard.h"
 #include "fs/mefs.h"
 
 #define IDT_GATE_INT_DPL3 0xEE      /* presente, DPL=3, 32-bit int gate */
@@ -55,6 +58,22 @@ static int user_strcpy(char *dst, uint32_t dst_sz, const char *src,
             return 0;
     }
     return -1;
+}
+
+/* Copia bytes del kernel a memoria de usuario (validando paginas). */
+static int user_memcpy_out(void *dst, const void *src, uint32_t n,
+                           uint32_t pd)
+{
+    const uint8_t *s = (const uint8_t *)src;
+    uint32_t a, i;
+
+    for (i = 0; i < n; i++) {
+        a = (uint32_t)dst + i;
+        if (a >= USER_VADDR_END || !paging_is_user(pd, a))
+            return -1;
+        *(uint8_t *)a = s[i];
+    }
+    return 0;
 }
 
 static void exit_current(registers_t *regs)
@@ -102,6 +121,7 @@ static void sys_exec(const char *name, registers_t *regs)
     paging_user_map(sched_current_cr3(), USER_ESP0_TOP - PAGE_SIZE, PAGE_SIZE);
     regs->esp = USER_ESP0_TOP;
     regs->user_esp = USER_ESP0_TOP;
+    sched_user_heap_set(USER_HEAP_BASE);    /* heap nuevo (bump en 0) */
 
     /* Continuar en el nuevo entry; eax=0 "exito" (nunca se usa). */
     regs->eip = entry;
@@ -137,6 +157,128 @@ void syscall_handler(registers_t *regs)
     }
     case SYS_GETPID:
         regs->eax = sched_current_pid();
+        break;
+    case SYS_READ: {
+        /* Lee una linea desde teclado o serial (igual que el shell).
+         * ecx = tamano maximo; devuelve el numero de chars leidos
+         * (sin el '\n'). Bloquea con halt() hasta entrada nueva. */
+        char *buf = (char *)regs->ebx;
+        uint32_t max = regs->ecx;
+        uint32_t n = 0;
+        char echo[2];
+        if (max == 0) {
+            regs->eax = 0;
+            break;
+        }
+        for (;;) {
+            int c = keyboard_read();
+            if (c < 0)
+                c = serial_read_char();
+            if (c < 0) {
+                halt();
+                continue;
+            }
+            if (c == '\n' || c == '\r')
+                break;
+            if (n >= max - 1)      /* desbordar: descartar, no pasarse */
+                continue;
+            if (!paging_is_user(pd, (uint32_t)buf + n)) {
+                regs->eax = -1;
+                return;
+            }
+            buf[n++] = (char)c;
+            echo[0] = (char)c;
+            echo[1] = 0;
+            kprint(echo);           /* echo de consola */
+        }
+        buf[n] = 0;
+        regs->eax = (int32_t)n;
+        break;
+    }
+    case SYS_WRITE: { /* escribe len bytes exactos (sin \0 obligatorio) */
+        const uint8_t *s = (const uint8_t *)regs->ebx;
+        uint32_t len = regs->ecx;
+        uint32_t i, a;
+        char cbuf[2];
+        if (len > 4096) {
+            regs->eax = -1;
+            break;
+        }
+        for (i = 0; i < len; i++) {
+            a = (uint32_t)s + i;
+            if (a >= USER_VADDR_END || !paging_is_user(pd, a)) {
+                regs->eax = -1;
+                return;
+            }
+            cbuf[0] = *(const char *)a;
+            cbuf[1] = 0;
+            kprint(cbuf);
+        }
+        regs->eax = (int32_t)len;
+        break;
+    }
+    case SYS_FSIZE: {
+        char name[32];
+        if (user_strcpy(name, sizeof(name), (const char *)regs->ebx, pd) == 0)
+            regs->eax = (int32_t)mefs_size(name);
+        else
+            regs->eax = -1;
+        break;
+    }
+    case SYS_FREAD: { /* ebx=nombre, ecx=dest buffer, edx=input: bytes */
+        char name[32];
+        char *dest = (char *)regs->ecx;
+        uint32_t len = regs->edx;
+        void *tmp;
+        int32_t got;
+        if (user_strcpy(name, sizeof(name), (const char *)regs->ebx, pd) != 0
+            || len > 0x100000) {
+            regs->eax = -1;
+            break;
+        }
+        tmp = kmalloc(len ? len : 1);
+        if (tmp == NULL) {
+            regs->eax = -1;
+            break;
+        }
+        got = (int32_t)mefs_read(name, tmp, len);
+        if (got < 0) {
+            kfree(tmp);
+            regs->eax = -1;
+            break;
+        }
+        if (user_memcpy_out(dest, tmp, (uint32_t)got, pd) != 0)
+            regs->eax = -1;
+        else
+            regs->eax = got;
+        kfree(tmp);
+        break;
+    }
+    case SYS_MALLOC: {
+        /* bump allocator sobre [USER_HEAP_BASE, USER_HEAP_END) con
+         * paginas USER mapeadas bajo demanda. Sin free (SYS_FREE no-op),
+         * pero suficiente para consola/archivos por ahora. */
+        uint32_t size = regs->ebx;
+        uint32_t cur = sched_user_heap();
+        uint32_t next;
+        if (size == 0)
+            size = 16;
+        next = PAGE_ALIGN(cur + size);
+        if (next > USER_HEAP_END) {
+            regs->eax = 0;
+            break;
+        }
+        if (paging_is_user(pd, cur) == 0 &&
+            paging_user_map(pd, cur, next - cur) != 0) {
+            regs->eax = 0;
+            break;
+        }
+        sched_user_heap_set(next);
+        regs->eax = cur;
+        break;
+    }
+    case SYS_FREE:
+        regs->eax = 0;
         break;
     default:
         break;
