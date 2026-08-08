@@ -44,6 +44,8 @@ static int fs_read_sector(uint32_t lba, uint8_t *buf)
 static int mefs_load(void)
 {
     uint8_t sb[512];
+    uint32_t dir_lba, dir_size, s;
+    uint8_t dir_buf[MEFS_MAX_FILES * 32];
 
     if (fs_read_sector(MEFS_FS_START, sb) != 0)
         return -1;
@@ -54,11 +56,16 @@ static int mefs_load(void)
     if (file_count > MEFS_MAX_FILES)
         file_count = MEFS_MAX_FILES;
 
-    /* Directorio: sector MEFS_FS_START+1, entradas de 32 B. */
-    if (fs_read_sector(MEFS_FS_START + 1, sector_buf) != 0)
-        return -1;
+    /* Directorio: puede ocupar mas de un sector (entradas de 32 B);
+     * sector base + tamano vienen en el superbloque. */
+    dir_lba  = *(uint32_t *)(sb + 12);
+    dir_size = *(uint32_t *)(sb + 16);
+    for (s = 0; s < (dir_size + 511) / 512; s++) {
+        if (fs_read_sector(dir_lba + s, dir_buf + s * 512) != 0)
+            return -1;
+    }
     for (int i = 0; i < file_count; i++) {
-        uint32_t *e = (uint32_t *)(sector_buf + i * 32);
+        uint32_t *e = (uint32_t *)(dir_buf + i * 32);
         for (int j = 0; j < MEFS_NAME_LEN; j++)
             entries[i].name[j] = ((uint8_t *)e)[j];
         entries[i].name[MEFS_NAME_LEN - 1] = 0;

@@ -5,6 +5,7 @@
  *  0x00 NULL      0x08 code ring0  0x10 data ring0
  *  0x18 code ring3 (0x1B con RPL3)  0x20 data ring3 (0x23 con RPL3)
  *  0x28 TSS (esp0 = pila de kernel para interrupciones desde ring 3)
+ *  0x30 FS user (0x33 con RPL3): base = WIN32_TIB_VA (TIB de mingw)
  *
  * El TSS se marca busy con ltr; la CPU lee ss0/esp0 al interrumpir una
  * tarea en ring 3 y cambia a la pila de kernel antes de entrar al stub. */
@@ -12,8 +13,10 @@
 #include <stdint.h>
 #include "gdt.h"
 #include "io.h"
+#include "win32.h"
 
-#define GDT_COUNT 6
+#define GDT_COUNT 7
+#define GDT_FS_USER 6           /* selector 0x33 (DPL 3) */
 
 /* Descriptor de segmento/TSS de 8 bytes (layout Intel). */
 typedef struct {
@@ -73,11 +76,19 @@ void gdt_init(void)
     tss.esp0 = (uint32_t)tss_stack + sizeof(tss_stack);
     gdt_set(5, (uint32_t)&tss, sizeof(tss) - 1, 0x89, 0x00);
 
+    /* FS de usuario: segmento DPL3 con base = TIB (los CRTs de mingw
+     * leen %fs:0x18 nada mas entrar). Todo el rango 0-4 GiB para que
+     * [fs:0x18] de cada tarea apunte a SU TIB mapeado en WIN32_TIB_VA. */
+    gdt_set(6, WIN32_TIB_VA, 0xFFFFF, 0xF2, 0xC0);
+
     gdt_ptr.limit = sizeof(gdt) - 1;
     gdt_ptr.base  = (uint32_t)&gdt;
 
     gdt_load(&gdt_ptr);
     tss_load(0x28);                            /* selector TSS (RPL 0) */
+
+    /* FS global (ring 0 y ring 3: los stubs nunca lo tocan). */
+    __asm__ volatile("movw $0x33, %%ax; movw %%ax, %%fs" : : : "ax", "memory");
 }
 
 void gdt_set_esp0(uint32_t esp0)

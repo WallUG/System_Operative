@@ -80,6 +80,9 @@ static int user_memcpy_out(void *dst, const void *src, uint32_t n,
 
 static void exit_current(registers_t *regs)
 {
+    kprint("exit:");
+    kprint_uint(regs->ebx);
+    kprint("\n");
     sched_kill_current();
     /* No volver a ring 3: el epilogo del stub hara iret a task_stub_exit
      * en ring 0 (el marco lleva cs=0x08; sobra user_esp/user_ss). */
@@ -127,9 +130,11 @@ static void sys_exec(const char *name, registers_t *regs)
      * (elf_load_into libero el espacio) y reiniciar esp: el programa
      * arranca con la pila vacia. */
     win32_map_all(sched_current_cr3());
-    paging_user_map(sched_current_cr3(), USER_ESP0_TOP - PAGE_SIZE, PAGE_SIZE);
-    regs->esp = USER_ESP0_TOP;
-    regs->user_esp = USER_ESP0_TOP;
+    paging_user_map(sched_current_cr3(), USER_ESP0_TOP - USER_STACK_SIZE,
+                    USER_STACK_SIZE);
+    win32_crt_ret_init(sched_current_cr3());
+    regs->esp = USER_ESP0_INIT;
+    regs->user_esp = USER_ESP0_INIT;
     sched_user_heap_set(USER_HEAP_BASE);    /* heap nuevo (bump en 0) */
 
     /* Continuar en el nuevo entry; eax=0 "exito" (nunca se usa). */

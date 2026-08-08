@@ -26,6 +26,15 @@
 #define USER_PDE_FIRST      (USER_VADDR_BASE >> 22)
 #define USER_PDE_LAST       (USER_VADDR_END >> 22)      /* exclusivo */
 #define USER_ESP0_TOP       USER_VADDR_END             /* cima pila user */
+/* Esp inicial de ring 3: 8 B por debajo del tope. El prologo de los
+ * CRTs (mingw: lea 4(%esp); push -4(%ecx)) lee el dword [esp] nada mas
+ * entrar; con esp == TOP la lectura caeria en la primera pagina no
+ * mapeada (#PF 0xC0000000). */
+#define USER_ESP0_INIT      (USER_ESP0_TOP - 8)
+/* Pila de usuario: 16 paginas (64 KiB). Los CRTs de Windows (msvcrt
+ * de mingw-w64) arrancan con bastante consumo de pila, asi que se
+ * mapean 64 KiB al crear/exec de cualquier tarea. */
+#define USER_STACK_SIZE     (16 * PAGE_SIZE)
 
 /* Kernel identity: 0-1 GiB (PDEs 0..255). */
 #define KERNEL_PDE_END      256

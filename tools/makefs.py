@@ -22,9 +22,12 @@ DIR_ENTRY = 32
 
 
 def build(files, out):
-    # 1. superbloque + directorio: reservamos 2 sectores, luego datos.
+    # 1. superbloque + directorio: el directorio puede ocupar 1+ sectores
+    # (entradas de 32 B); los datos empiezan alineados despues de el.
+    n = len(files)
+    dir_sectors = (n * 32 + 511) // 512
     entries = []
-    lba = LBA_FS_START + 2
+    lba = LBA_FS_START + 1 + dir_sectors
     for path in files:
         name = os.path.basename(path).encode()
         if len(name) > 15:
@@ -37,7 +40,10 @@ def build(files, out):
         name.ljust(16, b"\0") + struct.pack("<IIII", size, start, 0, 0)
         for name, size, start in entries
     )
-    dir_bytes = dir_bytes.ljust(512, b"\0")
+    # El directorio puede ocupar mas de un sector (17 archivos = 544 B);
+    # los datos deben empezar alineados a sector.
+    dir_sectors = (len(dir_bytes) + 511) // 512
+    dir_bytes = dir_bytes.ljust(dir_sectors * 512, b"\0")
 
     sb = MAGIC + struct.pack(
         "<III", len(entries), LBA_FS_START + 1, len(dir_bytes)

@@ -7,7 +7,7 @@ LD        = ld
 OBJCOPY   = objcopy
 QEMU      = qemu-system-i386
 KERNEL_SECTORS = 128            # tamano de kernel en sectores (1 = 512 bytes)
-FS_SECTORS     = 128            # fs.bin rellenado a 128 sectores (boot.asm usa el mismo valor)
+FS_SECTORS     = 256            # fs.bin rellenado a 256 sectores (boot.asm usa el mismo valor)
 
 BUILD     = build
 CFLAGS    = -m32 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
@@ -93,8 +93,23 @@ USER_ELFS = $(patsubst user/%.c,$(BUILD)/user/%.elf,$(USER_SRCS))
 USER_EXES = $(patsubst user/%.c,$(BUILD)/user/%.exe,$(USER_SRCS))
 
 WIN32_REGION = 0xB0000000
-DLL_SRCS  = user/win32/kernel32.c user/win32/user32.c user/win32/ntdll.c
+DLL_SRCS  = user/win32/kernel32.c user/win32/user32.c user/win32/ntdll.c \
+            user/win32/msvcrt.c
 DLL_ELFS  = $(patsubst user/win32/%.c,$(BUILD)/user/win32/%.elf,$(DLL_SRCS))
+
+# Fase 9: .exe compilado con la toolchain REAL de Windows (CRT de
+# mingw-w64). Se usa solo para pruebas manuales; no entra en fs.bin.
+MINGW32   = i686-w64-mingw32-gcc
+WIN_HELLO = $(BUILD)/user/win32/hello_win.exe
+
+$(WIN_HELLO): user/win32/hello_win.c
+	@mkdir -p $(dir $@)
+	$(MINGW32) -m32 -static -O2 -Wl,--image-base,0x80000000 \
+	           -Wl,--subsystem,console -o $@ $<
+
+win_hello: $(WIN_HELLO)
+	@echo "OK: $< (imports reales de Windows)"
+	@i686-w64-mingw32-objdump -p $< | sed -n '/The Import Tables/,/^$$/p'
 
 $(BUILD)/user/%.elf: user/%.c tools/user.ld
 	@mkdir -p $(dir $@)
@@ -111,6 +126,7 @@ $(BUILD)/user/win32/%.elf: user/win32/%.c tools/dll32.ld
 	        kernel32) echo $(WIN32_REGION) ;; \
 	        user32)   echo $$(( $(WIN32_REGION) + 0x100000 )) ;; \
 	        ntdll)    echo $$(( $(WIN32_REGION) + 0x200000 )) ;; \
+	        msvcrt)   echo $$(( $(WIN32_REGION) + 0x300000 )) ;; \
 	        *) echo $(WIN32_REGION) ;; esac) \
 	      -o $@ $(BUILD)/user/win32/$*.o
 
@@ -120,9 +136,9 @@ $(BUILD)/user/%.exe: $(BUILD)/user/%.elf tools/makepe.py
 # Filesystem MEFS: superbloque + directorio + datos (solo lectura).
 # Se rellena a FS_SECTORS para que boot.asm pueda copiarlo entero a RAM
 # en el arranque por CD (la imagen os-image.bin lo lleva en LBA 129..).
-$(BUILD)/fs.bin: $(USER_ELFS) $(USER_EXES) $(DLL_ELFS)
+$(BUILD)/fs.bin: $(USER_ELFS) $(USER_EXES) $(DLL_ELFS) $(WIN_HELLO)
 	@mkdir -p $(dir $@)
-	python3 tools/makefs.py $(USER_ELFS) $(USER_EXES) $(DLL_ELFS) -o $@
+	python3 tools/makefs.py $(USER_ELFS) $(USER_EXES) $(DLL_ELFS) $(WIN_HELLO) -o $@
 	@truncate -s $$(( $(FS_SECTORS) * 512 )) $@
 
 kernel.elf: $(OBJS)

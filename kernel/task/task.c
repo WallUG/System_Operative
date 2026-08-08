@@ -18,6 +18,7 @@
 #include "task.h"
 #include "mem/pmm.h"
 #include "gdt.h"
+#include "win32.h"
 #include "kprint.h"
 
 /* Implementado en kernel/task/switch.asm. No retorna (iret). */
@@ -143,7 +144,6 @@ int task_create(const char *name, void (*entry)(void))
 int task_create_user(const char *name, uint32_t pd, uint32_t entry)
 {
     uint32_t stack_frame;
-    uint32_t user_stack;
     uint32_t *sp;
     task_t *t;
 
@@ -155,18 +155,16 @@ int task_create_user(const char *name, uint32_t pd, uint32_t entry)
     if (stack_frame == 0)
         return -1;
 
-    /* Pila de usuario: un frame del PMM mapeado como USER siempre en
-     * el tope de la region de usuario. El contenido no importa. */
-    user_stack = pmm_alloc_frame();
-    if (user_stack == 0) {
+    /* Pila de usuario: USER_STACK_SIZE (64 KiB) mapeada como USER en el
+     * tope de la region de usuario (los CRTs de Windows consumen pila).
+     * El contenido no importa. */
+    if (paging_user_map(pd, USER_ESP0_TOP - USER_STACK_SIZE,
+                        USER_STACK_SIZE) != 0) {
         pmm_free_frame(stack_frame);
         return -1;
     }
-    if (paging_user_map_frame(pd, USER_ESP0_TOP - PAGE_SIZE, user_stack) != 0) {
-        pmm_free_frame(stack_frame);
-        pmm_free_frame(user_stack);
-        return -1;
-    }
+    /* Return address de arranque del CRT (ver win32_crt_ret_init). */
+    win32_crt_ret_init(pd);
 
     /* Marco falso para ring 3: el iret restaura tambien esp/ss de
      * usuario (la CPU pushea 5 dwords al interrumpir desde ring 3). */
@@ -178,7 +176,7 @@ int task_create_user(const char *name, uint32_t pd, uint32_t entry)
     sp[2]  = 0;                     /* edi               */
     sp[3]  = 0;                     /* esi               */
     sp[4]  = 0;                     /* ebp               */
-    sp[5]  = USER_ESP0_TOP;         /* esp (pusha)       */
+    sp[5]  = USER_ESP0_INIT;        /* esp (pusha)       */
     sp[6]  = 0;                     /* ebx               */
     sp[7]  = 0;                     /* edx               */
     sp[8]  = 0;                     /* ecx               */
@@ -188,7 +186,7 @@ int task_create_user(const char *name, uint32_t pd, uint32_t entry)
     sp[12] = entry;                 /* eip (user code)   */
     sp[13] = 0x1B;                  /* cs con RPL=3      */
     sp[14] = 0x202;                 /* eflags: IF=1      */
-    sp[15] = USER_ESP0_TOP;         /* user esp          */
+    sp[15] = USER_ESP0_INIT;        /* user esp          */
     sp[16] = 0x23;                  /* user ss con RPL=3 */
 
     t->esp = (uint32_t)sp;

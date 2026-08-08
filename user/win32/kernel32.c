@@ -1,14 +1,48 @@
 /* MyOS - user/win32/kernel32.c
  * kernel32.dll: modulo Win32 fijo (ring 3) enlazado a 0xB0000000
  * (alternativa "Modulos ring 3 fijos", ver kernel/win32.c).
- * Funciones minimas de la capa Win32 implementadas sobre las syscalls
- * de MyOS (int 0x80): GetStdHandle y WriteFile, mas la tabla de
- * exports .exports que el kernel usa para resolver los imports de los
- * .exe (win32_resolve). */
+ *
+ * Fase 9: kernel32 minimo que necesita el CRT de mingw-w64 (continuara
+ * en msvcrt.c, con la mayor parte del trabajo). Funciones implementadas
+ * sobre las syscalls int 0x80 de MyOS: consola (WriteFile/GetStdHandle),
+ * exit (ExitProcess/TerminateProcess), modulos (GetModuleHandle/...
+ * GetProcAddress resolve la propia tabla .exports), secciones criticas
+ * (lock real de un bit), codepages ASCII y stubs de "sentido comun"
+ * para lo que el CRT llama solo en caso de error.
+ */
 
 #include <stdint.h>
 
-#define SYS_WRITE 7
+#define KERNEL_BASE 0xB0000000u
+
+#define SYS_EXIT   2
+#define SYS_WRITE  7
+#define SYS_MALLOC 11
+#define SYS_FREE   12
+
+/* --- util --- */
+
+static int ci_eq(const char *a, const char *b)
+{
+    for (;;) {
+        char ca = *a, cb = *b;
+        if (ca >= 'A' && ca <= 'Z') ca += 32;
+        if (cb >= 'A' && cb <= 'Z') cb += 32;
+        if (ca != cb)
+            return 0;
+        if (ca == 0)
+            return 1;
+        a++;
+        b++;
+    }
+}
+
+static unsigned int strlen_u(const char *s)
+{
+    unsigned int n = 0;
+    while (s[n]) n++;
+    return n;
+}
 
 static int sys_write(const char *s, uint32_t len)
 {
@@ -20,9 +54,23 @@ static int sys_write(const char *s, uint32_t len)
     return r;
 }
 
-/* --- API Win32 (consola) --- */
+static void sys_exit(uint32_t code)
+{
+    __asm__ volatile("int $0x80" : : "a"(SYS_EXIT), "b"(code) : "memory");
+    for (;;) ;
+}
 
-/* Handles: 1 = salida estandar (consola). */
+static void *win_malloc(uint32_t size)
+{
+    void *p;
+    __asm__ volatile("int $0x80" : "=a"(p)
+                     : "a"(SYS_MALLOC), "b"(size)
+                     : "memory");
+    return p;
+}
+
+/* --- consola / procesos --- */
+
 #define STD_OUTPUT_HANDLE 1
 
 uint32_t GetStdHandle(uint32_t which)
@@ -43,16 +91,341 @@ uint32_t WriteFile(uint32_t h, const void *buf, uint32_t n,
     return (uint32_t)(r > 0 ? 1 : 0);
 }
 
-/* Tabla de exports: name + VA de la funcion (el ELF esta enlazado a la
- * base fija, asi que son las direcciones finales en el PD de usuario). */
+void ExitProcess(uint32_t code)     { sys_exit(code); }
+void TerminateProcess(uint32_t h, uint32_t code) { (void)h; sys_exit(code); }
+uint32_t GetCurrentProcess(void)    { return (uint32_t)-1; }
+uint32_t GetCurrentProcessId(void)  { return 1; }
+
+char *GetCommandLineA(void)
+{
+    static char cmd[] = "program.exe\0";
+    return cmd;
+}
+
+static char *env_block[] = { (char *)"PATH=.\0HOME=.\0", 0 };
+
+char **GetEnvironmentStringsA(void) { return env_block; }
+void  FreeEnvironmentStringsA(char **p) { (void)p; }
+
+/* --- errores --- */
+
+static uint32_t last_error;
+
+uint32_t GetLastError(void)       { return last_error; }
+void     SetLastError(uint32_t e) { last_error = e; }
+
+/* --- secciones criticas (RTL_CRITICAL_SECTION vista como int32) --- */
+
+typedef struct { volatile int32_t lock; } cs_t;
+
+void InitializeCriticalSection(void *lp)
+{
+    cs_t *c = (cs_t *)lp;
+    c->lock = 0;
+}
+
+void EnterCriticalSection(void *lp)
+{
+    cs_t *c = (cs_t *)lp;
+    for (;;) {
+        __asm__ volatile("lock btsl $0, %0" : "+m"(c->lock) : : "cc");
+        if (!(c->lock & 1))
+            return;
+        for (volatile int i = 0; i < 200; i++) ;
+    }
+}
+
+void LeaveCriticalSection(void *lp)
+{
+    cs_t *c = (cs_t *)lp;
+    __asm__ volatile("lock btrl $0, %0" : "+m"(c->lock) : : "cc");
+}
+
+void DeleteCriticalSection(void *lp) { (void)lp; }
+
+/* --- TLS --- */
+
+static uint32_t tls_slots[64];
+
+void *   TlsGetValue(uint32_t s) { return (s < 64) ? (void *)tls_slots[s] : 0; }
+void     TlsSetValue(uint32_t s, void *v) { if (s < 64) tls_slots[s] = (uint32_t)v; }
+uint32_t TlsAlloc(void) { return 1; }
+void     TlsFree(uint32_t s) { (void)s; }
+
+/* --- modulos / GetProcAddress --- */
+
 typedef struct {
-    char     name[16];
+    char     name[32];
     uint32_t fn;
 } win32_export_t;
 
+extern win32_export_t __exports[];
+
+uint32_t GetModuleHandleA(const char *name)
+{
+    if (name == 0)
+        return KERNEL_BASE;
+    if (ci_eq(name, "kernel32") || ci_eq(name, "kernel32.dll")
+        || ci_eq(name, "msvcrt") || ci_eq(name, "msvcrt.dll")
+        || ci_eq(name, "ntdll") || ci_eq(name, "ntdll.dll")
+        || ci_eq(name, "user32") || ci_eq(name, "user32.dll"))
+        return KERNEL_BASE;
+    return 0;
+}
+
+uint32_t GetProcAddress(uint32_t hmod, const char *name)
+{
+    uint32_t i;
+    if (hmod == 0)
+        hmod = KERNEL_BASE;
+    if (hmod != KERNEL_BASE)
+        return 0;
+    for (i = 0; __exports[i].name[0]; i++)
+        if (ci_eq(__exports[i].name, name))
+            return __exports[i].fn;
+    return 0;
+}
+
+uint32_t LoadLibraryA(const char *name)
+{
+    if (name == 0)
+        return 0;
+    return GetModuleHandleA(name) != 0 ? KERNEL_BASE : 0;
+}
+
+uint32_t FreeLibrary(uint32_t h) { (void)h; return 1; }
+
+/* --- codepage ASCII (CP_ACP/CP_OEM/MB para el CRT) --- */
+
+typedef struct {
+    uint32_t max_char_size;
+    uint8_t  default_char[8];
+    uint8_t  lead[12];
+} CPINFO;
+
+uint32_t MultiByteToWideChar(uint32_t cp, uint32_t flags,
+                             const char *mbs, int mbs_len,
+                             void *wbs, int wb_max)
+{
+    uint16_t *w = (uint16_t *)wbs;
+    int n = (mbs_len < 0) ? (int)strlen_u((const char *)mbs) + 1 : mbs_len;
+    int i;
+    (void)cp; (void)flags;
+    if (w == 0)
+        return (uint32_t)n;
+    if (n > wb_max)
+        return 0;
+    for (i = 0; i < n; i++)
+        w[i] = (uint16_t)(uint8_t)mbs[i];
+    return (uint32_t)n;
+}
+
+uint32_t WideCharToMultiByte(uint32_t cp, uint32_t flags,
+                             const void *wcs, int wbs_len,
+                             char *mbs, int mb_max,
+                             const char *def, int *used)
+{
+    const uint16_t *w = (const uint16_t *)wcs;
+    int n = (wbs_len < 0) ? -1 : wbs_len;
+    int i;
+    (void)cp; (void)flags; (void)def;
+    if (n < 0) {
+        n = 0;
+        while (w[n]) n++;
+        n++;
+    }
+    if (mb_max < n)
+        return 0;
+    for (i = 0; i < n; i++)
+        mbs[i] = (char)(w[i] & 0xFF);
+    if (used) *used = (uint32_t)n;
+    return (uint32_t)n;
+}
+
+uint32_t GetCPInfo(uint32_t cp, CPINFO *info)
+{
+    int i;
+    (void)cp;
+    if (info == 0)
+        return 0;
+    info->max_char_size = 1;
+    info->default_char[0] = '?';
+    for (i = 1; i < 8; i++)  info->default_char[i] = 0;
+    for (i = 0; i < 12; i++) info->lead[i] = 0;
+    return 1;
+}
+
+/* --- excepciones / sistema --- */
+
+static uint32_t unhandled_filter;
+
+uint32_t SetUnhandledExceptionFilter(uint32_t fn)
+{
+    uint32_t old = unhandled_filter;
+    unhandled_filter = fn;
+    return old;
+}
+
+uint32_t UnhandledExceptionFilter(uint32_t ei) { (void)ei; return 1; }
+int IsDebuggerPresent(void) { return 0; }
+
+void Sleep(uint32_t ms)
+{
+    (void)ms;
+    for (volatile uint32_t i = 0; i < 100000; i++) ;
+}
+
+uint32_t GetTickCount(void) { return 0; }
+
+void GetSystemTimeAsFileTime(uint32_t *t) { if (t) { t[0] = 0; t[1] = 0; } }
+uint32_t QueryPerformanceCounter(void *c) { if (c) *(uint64_t *)c = 0; return 1; }
+uint32_t QueryPerformanceFrequency(void *c) { if (c) *(uint64_t *)c = 1000; return 1; }
+
+uint32_t GetSystemTime(uint32_t *t)
+{
+    if (t) {
+        int i;
+        for (i = 0; i < 8; i++)
+            ((uint32_t *)t)[i] = 0;
+    }
+    return 0;
+}
+
+/* --- memoria virtual (no-ops plausibles) --- */
+
+#define PAGE_READWRITE 0x04u
+#define MEM_COMMIT     0x1000u
+#define MEM_RESERVE    0x2000u
+#define MEM_PRIVATE    0x20000u
+
+typedef struct {
+    uint32_t base;
+    uint32_t alloc_base;
+    uint32_t region_size;
+    uint32_t state;
+    uint32_t protect;
+    uint32_t type;
+} MEMORY_BASIC_INFORMATION;
+
+uint32_t VirtualProtect(void *addr, uint32_t size, uint32_t prot,
+                        uint32_t *old)
+{
+    (void)addr; (void)size; (void)prot;
+    if (old) *old = PAGE_READWRITE;
+    return 1;
+}
+
+uint32_t VirtualQuery(const void *addr, MEMORY_BASIC_INFORMATION *mbi,
+                      uint32_t len)
+{
+    if (mbi == 0 || len < sizeof(*mbi))
+        return 0;
+    mbi->base = (uint32_t)addr & ~0xFFFu;
+    mbi->alloc_base = 0x80000000u;
+    mbi->region_size = 0x1000;
+    mbi->state = MEM_COMMIT;
+    mbi->protect = PAGE_READWRITE;
+    mbi->type = MEM_PRIVATE;
+    return sizeof(*mbi);
+}
+
+void *VirtualAlloc(void *addr, uint32_t size, uint32_t type, uint32_t prot)
+{
+    (void)addr; (void)type; (void)prot;
+    return win_malloc(size);
+}
+
+uint32_t VirtualFree(void *p, uint32_t size, uint32_t type)
+{
+    (void)p; (void)size; (void)type;
+    return 1;
+}
+
+/* --- heap (bump del kernel via SYS_MALLOC) --- */
+
+static void win_free(void *p) { (void)p; __asm__ volatile("int $0x80" : : "a"(SYS_FREE) : "memory"); }
+
+uint32_t GetProcessHeap(void) { return 1; }
+
+void *HeapAlloc(uint32_t heap, uint32_t flags, uint32_t size)
+{
+    (void)heap; (void)flags;
+    return win_malloc(size);
+}
+
+uint32_t HeapFree(uint32_t heap, uint32_t flags, void *p)
+{
+    (void)heap; (void)flags;
+    win_free(p);
+    return 1;
+}
+
+void *HeapReAlloc(uint32_t heap, uint32_t flags, void *p, uint32_t size)
+{
+    (void)heap; (void)flags; (void)p;
+    return win_malloc(size);
+}
+
+uint32_t HeapSize(uint32_t heap, uint32_t flags, const void *p)
+{
+    (void)heap; (void)flags; (void)p;
+    return 0x1000;
+}
+
+void GetStartupInfo(void *si)
+{
+    if (si) {
+        for (uint32_t i = 0; i < 16; i++)
+            ((uint32_t *)si)[i] = 0;
+    }
+}
+
+/* --- tabla de exports --- */
+
 win32_export_t __exports[] __attribute__((section(".exports"))) = {
-    { "GetStdHandle", (uint32_t)&GetStdHandle },
-    { "WriteFile",    (uint32_t)&WriteFile },
-    { "kernel32_version", (uint32_t)0x00010000 },
+    { "GetStdHandle",          (uint32_t)&GetStdHandle },
+    { "WriteFile",             (uint32_t)&WriteFile },
+    { "ExitProcess",           (uint32_t)&ExitProcess },
+    { "GetCurrentProcess",     (uint32_t)&GetCurrentProcess },
+    { "GetCurrentProcessId",   (uint32_t)&GetCurrentProcessId },
+    { "TerminateProcess",      (uint32_t)&TerminateProcess },
+    { "GetCommandLineA",       (uint32_t)&GetCommandLineA },
+    { "GetCommandLineW",       (uint32_t)&GetCommandLineA },
+    { "GetEnvironmentStringsA",(uint32_t)&GetEnvironmentStringsA },
+    { "FreeEnvironmentStringsA",(uint32_t)&FreeEnvironmentStringsA },
+    { "GetLastError",          (uint32_t)&GetLastError },
+    { "SetLastError",          (uint32_t)&SetLastError },
+    { "InitializeCriticalSection", (uint32_t)&InitializeCriticalSection },
+    { "EnterCriticalSection",  (uint32_t)&EnterCriticalSection },
+    { "LeaveCriticalSection",  (uint32_t)&LeaveCriticalSection },
+    { "DeleteCriticalSection", (uint32_t)&DeleteCriticalSection },
+    { "TlsAlloc",              (uint32_t)&TlsAlloc },
+    { "TlsFree",               (uint32_t)&TlsFree },
+    { "TlsGetValue",           (uint32_t)&TlsGetValue },
+    { "TlsSetValue",           (uint32_t)&TlsSetValue },
+    { "GetModuleHandleA",      (uint32_t)&GetModuleHandleA },
+    { "GetProcAddress",        (uint32_t)&GetProcAddress },
+    { "LoadLibraryA",          (uint32_t)&LoadLibraryA },
+    { "FreeLibrary",           (uint32_t)&FreeLibrary },
+    { "MultiByteToWideChar",   (uint32_t)&MultiByteToWideChar },
+    { "WideCharToMultiByte",   (uint32_t)&WideCharToMultiByte },
+    { "GetCPInfo",             (uint32_t)&GetCPInfo },
+    { "SetUnhandledExceptionFilter", (uint32_t)&SetUnhandledExceptionFilter },
+    { "UnhandledExceptionFilter",    (uint32_t)&UnhandledExceptionFilter },
+    { "IsDebuggerPresent",     (uint32_t)&IsDebuggerPresent },
+    { "Sleep",                 (uint32_t)&Sleep },
+    { "GetTickCount",          (uint32_t)&GetTickCount },
+    { "GetSystemTimeAsFileTime", (uint32_t)&GetSystemTimeAsFileTime },
+    { "QueryPerformanceFrequency", (uint32_t)&QueryPerformanceFrequency },
+    { "VirtualProtect",        (uint32_t)&VirtualProtect },
+    { "VirtualQuery",          (uint32_t)&VirtualQuery },
+    { "VirtualAlloc",          (uint32_t)&VirtualAlloc },
+    { "VirtualFree",           (uint32_t)&VirtualFree },
+    { "GetProcessHeap",        (uint32_t)&GetProcessHeap },
+    { "HeapAlloc",             (uint32_t)&HeapAlloc },
+    { "HeapFree",              (uint32_t)&HeapFree },
+    { "HeapReAlloc",           (uint32_t)&HeapReAlloc },
+    { "HeapSize",              (uint32_t)&HeapSize },
+    { "GetStartupInfoA",       (uint32_t)&GetStartupInfo },
     { "", 0 },
 };

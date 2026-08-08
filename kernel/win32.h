@@ -26,17 +26,23 @@
 #define WIN32_DLL_NTDLL     2   /* base + 0x200000  ntdll.dll */
 #define WIN32_MAX_DLLS      4
 
-/* VA fija del descriptor de imports de los .exe (pe.h): el programa lo
+/* VA del descriptor de imports de los .exe (pe.h): el programa lo
  * declara como seccion .idata; el kernel lo rellena con las VA de las
  * funciones resueltas. */
 #define WIN32_IDATA_VA      0x82000000u
 #define WIN32_IDATA_MAX     64          /* max imports por .exe */
 
-/* Export single: name[16], funcion VA dentro del modulo. */
+/* VA del TIB (Thread Information Block) que usan los CRTs de mingw:
+ * cada tarea de usuario mapea una pagina USER en esta VA (el segmento
+ * FS de la GDT, base = WIN32_TIB_VA, apunta aqui). %fs:0x18 = Self. */
+#define WIN32_TIB_VA        0x84000000u
+
+/* Export single: name, funcion VA dentro del modulo. */
 #define WIN32_EXPORT_MAX    64          /* por DLL */
+#define WIN32_EXPORT_NAME   32          /* nombre de export, hasta "SetUnhandledExceptionFilter" */
 
 typedef struct {
-    char     name[16];
+    char     name[WIN32_EXPORT_NAME];
     uint32_t fn;
 } win32_export_t;
 
@@ -57,8 +63,14 @@ int  win32_init(void);
  * usuario de pd: una pagina USER RW por 4 KiB de modulo. */
 int  win32_map(uint32_t pd, uint32_t mod_idx);
 /* Idem pero mapea TODOS los modulos cargados (llamado al crear la
- * tarea). */
+ * tarea) y el TIB de usuario en WIN32_TIB_VA. */
 int  win32_map_all(uint32_t pd);
+/* Mapea y rellena el TIB (Thread Information Block) de usuario en
+ * WIN32_TIB_VA: una pagina USER nueva con Self/StackBase/StackLimit. */
+int  win32_tib_map(uint32_t pd);
+/* Escribe [USER_ESP0_INIT] = msvcrt!_crt_ret: return address de
+ * arranque del CRT de mingw (lea esp,ecx-4; ret). pd = el de la tarea. */
+int  win32_crt_ret_init(uint32_t pd);
 /* Resuelve "dll.func" -> direccion virtual de la funcion (0 si no
  * existe). dll_fname = "kernel32.dll" (o base/binario del archivo). */
 uint32_t win32_resolve(const char *dll, const char *fn);

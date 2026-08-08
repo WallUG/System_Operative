@@ -55,6 +55,7 @@ static const struct dll_desc dll_descs[] = {
     { "kernel32.elf", "kernel32.dll", WIN32_REGION_BASE + DLL_BASE_STEP * 0 },
     { "user32.elf",   "user32.dll",   WIN32_REGION_BASE + DLL_BASE_STEP * 1 },
     { "ntdll.elf",    "ntdll.dll",    WIN32_REGION_BASE + DLL_BASE_STEP * 2 },
+    { "msvcrt.elf",   "msvcrt.dll",   WIN32_REGION_BASE + DLL_BASE_STEP * 3 },
 };
 
 /* Extrae la tabla .exports del binario ELF (copiada a mods). */
@@ -126,7 +127,7 @@ int win32_init(void)
     uint32_t i;
     int n = 0;
 
-    for (i = 0; i < 3; i++) {
+    for (i = 0; i < sizeof(dll_descs) / sizeof(dll_descs[0]); i++) {
         if (load_one(&dll_descs[i], &mods[n]) != 0) {
             kprint("win32: no cargo ");
             kprint(dll_descs[i].fs_name);
@@ -159,7 +160,7 @@ static int map_module(uint32_t pd, int idx)
             continue;
         va = ph->p_vaddr;
         off = ph->p_offset;
-        total = ph->p_filesz;
+        total = ph->p_memsz;
         while (total > 0) {
             uint32_t frame = pmm_alloc_frame();
             uint32_t n = total > PAGE_SIZE ? PAGE_SIZE : total;
@@ -167,13 +168,18 @@ static int map_module(uint32_t pd, int idx)
             if (frame == 0)
                 return -1;
             memset((void *)frame, 0, PAGE_SIZE);
-            memcpy((void *)frame, m->bin + off, n);
+            if (off < ph->p_offset + ph->p_filesz) {
+                uint32_t nf = ph->p_offset + ph->p_filesz - off;
+                if (nf > n)
+                    nf = n;
+                memcpy((void *)frame, m->bin + off, nf);
+                off += nf;
+            }
             if (paging_user_map_frame(pd, va, frame) != 0) {
                 pmm_free_frame(frame);
                 return -1;
             }
             va += PAGE_SIZE;
-            off += n;
             total -= n;
         }
     }
@@ -197,17 +203,70 @@ int win32_map_all(uint32_t pd)
         if (map_module(pd, i) != 0)
             return -1;
     }
+    return win32_tib_map(pd);
+}
+
+/* --- TIB de las tareas de usuario (CRT mingw) --- */
+/* El CRT mingw lee %fs:0x18 -> TIB.Self y [Self+4] = StackBase al
+ * arrancar. Con el segmento FS de la GDT (base = WIN32_TIB_VA) y una
+ * pagina USER por tarea aqui, cada PD ve su propio TIB. */
+
+int win32_tib_map(uint32_t pd)
+{
+    uint32_t frame = pmm_alloc_frame();
+    uint32_t *tib;
+    if (frame == 0)
+        return -1;
+    tib = (uint32_t *)frame;            /* identity map del kernel */
+    tib[0x00 / 4] = 0xFFFFFFFF;         /* SEH frame head (ninguno) */
+    tib[0x04 / 4] = USER_ESP0_TOP;      /* StackBase */
+    tib[0x08 / 4] = USER_ESP0_TOP - USER_STACK_SIZE;   /* StackLimit */
+    tib[0x18 / 4] = WIN32_TIB_VA;       /* Self: %fs:0x18 */
+    return paging_user_map_frame(pd, WIN32_TIB_VA, frame);
+}
+
+/* Escribe en [USER_ESP0_INIT] la direccion de msvcrt!_crt_ret: es el
+ * "return address" que el CRT de mingw deja ubicado en la base de la
+ * pila para el ret final de mainCRTStartup (lea esp,ecx-4 / ret). */
+int win32_crt_ret_init(uint32_t pd)
+{
+    uint32_t ret_va = win32_resolve("msvcrt.dll", "_crt_ret");
+    uint32_t frame;
+    if (ret_va == 0)
+        return -1;
+    frame = paging_user_frame(pd, USER_ESP0_INIT & ~0xFFFu);
+    if (frame == 0)
+        return -1;
+    *(uint32_t *)(frame + (USER_ESP0_INIT & 0xFFF)) = ret_va;
     return 0;
 }
 
-/* Indice de modulo por nombre de DLL (comparando con dll_descs). */
+/* Compara nombres ignorando mayusculas: los .exe de mingw importan
+ * "KERNEL32.dll", nuestros modulos se llaman "kernel32.dll". */
+static int name_ci_eq(const char *a, const char *b)
+{
+    for (;;) {
+        char ca = *a, cb = *b;
+        if (ca >= 'A' && ca <= 'Z') ca += 32;
+        if (cb >= 'A' && cb <= 'Z') cb += 32;
+        if (ca != cb)
+            return 0;
+        if (ca == 0)
+            return 1;
+        a++;
+        b++;
+    }
+}
+
+/* Indice de modulo por nombre de DLL (ignorando mayusculas). */
 static int find_module(const char *dname)
 {
     int i;
 
     for (i = 0; i < mod_count; i++) {
         uint32_t bi = (mods[i].base - WIN32_REGION_BASE) / DLL_BASE_STEP;
-        if (bi < 3 && strcmp(dll_descs[bi].dll_name, dname) == 0)
+        if (bi < sizeof(dll_descs) / sizeof(dll_descs[0])
+            && name_ci_eq(dll_descs[bi].dll_name, dname))
             return i;
     }
     return -1;
