@@ -68,3 +68,14 @@ int strcmp(const char *a, const char *b)
     }
     return (unsigned char)*a - (unsigned char)*b;
 }
+
+int strncmp(const char *a, const char *b, size_t len)
+{
+    while (len-- && *a && *a == *b) {
+        a++;
+        b++;
+    }
+    if (len == (size_t)-1)
+        return 0;
+    return (unsigned char)*a - (unsigned char)*b;
+}

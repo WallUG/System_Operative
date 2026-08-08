@@ -1,11 +1,12 @@
 /* MyOS - kernel/kmain.c
  * Punto de entrada del kernel en C (llamado desde kernel/entry.asm).
- * Fase 4: memoria - E820 -> PMM bitmap -> paginacion PSE 4 MiB
- * (identity 0-1 GiB) -> heap first-fit -> #PF intencional. Mantiene
- * las demos de interrupciones de la Fase 3 (PIT + teclado). */
+ * Fase 7: kmain recibe el puntero a boot_info (0x7000) como argumento
+ * cdecl; segun el modo (disco/CD) el FS se sirve desde ATA o desde la
+ * imagen MEFS copiada a RAM por el bootloader (mefs_init_mem). */
 
 #include <stdint.h>
 #include "io.h"
+#include "bootinfo.h"
 #include "idt.h"
 #include "pic.h"
 #include "kprint.h"
@@ -18,6 +19,10 @@
 #include "drivers/timer.h"
 #include "drivers/keyboard.h"
 #include "task/task.h"
+#include "gdt.h"
+#include "syscall.h"
+#include "fs/mefs.h"
+#include "shell.h"
 
 /* --- Fase 5: tareas de prueba del scheduler round-robin --- */
 static volatile uint32_t cnt_a, cnt_b;
@@ -57,8 +62,9 @@ static void task_b(void)
     }
 }
 
-void kmain(void)
+void kmain(uint32_t boot_info_ptr)
 {
+    const bootinfo_t *bi = (const bootinfo_t *)boot_info_ptr;
     serial_init();
     vga_init();
 
@@ -173,6 +179,35 @@ void kmain(void)
         kprint("\n");
     }
 
+    /* --- Fase 6: GDT+TSS (ring 3), syscalls, FS y shell --- */
+    gdt_init();                     /* segmentos de usuario + TSS */
+    syscall_init();                 /* gate int 0x80 con DPL=3 */
+
+    /* --- Fase 6/7: FS. Origen segun boot_info: ATA (disco) o imagen
+     * en RAM (CD; mefs_init_mem). Sin boot_info valido: ATA (fallback
+     * para lanzar el kernel desnudo desde el depurador). */
+    {
+        int ok = 0;
+        if (bi && bi->magic == BOOTINFO_MAGIC && bi->mode == BOOTINFO_MODE_CD)
+            ok = mefs_init_mem((const uint8_t *)bi->fs_source,
+                               bi->fs_size) == 0;
+        else
+            ok = mefs_init() == 0;
+
+        if (ok) {
+            kprint("MEFS: ");
+            kprint_uint((uint32_t)mefs_file_count());
+            kprint(" archivo(s)");
+            if (bi && bi->magic == BOOTINFO_MAGIC &&
+                bi->mode == BOOTINFO_MODE_CD)
+                kprint(" (RAM)\n");
+            else
+                kprint(" en disco\n");
+        } else {
+            kprint("MEFS: error leyendo filesystem\n");
+        }
+    }
+
     /* --- Fase 5: multitarea round-robin (IRQ0) ---
      * kmain continua como tarea idle (hlt); A y B son contadores que
      * imprimen cada ~10 ticks (100 ms). El scheduler cambia de tarea en
@@ -183,20 +218,14 @@ void kmain(void)
     sched_start();
 
     {
-        /* idle: dejar correr las tareas ~3 s, luego el demo de #PF */
+        /* idle: dejar correr las tareas ~3 s, luego la shell */
         uint32_t start = timer_get_ticks();
         while (timer_get_ticks() - start < 300)
             halt();
     }
 
-    /* --- Demo final: #PF intencional en 0x50000000 (no mapeado).
-     * Con paginacion activa, PDE 320 = 0 -> la CPU lanza vector 14;
-     * isr_handler lee CR2 y kpanic_page_fault imprime el diagnostico.
-     * La escritura no deberia retornar nunca. --- */
-    kprint("Provocando #PF: escritura en 0x50000000 (no mapeado)...\n");
-    *(volatile uint32_t *)0x50000000u = 0xDEADBEEFu;
-
-    for (;;) {
-        halt();
-    }
+    /* --- Shell interactiva (tarea idle) ---
+     * kmain ya no termina: lee teclado y ejecuta comandos. El demo de
+     * #PF intencional ahora es el comando 'pf'. */
+    shell_loop();
 }

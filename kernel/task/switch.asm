@@ -13,10 +13,12 @@
 ; task_create fabrica un marco falso (eip = entrada de la tarea,
 ; cs = 0x8, eflags = 0x202) para que el primer iret arranque la tarea.
 ;
-; void sched_switch(uint32_t *old_esp, uint32_t new_esp, void *frame)
+; void sched_switch(uint32_t *old_esp, uint32_t new_esp, void *frame,
+;                   uint32_t new_cr3)
 ;   old_esp : &task->esp de la tarea que sale (donde guardar el marco)
 ;   new_esp : task->esp de la tarea que entra (marco registers_t)
 ;   frame   : puntero al marco registers_t de la tarea que sale
+;   new_cr3 : PD de la tarea que entra (cambio de espacio de usuario)
 ; No retorna: termina saltando a la tarea entrante.
 
 [bits 32]
@@ -29,7 +31,9 @@ sched_switch:
     mov eax, [esp + 4]          ; old_esp: puntero al campo esp
     mov ecx, [esp + 12]         ; frame: marco de la tarea que sale
     mov [eax], ecx              ; guardar esp (puntero al marco)
+    mov edx, [esp + 16]         ; new_cr3: PD de la tarea que entra
     mov esp, [esp + 8]          ; esp = marco de la tarea que entra
+    mov cr3, edx                ; cambiar el espacio de direcciones
 
     ; --- Epilogo identico a irq_common_stub ---
     pop ds
@@ -40,9 +44,11 @@ sched_switch:
 
 ; --- Inicio de una tarea nueva (primer iret) ---
 ; La tarea de kernel normal NO retorna: si el entry retorna, entramos
-; aqui y morimos (loop) en vez de saltar a basura de la pila.
+; aqui y morimos (sti;hlt) en vez de saltar a basura de la pila.
+; sti;hlt (no cli;hlt): el IRQ0 del PIT debe poder despertar la tarea
+; para que el scheduler la salte (esta fuera de la lista, no vuelve).
 global task_stub_exit
 task_stub_exit:
-    cli
+    sti
     hlt
     jmp task_stub_exit

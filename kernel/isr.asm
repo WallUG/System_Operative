@@ -111,6 +111,9 @@ ISR_NOERR 29
 ISR_NOERR 30
 ISR_NOERR 31
 
+; --- Syscall: int 0x80 (Fase 6) ---
+ISR_NOERR 128
+
 ; --- IRQs del PIC remapeadas a 32-47 ---
 IRQ 0, 32
 IRQ 1, 33

@@ -11,6 +11,11 @@
 #include "drivers/timer.h"
 #include "drivers/keyboard.h"
 #include "task/task.h"
+#include "syscall.h"
+#include "kprint.h"
+
+/* Bucle de muerte de tareas (sti;hlt) en kernel/task/switch.asm. */
+extern void task_stub_exit(void);
 
 static const char *const exception_names[32] = {
     "Division by zero", "Debug", "Non-maskable interrupt",
@@ -26,10 +31,28 @@ static const char *const exception_names[32] = {
 
 void isr_handler(registers_t *regs)
 {
+    if (regs->int_no == 0x80) {
+        syscall_handler(regs);
+        return;                     /* el epilogo del stub hace el iret */
+    }
     if (regs->int_no == 14) {
         /* Page fault: CR2 tiene la direccion que causo el fallo */
         uint32_t cr2;
         __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+        if (regs->cs == 0x1B) {
+            /* #PF de una tarea de usuario: proteccion de memoria en
+             * accion. Matar la tarea y seguir con las demas. */
+            kprint("USER #PF en 0x");
+            kprint_hex32(cr2);
+            kprint(" - tarea eliminada (proteccion de memoria)\n");
+            sched_kill_current();
+            /* iret a task_stub_exit en ring 0 (marco con cs=0x08). */
+            regs->eip = (uint32_t)task_stub_exit;
+            regs->cs = 0x08;
+            regs->eflags = 0x202;
+            regs->eax = 0;
+            return;
+        }
         kpanic_page_fault(cr2, regs);
     }
     if (regs->int_no < 32) {

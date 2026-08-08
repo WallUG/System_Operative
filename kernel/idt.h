@@ -24,7 +24,11 @@ typedef struct {
 } registers_t;
 
 #define IDT_GATE_INT 0x8E           /* interrupt gate, presente, ring 0, 32-bit */
+#define IDT_GATE_INT_DPL3 0xEE      /* idem pero accesible desde ring 3 */
 
 void idt_init(void);
+/* Registra un handler de software (p. ej. int 0x80) accesible desde
+ * ring 3. Llamar despues de idt_init. */
+void idt_register_dpl3(uint8_t n, uint32_t handler);
 
 #endif

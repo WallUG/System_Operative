@@ -71,3 +71,8 @@ void idt_init(void)
 
     idt_load(&idt_ptr);
 }
+
+void idt_register_dpl3(uint8_t n, uint32_t handler)
+{
+    idt_set_gate(n, handler, 0x08, IDT_GATE_INT_DPL3);
+}

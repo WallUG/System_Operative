@@ -3,6 +3,8 @@
 ; protegido 32 bits; el linker script ubica .text en 0x10000.
 ; La pila vive en .bss (16 KB alineada a 16, cdecl i386 exige ESP%16==12
 ; en la llamada, el ABI de GCC garantiza la alineacion correcta del tope).
+; Fase 7: el bootloader empuja el puntero a boot_info (0x7000) antes del
+; call; se preserva ANTES de fijar la pila del kernel (si no, se pierde).
 
 [bits 32]
 extern kmain
@@ -10,7 +12,9 @@ global _start
 
 section .text
 _start:
+    mov eax, [esp]              ; arg cdecl: puntero a boot_info (0x7000)
     mov esp, stack_top
+    push eax
     call kmain
 .hang:
     cli
