@@ -416,27 +416,41 @@ void syscall_handler(registers_t *regs)
     }
     case SYS_EVENT: { /* ebx=&struct{type,x,y,buttons,key}; -1 si vacio */
         mouse_event_t ev;
-        if (mouse_event_dequeue(&ev) != 0) {
-            regs->eax = -1;
-            break;
+        int done = 0;
+        /* Fase 16/17: el WM consume/transforma los eventos y los
+         * enruta por PD (cada app recibe solo los de sus ventanas y
+         * del foco). Sin ventanas el evento va crudo al llamador. */
+        while (!done && mouse_event_dequeue(&ev) == 0) {
+            int r = wm_route(&ev);
+            if (r == WM_ROUTE_CONSUMED)
+                continue;
+            if (r == WM_ROUTE_RAW) {
+                if (user_memcpy_out((char *)regs->ebx, (const char *)&ev,
+                                    sizeof(ev), pd) == 0)
+                    regs->eax = 0;
+                else
+                    regs->eax = -1;
+                done = 1;
+                break;
+            }
+            wm_event_deliver((uint32_t)r, &ev);
         }
-        /* Fase 16: el WM consume los eventos de ventana (arrastre,
-         * raise); lo que sobre se entrega a la app. */
-        if (wm_filter_event(&ev, pd) != 0) {
-            regs->eax = -1;
+        if (done)
             break;
-        }
-        if (user_memcpy_out((char *)regs->ebx, (const char *)&ev,
-                            sizeof(ev), pd) != 0) {
+        if (wm_event_claim(pd, &ev) == 0) {
+            if (user_memcpy_out((char *)regs->ebx, (const char *)&ev,
+                                sizeof(ev), pd) == 0)
+                regs->eax = 0;
+            else
+                regs->eax = -1;
+        } else {
             regs->eax = -1;
-            break;
         }
-        regs->eax = 0;
         break;
     }
-    case SYS_WINCREATE: { /* ebx=&{title*,x,y,w,h,buf_va,buf_sz} -> id */
+    case SYS_WINCREATE: { /* ebx=&{title*,x,y,w,h,buf_va,buf_sz,flags}->id */
         struct {
-            uint32_t title, x, y, w, h, buf_va, buf_sz;
+            uint32_t title, x, y, w, h, buf_va, buf_sz, flags;
         } a;
         char title[24];
         int r;
@@ -447,12 +461,12 @@ void syscall_handler(registers_t *regs)
             break;
         }
         r = wm_create(title, (int)a.x, (int)a.y, (int)a.w, (int)a.h,
-                      a.buf_va, a.buf_sz, pd);
+                      a.buf_va, a.buf_sz, a.flags, pd);
         regs->eax = r;
         break;
     }
-    case SYS_WINCLOSE:   /* ebx=id */
-        regs->eax = wm_close((int)regs->ebx);
+    case SYS_WINCLOSE:   /* ebx=id (solo la app duena puede cerrar) */
+        regs->eax = wm_close((int)regs->ebx, pd);
         break;
     case SYS_WINMOVE: {  /* ebx=id, ecx=dx, edx=dy */
         regs->eax = wm_move((int)regs->ebx, (int)regs->ecx, (int)regs->edx);

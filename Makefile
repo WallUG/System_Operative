@@ -100,7 +100,7 @@ USER_EXES = $(patsubst user/%.c,$(BUILD)/user/%.exe,$(USER_SRCS))
 # escalera. Los ELF nativos restantes se siguen compilando con
 # compat_suite pero no ocupan sectores del FS (que mide 512 sectores).
 FS_USER_ELFS = $(BUILD)/user/hello.elf $(BUILD)/user/mouseinfo.elf \
-               $(BUILD)/user/win_demo.elf
+               $(BUILD)/user/win_demo.elf $(BUILD)/user/win_two.elf
 FS_USER_EXES = $(filter %quick.exe %winapi.exe %fork.exe %exec.exe %console.exe,\
                        $(USER_EXES))
 

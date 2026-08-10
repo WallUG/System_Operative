@@ -19,6 +19,7 @@
 #include "mem/pmm.h"
 #include "gdt.h"
 #include "win32.h"
+#include "winmgr.h"
 #include "kprint.h"
 
 /* Implementado en kernel/task/switch.asm. No retorna (iret). */
@@ -254,6 +255,11 @@ void sched_kill_current(void)
     if (current == NULL)
         return;
     if (current->cr3 != 0 && current->cr3 != paging_kernel_pd()) {
+        /* Fase 17: la tarea muere -> el WM retira sus ventanas, libera
+         * su cola de eventos y suelta el fondo si era la ultima. Debe
+         * correr ANTES de liberar el PD (aun valido para comprobar
+         * duenos y recomponer). */
+        wm_cleanup_pd(current->cr3);
         /* Liberar PD + espacio de usuario. CR3 sigue apuntando al PD
          * mientras la tarea termina en kernel (identity map intacto);
          * el proximo sched_switch carga otro PD. */

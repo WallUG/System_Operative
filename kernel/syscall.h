@@ -21,7 +21,7 @@
 #define SYS_GFXINFO 15  /* ebx=&struct{lfb_va,w,h,bpp}: info grafica  */
 #define SYS_MOUSEINFO 16 /* ebx=&struct{x,y,buttons}: posicion raton  */
 #define SYS_EVENT 17    /* ebx=&struct{type,x,y,buttons,key}: -1 vacio */
-#define SYS_WINCREATE 18 /* ebx=&{title*,x,y,w,h,buf_va,buf_sz}-> id  */
+#define SYS_WINCREATE 18 /* ebx=&{title*,x,y,w,h,buf_va,buf_sz,flags}->id */
 #define SYS_WINCLOSE 19 /* ebx=id: cierra la ventana                  */
 #define SYS_WINMOVE 20  /* ebx=id, ecx=dx, edx=dy: mueve la ventana   */
 #define SYS_WINUPDATE 21 /* ebx=id: recompone (la app termino de pin- */

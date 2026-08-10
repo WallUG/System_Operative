@@ -24,6 +24,8 @@ mingw-w64 en ring 3, gracias a shims de `kernel32.dll` y `msvcrt.dll`.
 | 13   | **Ratón PS/2 (IRQ12) + cursor** en el framebuffer (driver 8042, paquete de 3 bytes, save/restore) |
 | 14   | **Syscalls de eventos gráficos** (`SYS_MOUSEINFO` 16, `SYS_EVENT` 17, cola FIFO global) y **primer widget interactivo**: el botón OK de `MessageBoxA` responde al clic (estado presionado) |
 | 15   | **Widgets interactivos en user32**: mini-API de widgets (`MyOS_PollEvent`/`MyOS_DrawButton`/`MyOS_WidgetHit`/`MyOS_ButtonFeed`) con botones con hover y press, lista para el escritorio |
+| 16   | **Gestor de ventanas en el kernel** (winmgr): `SYS_WINCREATE` 18-`SYS_WININFO` 22, composición centralizada con marco/título/botón X, z-order con snapshot del fondo, arrastre por la barra de título |
+| 17   | **Enrutado de eventos por PD + limpieza al morir la tarea**: colas FIFO por app (`wm_route`), `EV_KEY` → ventana superior, clic/drag → dueño bajo el cursor; `wm_cleanup_pd` al morir la tarea; **fix: el kernel zeroea su `.bss` en el arranque → funciona el arranque por CD (ISO + El Torito)** |
 
 ## Requisitos
 
@@ -164,10 +166,25 @@ Todos los detalles, decisiones y bugs encontrados están en `DESIGN.md`.
   entregado como `EV_WINCLOSE` 5. `win_demo.c` validado con QMP
   (screendumps: superposición inicial, ventana arrastrada, ventana
   cerrada). Escalera **14/14 PASS** (disco).
+- Fase 17 completada: **enrutado de eventos por PD** — el modelo de la
+  Fase 14 (cola global + un único consumidor) no sirve con 2+ procesos
+  gráficos: `wm_route` enruta cada evento a la cola FIFO de la app dueña
+  (`EV_KEY` → ventana superior, clic/drag → dueño bajo el cursor),
+  `SYS_EVENT` reclama solo su propia cola y `SYS_WINCLOSE` valida el
+  dueño. **Bug #1**: al morir una tarea, `wm_cleanup_pd` libera sus
+  ventanas, su cola y recalcula fondo/foco (validado con `win_two.c`:
+  fork + 2 procesos × 2 ventanas, limpieza total y shell al prompt).
+  **Bug de arranque por CD**: el kernel nunca zeroeaba su `.bss` (que el
+  linker coloca hasta 0x2A974, más allá de los 64 KB del kernel.bin); en
+  modo CD la BIOS cargaba los bytes de `fs.bin` encima del `.bss` y las
+  variables del scheduler quedaban corruptas → panic. Fix: `_start`
+  zeroea `__bss_start..__bss_end` (entry.asm + símbolos en linker.ld).
+  Escalera **14/14 PASS** tanto en disco como en **ISO (El Torito)**,
+  y el tope de reintentos del serial (THRE) evita cuelgues por
+  backpressure del chardev de QEMU.
 - Roadmap tentativo: long mode (64 bits), ATA con escritura de archivos
-  (CreateFileA con GENERIC_WRITE), GUI completa (widgets → window manager
-  con z-order → escritorio con barra de tareas y explorador de archivos),
-  según el interés.
+  (CreateFileA con GENERIC_WRITE), escritorio completo (barra de tareas y
+  explorador de archivos sobre MEFS), según el interés.
 - **Plan de documentación futura**: `DESIGN.md`/README documentan lo
   esencial por fase; está pendiente una documentación formal y detallada
   (arquitectura, flujo de arranque, ABI, drivers, loader PE, GUI) como

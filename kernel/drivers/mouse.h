@@ -13,6 +13,8 @@
 #define EV_BUTTON_UP    3   /* boton soltado: x, y, buttons         */
 #define EV_KEY          4   /* tecla del teclado: key = caracter    */
 
+#define EV_QUEUE_MAX    64  /* tamano de las colas de eventos        */
+
 typedef struct {
     int type;
     int x, y;           /* posicion del raton (EV_KEY: sin usar)   */

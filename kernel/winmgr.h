@@ -4,7 +4,8 @@
  * app (ella pinta su area cliente) y composicion centralizada: el
  * kernel dibuja marco + titulo + boton X y blitea el cliente al LFB
  * en orden z. El kernel consume los eventos de arrastre y raise; el
- * resto se entrega a la app por SYS_EVENT. */
+ * resto se enruta a la app duena de la ventana (Fase 17: colas de
+ * eventos por PD para multitarea grafica). */
 
 #ifndef MYOS_WINMGR_H
 #define MYOS_WINMGR_H
@@ -21,12 +22,38 @@
  * La app decide cerrarse con SYS_WINCLOSE. */
 #define EV_WINCLOSE   5
 
+/* Flags de SYS_WINCREATE (campo flags del struct de 32 bytes). */
+#define WM_FLAG_FIXED    0x1      /* siempre arriba (taskbar); sin drag  */
+#define WM_FLAG_NOFRAME  0x2      /* sin marco/titulo/X: el cliente      */
+                                  /* ocupa todo el rect de la ventana    */
+
+/* Resultados de wm_route(). */
+#define WM_ROUTE_RAW      0       /* sin ventanas: entregar al llamador  */
+#define WM_ROUTE_CONSUMED -1      /* el WM lo consume (drag)             */
+#define WM_ROUTE_TO_PD    1       /* enrutado a la cola del PD devuelto  */
+
 int wm_create(const char *title, int x, int y, int w, int h,
-              uint32_t buf_va, uint32_t buf_sz, uint32_t pd);
-int wm_close(int id);
+              uint32_t buf_va, uint32_t buf_sz, uint32_t flags,
+              uint32_t pd);
+int wm_close(int id, uint32_t pd);   /* solo la app duena puede cerrar */
 int wm_move(int id, int dx, int dy);
 int wm_update(int id);
 int wm_info(int id, uint32_t *out);
-int wm_filter_event(mouse_event_t *ev, uint32_t pd);
+
+/* Limpieza al morir una tarea (Fase 17): retira todas sus ventanas,
+ * cancela un drag en curso si era suyo, libera la cola de eventos de su
+ * PD y, si era la ultima ventana, restaura la consola y suelta el
+ * snapshot de fondo. La invoca sched_kill_current antes de liberar el
+ * espacio de usuario. */
+void wm_cleanup_pd(uint32_t pd);
+
+/* Enrutamiento de un evento (Fase 17): consume el drag, transforma el
+ * boton X en EV_WINCLOSE y devuelve WM_ROUTE_TO_PD con el PD destino
+ * (dueno de la ventana bajo el raton / foco) o WM_ROUTE_* sin ventanas.
+ * Los eventos enrutados se encolan con wm_event_deliver() y cada app
+ * los retira de su propia cola con wm_event_claim(). */
+int  wm_route(mouse_event_t *ev);
+void wm_event_deliver(uint32_t pd, const mouse_event_t *ev);
+int  wm_event_claim(uint32_t pd, mouse_event_t *ev);
 
 #endif

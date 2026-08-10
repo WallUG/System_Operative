@@ -15,6 +15,7 @@
 #define SYS_WINCLOSE 19
 #define SYS_WINUPDATE 21
 #define SYS_WININFO 22
+#define SYS_GETPID  5
 
 #define EV_MOVE         1
 #define EV_BUTTON_DOWN  2
@@ -45,6 +46,13 @@ static int sys_event(uint32_t *ev)
     int r;
     __asm__ volatile("int $0x80" : "=a"(r)
                      : "a"(SYS_EVENT), "b"(ev) : "memory");
+    return r;
+}
+
+static int sys_getpid(void)
+{
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r) : "a"(SYS_GETPID));
     return r;
 }
 
@@ -107,7 +115,7 @@ static void paint(uint32_t *buf, int cw, int ch, uint32_t base, uint32_t line)
 int _start(void)
 {
     uint32_t ev[5];
-    uint32_t a[7], info[8];
+    uint32_t a[8], info[8];
     uint32_t *bufa, *bufb;
     int ida, idb;
     int closed = 0;
@@ -124,6 +132,7 @@ int _start(void)
     a[0] = (uint32_t)"Ventana A"; a[1] = 250; a[2] = 150;
     a[3] = 320; a[4] = 200; a[5] = (uint32_t)bufa;
     a[6] = (320 - 2 * FRAME) * (200 - TITLE - FRAME) * 4;
+    a[7] = 0;                       /* flags: ventana normal */
     ida = sys_wincreate(a);
     if (ida < 0) {
         sys_write("demo: create A fallo\n", 21);
@@ -140,6 +149,7 @@ int _start(void)
     a[0] = (uint32_t)"Ventana B"; a[1] = 320; a[2] = 220;
     a[3] = 280; a[4] = 180; a[5] = (uint32_t)bufb;
     a[6] = (280 - 2 * FRAME) * (180 - TITLE - FRAME) * 4;
+    a[7] = 0;                       /* flags: ventana normal */
     idb = sys_wincreate(a);
     if (idb < 0) {
         sys_write("demo: create B fallo\n", 21);
@@ -151,7 +161,9 @@ int _start(void)
             sys_write("x", 1), put_dec(info[7]), sys_write("\n", 1);
     sys_winupdate(ida);         /* recompone (prueba de la syscall) */
 
-    sys_write("demo: ventanas A=", 18);
+    sys_write("demo[pid=", 10);
+    put_dec(sys_getpid());
+    sys_write("]: ventanas A=", 15);
     put_dec((uint32_t)ida);
     sys_write(" B=", 3);
     put_dec((uint32_t)idb);
@@ -166,7 +178,9 @@ int _start(void)
             continue;
         }
         if (ev[0] == EV_WINCLOSE) {
-            sys_write("demo: cerrando ventana id=", 26);
+            sys_write("demo[pid=", 10);
+            put_dec(sys_getpid());
+            sys_write("]: cerrando ventana id=", 23);
             put_dec((uint32_t)ev[4]);
             sys_write("\n", 1);
             sys_winclose((int)ev[4]);

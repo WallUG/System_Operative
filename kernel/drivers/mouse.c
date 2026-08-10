@@ -21,7 +21,10 @@
 #define MOUSE_CUR_W 8
 #define MOUSE_CUR_H 8
 
-#define EV_QUEUE_MAX 64
+/* EV_QUEUE_MAX vive en mouse.h (Fase 17: lo comparte winmgr para las
+ * colas de eventos por PD). Cola FIFO global: la drena SYS_EVENT; con
+ * ventanas activas el WM la enruta por PD, sin ventanas se entrega
+ * crudo al llamador. */
 
 static volatile int mouse_x = 0;
 static volatile int mouse_y = 0;

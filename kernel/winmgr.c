@@ -38,6 +38,7 @@ typedef struct {
     uint32_t buf_va;              /* buffer del cliente (ring 3)       */
     uint32_t buf_sz;
     uint32_t pd;                  /* PD de la app duena                 */
+    uint32_t flags;               /* WM_FLAG_*                          */
     int      z;                   /* 0 = fondo; mayor = mas arriba      */
     int      visible;
     int      dragging;
@@ -49,16 +50,48 @@ static int wm_next_id = 1;
 static uint32_t *wm_background;   /* snapshot del LFB (kmalloc)         */
 static int wm_active = 0;         /* hay alguna ventana visible         */
 
+/* Fase 17: cola de eventos por app (PD). Cada app solo recibe los
+ * eventos de sus ventanas (y del foco); el escritorio es otra app mas. */
+#define WM_MAX_CLIENTS 4
+typedef struct {
+    uint32_t pd;
+    mouse_event_t q[EV_QUEUE_MAX];
+    int head, tail;
+    int used;
+} wm_client_t;
+static wm_client_t wm_clients[WM_MAX_CLIENTS];
+static uint32_t wm_focus_pd = 0;  /* destino del teclado / fondo       */
+
 static win_t *wm_hit(int px, int py)
 {
     int i, best = -1, bestz = -1;
     for (i = 0; i < WM_MAX_WINS; i++) {
-        if (!wins[i].visible || wins[i].z <= bestz)
+        int z;
+        if (!wins[i].visible)
+            continue;
+        z = wins[i].z + (wins[i].flags & WM_FLAG_FIXED ? 0x1000 : 0);
+        if (z <= bestz)
             continue;
         if (px >= wins[i].x && px < wins[i].x + wins[i].w &&
             py >= wins[i].y && py < wins[i].y + wins[i].h) {
             best = i;
-            bestz = wins[i].z;
+            bestz = z;
+        }
+    }
+    return best >= 0 ? &wins[best] : NULL;
+}
+
+static win_t *wm_topmost(void)
+{
+    int i, best = -1, bestz = -1;
+    for (i = 0; i < WM_MAX_WINS; i++) {
+        int z;
+        if (!wins[i].visible)
+            continue;
+        z = wins[i].z + (wins[i].flags & WM_FLAG_FIXED ? 0x1000 : 0);
+        if (z > bestz) {
+            best = i;
+            bestz = z;
         }
     }
     return best >= 0 ? &wins[best] : NULL;
@@ -82,17 +115,23 @@ static win_t *wm_dragging(void)
     return NULL;
 }
 
-/* Sube la ventana al top del z-order (reordena los demas hacia abajo). */
+/* Sube la ventana al top del z-order (reordena los demas hacia abajo).
+ * Las ventanas fijas (taskbar) quedan siempre arriba: se ignoran al
+ * calcular el top. */
 static void wm_raise(win_t *w)
 {
     int top = -1, i;
+    if (w->flags & WM_FLAG_FIXED)
+        return;
     for (i = 0; i < WM_MAX_WINS; i++)
-        if (wins[i].visible && wins[i].z > top)
+        if (wins[i].visible && !(wins[i].flags & WM_FLAG_FIXED) &&
+            wins[i].z > top)
             top = wins[i].z;
     if (w->z == top)
         return;
     for (i = 0; i < WM_MAX_WINS; i++) {
-        if (wins[i].visible && wins[i].z > w->z)
+        if (wins[i].visible && !(wins[i].flags & WM_FLAG_FIXED) &&
+            wins[i].z > w->z)
             wins[i].z--;
     }
     w->z = top;
@@ -142,7 +181,64 @@ static void wm_blit_client(const win_t *w)
     }
 }
 
-/* Composicion completa: fondo snapshot + ventanas en orden z + cursor. */
+/* Dibuja una ventana: marco/titulo/X (si no es NOFRAME) + cliente. */
+static void wm_draw_one(const win_t *w)
+{
+    volatile uint32_t *lfb = (volatile uint32_t *)vbe_lfb_phys;
+    int j;
+
+    if (!(w->flags & WM_FLAG_NOFRAME)) {
+        for (j = 0; j < WM_FRAME; j++) {
+            int k;
+            for (k = w->x; k < w->x + w->w; k++) {
+                if (k >= 0 && k < VBE_SCREEN_W && w->y + j >= 0 &&
+                    w->y + j < VBE_SCREEN_H)
+                    lfb[(w->y + j) * VBE_SCREEN_W + k] = C_FRAME;
+                if (k >= 0 && k < VBE_SCREEN_W &&
+                    w->y + w->h - 1 - j >= 0 &&
+                    w->y + w->h - 1 - j < VBE_SCREEN_H)
+                    lfb[(w->y + w->h - 1 - j) * VBE_SCREEN_W + k] =
+                        C_FRAME;
+            }
+            for (k = w->y; k < w->y + w->h; k++) {
+                if (k >= 0 && k < VBE_SCREEN_H && w->x + j >= 0 &&
+                    w->x + j < VBE_SCREEN_W)
+                    lfb[k * VBE_SCREEN_W + w->x + j] = C_FRAME;
+                if (k >= 0 && k < VBE_SCREEN_H &&
+                    w->x + w->w - 1 - j >= 0 &&
+                    w->x + w->w - 1 - j < VBE_SCREEN_W)
+                    lfb[k * VBE_SCREEN_W + w->x + w->w - 1 - j] =
+                        C_FRAME;
+            }
+        }
+        /* titulo */
+        for (j = 0; j < WM_TITLE_H; j++) {
+            int k;
+            for (k = w->x + WM_FRAME; k < w->x + w->w - WM_FRAME; k++) {
+                if (k >= 0 && k < VBE_SCREEN_W &&
+                    w->y + j >= 0 && w->y + j < VBE_SCREEN_H)
+                    lfb[(w->y + j) * VBE_SCREEN_W + k] = C_TITLE;
+            }
+        }
+        /* boton X (16x16, arriba a la derecha) */
+        {
+            int bx0 = w->x + w->w - WM_FRAME - WM_X_BTN;
+            for (j = 0; j < WM_X_BTN; j++) {
+                int k;
+                for (k = 0; k < WM_X_BTN; k++) {
+                    int xx = bx0 + k, yy = w->y + WM_FRAME + j;
+                    if (xx >= 0 && xx < VBE_SCREEN_W && yy >= 0 &&
+                        yy < VBE_SCREEN_H)
+                        lfb[yy * VBE_SCREEN_W + xx] = C_X_BG;
+                }
+            }
+        }
+    }
+    wm_blit_client(w);
+}
+
+/* Composicion completa: fondo snapshot + ventanas en orden z (las
+ * fijas, taskbar, al final: siempre visibles) + cursor. */
 static void wm_compose(void)
 {
     volatile uint32_t *lfb = (volatile uint32_t *)vbe_lfb_phys;
@@ -157,67 +253,65 @@ static void wm_compose(void)
     for (zz = 0; zz < WM_MAX_WINS; zz++) {
         for (i = 0; i < WM_MAX_WINS; i++) {
             const win_t *w = &wins[i];
-            int j;
-
-            if (!w->visible || w->z != zz)
-                continue;
-            /* marco y titulo (el kernel los dibuja, la app solo el
-             * area cliente) */
-            for (j = 0; j < WM_FRAME; j++) {
-                int k;
-                for (k = w->x; k < w->x + w->w; k++) {
-                    if (k >= 0 && k < VBE_SCREEN_W && w->y + j >= 0 &&
-                        w->y + j < VBE_SCREEN_H)
-                        lfb[(w->y + j) * VBE_SCREEN_W + k] = C_FRAME;
-                    if (k >= 0 && k < VBE_SCREEN_W &&
-                        w->y + w->h - 1 - j >= 0 &&
-                        w->y + w->h - 1 - j < VBE_SCREEN_H)
-                        lfb[(w->y + w->h - 1 - j) * VBE_SCREEN_W + k] =
-                            C_FRAME;
-                }
-                for (k = w->y; k < w->y + w->h; k++) {
-                    if (k >= 0 && k < VBE_SCREEN_H && w->x + j >= 0 &&
-                        w->x + j < VBE_SCREEN_W)
-                        lfb[k * VBE_SCREEN_W + w->x + j] = C_FRAME;
-                    if (k >= 0 && k < VBE_SCREEN_H &&
-                        w->x + w->w - 1 - j >= 0 &&
-                        w->x + w->w - 1 - j < VBE_SCREEN_W)
-                        lfb[k * VBE_SCREEN_W + w->x + w->w - 1 - j] =
-                            C_FRAME;
-                }
-            }
-            /* titulo */
-            for (j = 0; j < WM_TITLE_H; j++) {
-                int k;
-                for (k = w->x + WM_FRAME; k < w->x + w->w - WM_FRAME; k++) {
-                    if (k >= 0 && k < VBE_SCREEN_W &&
-                        w->y + j >= 0 && w->y + j < VBE_SCREEN_H)
-                        lfb[(w->y + j) * VBE_SCREEN_W + k] = C_TITLE;
-                }
-            }
-            /* boton X (16x16, arriba a la derecha) */
-            {
-                int bx0 = w->x + w->w - WM_FRAME - WM_X_BTN;
-                for (j = 0; j < WM_X_BTN; j++) {
-                    int k;
-                    for (k = 0; k < WM_X_BTN; k++) {
-                        int xx = bx0 + k, yy = w->y + WM_FRAME + j;
-                        if (xx >= 0 && xx < VBE_SCREEN_W && yy >= 0 &&
-                            yy < VBE_SCREEN_H)
-                            lfb[yy * VBE_SCREEN_W + xx] = C_X_BG;
-                    }
-                }
-            }
-            wm_blit_client(w);
+            if (w->visible && !(w->flags & WM_FLAG_FIXED) && w->z == zz)
+                wm_draw_one(w);
         }
+    }
+    for (i = 0; i < WM_MAX_WINS; i++) {
+        const win_t *w = &wins[i];
+        if (w->visible && (w->flags & WM_FLAG_FIXED))
+            wm_draw_one(w);
     }
     /* el blit pisa el cursor: re-dibujarlo */
     mouse_cursor_invalidate();
     mouse_draw_cursor();
 }
 
+static win_t *wm_find_by_pd(uint32_t pd)
+{
+    int i;
+    for (i = 0; i < WM_MAX_WINS; i++)
+        if (wins[i].visible && wins[i].pd == pd)
+            return &wins[i];
+    return NULL;
+}
+
+/* Marca una ventana como cerrada. Si estaba en medio de un drag se
+ * cancela: un drag huerfano consumiria todos los eventos siguientes. */
+static void wm_remove_window(win_t *w)
+{
+    w->visible = 0;
+    w->dragging = 0;
+}
+
+/* Recalcula wm_active tras cerrar ventanas; si no queda ninguna
+ * restaura la consola (compose con el fondo) y libera el snapshot; si
+ * el foco quedo huerfano lo reasigna al tope. */
+static void wm_recompute(void)
+{
+    int any = 0, i;
+    for (i = 0; i < WM_MAX_WINS; i++)
+        if (wins[i].visible)
+            any = 1;
+    wm_active = any;
+    if (!any) {
+        if (wm_background) {
+            wm_compose();       /* restaura la consola antes de liberar */
+            kfree(wm_background);
+            wm_background = NULL;
+        }
+        wm_focus_pd = 0;
+        return;
+    }
+    if (wm_focus_pd == 0 || wm_find_by_pd(wm_focus_pd) == NULL) {
+        win_t *t = wm_topmost();
+        wm_focus_pd = t ? t->pd : 0;
+    }
+}
+
 int wm_create(const char *title, int x, int y, int w, int h,
-              uint32_t buf_va, uint32_t buf_sz, uint32_t pd)
+              uint32_t buf_va, uint32_t buf_sz, uint32_t flags,
+              uint32_t pd)
 {
     win_t *win = NULL;
     int i;
@@ -243,36 +337,59 @@ int wm_create(const char *title, int x, int y, int w, int h,
     win->y = y;
     win->w = w;
     win->h = h;
-    win->cx = x + WM_FRAME;
-    win->cy = y + WM_TITLE_H;
-    win->cw = w - 2 * WM_FRAME;
-    win->ch = h - WM_TITLE_H - WM_FRAME;
+    win->flags = flags;
+    if (flags & WM_FLAG_NOFRAME) {
+        win->cx = x;
+        win->cy = y;
+        win->cw = w;
+        win->ch = h;
+    } else {
+        win->cx = x + WM_FRAME;
+        win->cy = y + WM_TITLE_H;
+        win->cw = w - 2 * WM_FRAME;
+        win->ch = h - WM_TITLE_H - WM_FRAME;
+    }
     win->buf_va = buf_va;
     win->buf_sz = buf_sz;
     win->pd = pd;
     win->visible = 1;
+    wm_focus_pd = pd;               /* la app que crea gana el foco    */
     wm_raise(win);
     wm_active = 1;
     wm_compose();
     return win->id;
 }
 
-int wm_close(int id)
+int wm_close(int id, uint32_t pd)
 {
     win_t *w = wm_find(id);
-    if (!w)
+    if (!w || w->pd != pd)
         return -1;
-    w->visible = 0;
-    w->dragging = 0;
-    {
-        int any = 0, i;
-        for (i = 0; i < WM_MAX_WINS; i++)
-            if (wins[i].visible)
-                any = 1;
-        wm_active = any;
-    }
+    wm_remove_window(w);
+    wm_recompute();
     wm_compose();
     return 0;
+}
+
+/* Fase 17: limpieza al morir una tarea. La llama sched_kill_current
+ * con el CR3 de la tarea antes de liberar su espacio de usuario. */
+void wm_cleanup_pd(uint32_t pd)
+{
+    int i;
+    if (pd == 0)
+        return;
+    for (i = 0; i < WM_MAX_WINS; i++)
+        if (wins[i].visible && wins[i].pd == pd) {
+            wm_remove_window(&wins[i]);
+        }
+    for (i = 0; i < WM_MAX_CLIENTS; i++)
+        if (wm_clients[i].used && wm_clients[i].pd == pd) {
+            wm_clients[i].used = 0;
+            wm_clients[i].head = wm_clients[i].tail = 0;
+        }
+    wm_recompute();
+    if (wm_active)
+        wm_compose();
 }
 
 int wm_move(int id, int dx, int dy)
@@ -282,8 +399,13 @@ int wm_move(int id, int dx, int dy)
         return -1;
     w->x += dx;
     w->y += dy;
-    w->cx = w->x + WM_FRAME;
-    w->cy = w->y + WM_TITLE_H;
+    if (w->flags & WM_FLAG_NOFRAME) {
+        w->cx = w->x;
+        w->cy = w->y;
+    } else {
+        w->cx = w->x + WM_FRAME;
+        w->cy = w->y + WM_TITLE_H;
+    }
     wm_compose();
     return 0;
 }
@@ -313,42 +435,92 @@ int wm_info(int id, uint32_t *out)
     return 0;
 }
 
-/* Filtro de eventos: devuelve 0 si el evento debe entregarse a la app
- * (SYS_EVENT), -1 si el WM lo consume (arrastre, raise). */
-int wm_filter_event(mouse_event_t *ev, uint32_t pd)
+/* --- Fase 17: colas de eventos por app y enrutamiento --- */
+
+static wm_client_t *wm_client_find(uint32_t pd)
+{
+    int i;
+    for (i = 0; i < WM_MAX_CLIENTS; i++)
+        if (wm_clients[i].used && wm_clients[i].pd == pd)
+            return &wm_clients[i];
+    for (i = 0; i < WM_MAX_CLIENTS; i++)
+        if (!wm_clients[i].used) {
+            wm_clients[i].used = 1;
+            wm_clients[i].pd = pd;
+            wm_clients[i].head = wm_clients[i].tail = 0;
+            return &wm_clients[i];
+        }
+    return NULL;
+}
+
+void wm_event_deliver(uint32_t pd, const mouse_event_t *ev)
+{
+    wm_client_t *c = wm_client_find(pd);
+    int next;
+    if (!c)
+        return;
+    next = (c->head + 1) % EV_QUEUE_MAX;
+    if (next == c->tail)            /* cola llena: descartar */
+        return;
+    c->q[c->head] = *ev;
+    c->head = next;
+}
+
+int wm_event_claim(uint32_t pd, mouse_event_t *ev)
+{
+    int i;
+    for (i = 0; i < WM_MAX_CLIENTS; i++) {
+        wm_client_t *c = &wm_clients[i];
+        if (!c->used || c->pd != pd)
+            continue;
+        if (c->head == c->tail)
+            return -1;
+        *ev = c->q[c->tail];
+        c->tail = (c->tail + 1) % EV_QUEUE_MAX;
+        return 0;
+    }
+    return -1;
+}
+
+/* Devuelve el PD al que enrutar (WM_ROUTE_TO_PD), WM_ROUTE_CONSUMED o
+ * WM_ROUTE_RAW (sin ventanas: el evento va al llamador). */
+int wm_route(mouse_event_t *ev)
 {
     win_t *w;
 
-    (void)pd;
     if (!wm_active || !vbe_graphics_active)
-        return 0;
+        return WM_ROUTE_RAW;
 
     switch (ev->type) {
     case EV_BUTTON_DOWN:
         w = wm_dragging();
         if (w) {                    /* clic durante un drag: se ignora */
             w->dragging = 0;
-            return -1;
+            return WM_ROUTE_CONSUMED;
         }
         w = wm_hit(ev->x, ev->y);
-        if (!w)
-            return 0;
+        if (!w)                     /* fondo: al foco */
+            return wm_focus_pd ? (int)wm_focus_pd : WM_ROUTE_RAW;
+        wm_focus_pd = w->pd;
+        if (w->flags & WM_FLAG_FIXED) {      /* taskbar: sin drag */
+            return (int)w->pd;
+        }
         if (ev->y >= w->cy) {       /* area cliente: raise + entregar */
             if (ev->x < w->x + w->w - WM_FRAME - WM_X_BTN)
                 wm_raise(w);
-            return 0;
+            return (int)w->pd;
         }
         if (ev->x >= w->x + w->w - WM_FRAME - WM_X_BTN) {
             /* boton X: la app decide cerrar con SYS_WINCLOSE */
             ev->type = EV_WINCLOSE;
             ev->key = w->id;
-            return 0;
+            return (int)w->pd;
         }
         /* barra de titulo: iniciar arrastre */
         w->dragging = 1;
         w->drag_dx = ev->x - w->x;
         w->drag_dy = ev->y - w->y;
-        return -1;
+        return WM_ROUTE_CONSUMED;
     case EV_MOVE:
         w = wm_dragging();
         if (w) {
@@ -357,21 +529,38 @@ int wm_filter_event(mouse_event_t *ev, uint32_t pd)
             if (nx != w->x || ny != w->y) {
                 w->x = nx;
                 w->y = ny;
-                w->cx = w->x + WM_FRAME;
-                w->cy = w->y + WM_TITLE_H;
+                if (w->flags & WM_FLAG_NOFRAME) {
+                    w->cx = w->x;
+                    w->cy = w->y;
+                } else {
+                    w->cx = w->x + WM_FRAME;
+                    w->cy = w->y + WM_TITLE_H;
+                }
                 wm_compose();
             }
-            return -1;
+            return WM_ROUTE_CONSUMED;
         }
-        return 0;
+        w = wm_hit(ev->x, ev->y);   /* hover: al dueno de la ventana */
+        if (w)
+            return (int)w->pd;
+        return wm_focus_pd ? (int)wm_focus_pd : WM_ROUTE_RAW;
     case EV_BUTTON_UP:
         w = wm_dragging();
         if (w) {
             w->dragging = 0;
-            return -1;
+            return WM_ROUTE_CONSUMED;
         }
-        return 0;
+        w = wm_hit(ev->x, ev->y);
+        if (w)
+            return (int)w->pd;
+        return wm_focus_pd ? (int)wm_focus_pd : WM_ROUTE_RAW;
+    case EV_KEY:
+        w = wm_topmost();           /* teclado: la ventana de foco */
+        if (!w)
+            return WM_ROUTE_RAW;
+        wm_focus_pd = w->pd;
+        return (int)w->pd;
     default:
-        return 0;
+        return WM_ROUTE_RAW;
     }
 }

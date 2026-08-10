@@ -8,7 +8,13 @@
 
 static void serial_wait_thr_empty(void)
 {
-    while (!(inb(COM1 + 5) & 0x20))  /* LSR bit 5: THR vacio */
+    /* Tope de reintentos: en QEMU el chardev puede aplicar backpressure
+     * (socket lleno -> THRE a 0 durante mucho tiempo). Un poll infinito
+     * con IF=0 (int 0x80 es interrupt gate) congelaria el kernel. Con
+     * tope, el caracter se descarta y se sigue; en hardware real THRE
+     * se activa en microsegundos (1 sola pasada). */
+    int spins = 200000;
+    while (!(inb(COM1 + 5) & 0x20) && --spins > 0)  /* LSR bit 5: THR vacio */
         ;
 }
 
