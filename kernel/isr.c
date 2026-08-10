@@ -10,6 +10,7 @@
 #include "io.h"
 #include "drivers/timer.h"
 #include "drivers/keyboard.h"
+#include "drivers/mouse.h"
 #include "task/task.h"
 #include "syscall.h"
 #include "kprint.h"
@@ -75,7 +76,9 @@ void irq_handler(registers_t *regs)
         timer_tick();
     else if (irq == 1)
         keyboard_irq();
-    /* IRQs 2-15 sin driver aun */
+    else if (irq == 12)
+        mouse_irq();                /* raton PS/2 (Fase 13) */
+    /* IRQs 2-11, 13-15 sin driver aun */
 
     /* EOI ANTES del scheduler: sched_tick puede cambiar de pila y nunca
      * volver aqui (iret de la otra tarea); el PIC debe quedar liberado. */
