@@ -20,6 +20,9 @@ mingw-w64 en ring 3, gracias a shims de `kernel32.dll` y `msvcrt.dll`.
 | 9    | **`.exe` mingw real**: imports PE estándar + shims kernel32/msvcrt → `run hello_win.exe` imprime y devuelve `exit:42` |
 | 10   | **APIs de fichero Win32**: syscalls DREAD/DLIST, `CreateFileA`/`ReadFile`/`FindFirstFileA` en kernel32 + `dir.exe` real incluido en el ISO |
 | 11   | **APIs de proceso Win32**: `SYS_SELFNAME` (exe_name por tarea), `GetCurrentProcessId`/`GetModuleFileNameA` reales, **`GetCommandLineA` real (argc/argv de la línea de `run`)** + `proc.exe` real incluido en el ISO. Escalera de compatibilidad 11/11 |
+| 12   | **GUI: VBE 800x600x32** (dispi + LFB del BAR0 PCI, consola gráfica `vgafx`) y `MessageBoxA` real dibujando una ventana con botón OK |
+| 13   | **Ratón PS/2 (IRQ12) + cursor** en el framebuffer (driver 8042, paquete de 3 bytes, save/restore) |
+| 14   | **Syscalls de eventos gráficos** (`SYS_MOUSEINFO` 16, `SYS_EVENT` 17, cola FIFO global) y **primer widget interactivo**: el botón OK de `MessageBoxA` responde al clic (estado presionado) |
 
 ## Requisitos
 
@@ -142,6 +145,19 @@ Todos los detalles, decisiones y bugs encontrados están en `DESIGN.md`.
 - Fase 13 completada: **ratón PS/2 (IRQ12)** con cursor en el framebuffer
   (driver 8042, paquete de 3 bytes, save/restore del cursor; validado con
   `mouse_move` del monitor QEMU + screendump).
+- Fase 14 completada: **syscalls de eventos gráficos** — cola FIFO global
+  de eventos de ratón y teclado (`SYS_MOUSEINFO` 16 / `SYS_EVENT` 17) y
+  `MessageBoxA` con el botón OK **clickeable** (hit-testing + estado
+  presionado; cierre con clic o Enter). Escalera de compatibilidad
+  **14/14 PASS** (disco). Fase 15 en curso: widgets interactivos en user32
+  (mini-API `user32_poll_event`/`user32_widget_hit` como base del
+  escritorio de la Fase 17).
 - Roadmap tentativo: long mode (64 bits), ATA con escritura de archivos
-  (CreateFileA con GENERIC_WRITE), Stage 6 (user32 gráfico: eventos de
-  ratón, widgets interactivos, ventanas y escritorio), según el interés.
+  (CreateFileA con GENERIC_WRITE), GUI completa (widgets → window manager
+  con z-order → escritorio con barra de tareas y explorador de archivos),
+  según el interés.
+- **Plan de documentación futura**: `DESIGN.md`/README documentan lo
+  esencial por fase; está pendiente una documentación formal y detallada
+  (arquitectura, flujo de arranque, ABI, drivers, loader PE, GUI) como
+  recurso de estudio y referencia. Es trabajo planificado, no parte de
+  esta fase.
