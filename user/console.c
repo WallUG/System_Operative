@@ -22,13 +22,17 @@
 
 static void sys_exit(void)
 {
-    __asm__ volatile("int $0x80" : : "a"(SYS_EXIT));
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r) : "a"(SYS_EXIT));
+    (void)r;
 }
 
 static void sys_write(const char *s, unsigned n)
 {
-    __asm__ volatile("int $0x80" : : "a"(SYS_WRITE), "b"(s), "c"(n)
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r) : "a"(SYS_WRITE), "b"(s), "c"(n)
                      : "memory");
+    (void)r;
 }
 
 static int sys_read(char *buf, unsigned max)

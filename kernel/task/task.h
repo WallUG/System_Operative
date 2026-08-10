@@ -25,6 +25,7 @@
 #include "mem/paging.h"
 
 #define TASK_NAME_LEN   8
+#define TASK_EXE_LEN    32      /* nombre del ejecutable (GetModuleFileNameA) */
 #define MAX_TASKS       16
 
 /* Estado de la tarea. TASK_FREE = hueco reutilizable (muertas). */
@@ -44,6 +45,7 @@ typedef struct task {
     uint32_t esp0;              /* tope de la pila de kernel (TSS), user */
     uint32_t cr3;               /* PD (kernel_pd para tareas ring 0) */
     uint32_t heap_cur;          /* puntero del heap de usuario (bump) */
+    char     exe_name[TASK_EXE_LEN]; /* nombre del ejecutable (para Win32) */
     char     name[TASK_NAME_LEN];
     struct task *next;          /* lista circular (round-robin) */
 } task_t;
@@ -58,7 +60,8 @@ int  task_create(const char *name, void (*entry)(void));
  * el entry debe ser su direccion de entrada (ya mapeada en pd).
  * Asigna y mapea una pila de usuario nueva en USER_ESP0_TOP-PAGE_SIZE.
  * El entry debe terminar con SYS_EXIT (si retorna, task_stub_exit). */
-int  task_create_user(const char *name, uint32_t pd, uint32_t entry);
+int  task_create_user(const char *name, const char *exe, uint32_t pd,
+                      uint32_t entry);
 /* Fork: copia el espacio de usuario (paginacion) del padre y el marco
  * registers_t (hijo reanuda tras int 0x80 con eax=0). Devuelve el pid
  * del hijo, -1 si falla. Solo valido desde una tarea de usuario. */
@@ -68,6 +71,12 @@ int  task_fork(registers_t *regs);
 void sched_kill_current(void);
 /* Numero de tareas vivas (incluida idle). */
 uint32_t sched_task_count(void);
+/* 1 si corre alguna tarea de usuario (la idle no cuenta). */
+int  sched_user_busy(void);
+/* Copia el nombre del ejecutable actual a dst (max bytes). */
+void sched_get_exe_name(char *dst, uint32_t max);
+/* Fija el nombre del ejecutable de la tarea actual. */
+void sched_set_exe_name(const char *name);
 /* Nombre/pid/cr3 de la tarea actual. */
 uint32_t sched_current_pid(void);
 const char *sched_current_name(void);

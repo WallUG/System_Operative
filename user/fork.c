@@ -12,12 +12,16 @@
 
 static void sys_print(const char *s)
 {
-    __asm__ volatile("int $0x80" : : "a"(SYS_PRINT), "b"(s) : "memory");
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r) : "a"(SYS_PRINT), "b"(s) : "memory");
+    (void)r;
 }
 
 static void sys_exit(void)
 {
-    __asm__ volatile("int $0x80" : : "a"(SYS_EXIT));
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r) : "a"(SYS_EXIT));
+    (void)r;
 }
 
 static int sys_fork(void)

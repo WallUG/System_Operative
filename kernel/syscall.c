@@ -125,6 +125,7 @@ static void sys_exec(const char *name, registers_t *regs)
         return;
     }
     kfree(buf);
+    sched_set_exe_name(name);   /* GetModuleFileNameA usa este nombre */
 
     /* Remapear los modulos Win32 fijos y la pila de usuario
      * (elf_load_into libero el espacio) y reiniciar esp: el programa
@@ -189,7 +190,13 @@ void syscall_handler(registers_t *regs)
             if (c < 0)
                 c = serial_read_char();
             if (c < 0) {
+                /* El gate de int 0x80 deshabilita IF: hlt con IF=0
+                 * congelaria todo el sistema (el PIT no despierta).
+                 * Re-habilitar durante la espera (el scheduler
+                 * reanuda este handler en el mismo punto). */
+                sti();
                 halt();
+                cli();
                 continue;
             }
             if (c == '\n' || c == '\r')
@@ -341,6 +348,27 @@ void syscall_handler(registers_t *regs)
             break;
         }
         regs->eax = 0;
+        break;
+    }
+    case SYS_SELFNAME: { /* ebx=buf, ecx=max: nombre del ejecutable
+                          * actual (kernel32.GetModuleFileNameA) */
+        char *buf = (char *)regs->ebx;
+        uint32_t max = regs->ecx;
+        char tmp[32];
+        uint32_t n = 0;
+        if (max == 0) {
+            regs->eax = -1;
+            break;
+        }
+        sched_get_exe_name(tmp, sizeof(tmp));
+        while (n < max - 1 && tmp[n])
+            n++;
+        if (user_memcpy_out(buf, tmp, n, pd) != 0) {
+            regs->eax = -1;
+            break;
+        }
+        buf[n] = 0;
+        regs->eax = (int32_t)n;
         break;
     }
     default:

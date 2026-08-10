@@ -16,12 +16,14 @@
 #define KERNEL_BASE 0xB0000000u
 
 #define SYS_EXIT   2
+#define SYS_GETPID 5
 #define SYS_WRITE  7
 #define SYS_MALLOC 10
 #define SYS_FREE   11
 #define SYS_FSIZE  8
 #define SYS_DREAD  12
 #define SYS_DLIST  13
+#define SYS_SELFNAME 14
 
 #define INVALID_HANDLE_VALUE ((uint32_t)-1)
 
@@ -61,7 +63,9 @@ static int sys_write(const char *s, uint32_t len)
 
 static void sys_exit(uint32_t code)
 {
-    __asm__ volatile("int $0x80" : : "a"(SYS_EXIT), "b"(code) : "memory");
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r) : "a"(SYS_EXIT), "b"(code) : "memory");
+    (void)r;
     for (;;) ;
 }
 
@@ -99,7 +103,39 @@ uint32_t WriteFile(uint32_t h, const void *buf, uint32_t n,
 void ExitProcess(uint32_t code)     { sys_exit(code); }
 void TerminateProcess(uint32_t h, uint32_t code) { (void)h; sys_exit(code); }
 uint32_t GetCurrentProcess(void)    { return (uint32_t)-1; }
-uint32_t GetCurrentProcessId(void)  { return 1; }
+
+static uint32_t sys_getpid(void)
+{
+    uint32_t r;
+    __asm__ volatile("int $0x80" : "=a"(r) : "a"(5));
+    return r;
+}
+
+uint32_t GetCurrentProcessId(void)  { return sys_getpid(); }
+
+static uint32_t sys_selfname(char *buf, uint32_t max)
+{
+    uint32_t r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_SELFNAME), "b"(buf), "c"(max)
+                     : "memory");
+    return r;
+}
+
+/* Devuelve el nombre del ejecutable actual (como lo lanzo la shell).
+ * hmodule = NULL significa "el proceso actual". */
+uint32_t GetModuleFileNameA(uint32_t hmodule, char *buf, uint32_t max)
+{
+    uint32_t n;
+
+    (void)hmodule;
+    if (buf == 0 || max == 0)
+        return 0;
+    n = sys_selfname(buf, max);
+    if (n == (uint32_t)-1)
+        return 0;
+    return n;
+}
 
 char *GetCommandLineA(void)
 {
@@ -348,7 +384,13 @@ uint32_t VirtualFree(void *p, uint32_t size, uint32_t type)
 
 /* --- heap (bump del kernel via SYS_MALLOC) --- */
 
-static void win_free(void *p) { (void)p; __asm__ volatile("int $0x80" : : "a"(SYS_FREE) : "memory"); }
+static void win_free(void *p)
+{
+    int r;
+    (void)p;
+    __asm__ volatile("int $0x80" : "=a"(r) : "a"(SYS_FREE) : "memory");
+    (void)r;
+}
 
 uint32_t GetProcessHeap(void) { return 1; }
 
@@ -641,6 +683,7 @@ win32_export_t __exports[] __attribute__((section(".exports"))) = {
     { "TlsGetValue",           (uint32_t)&TlsGetValue },
     { "TlsSetValue",           (uint32_t)&TlsSetValue },
     { "GetModuleHandleA",      (uint32_t)&GetModuleHandleA },
+    { "GetModuleFileNameA",    (uint32_t)&GetModuleFileNameA },
     { "GetProcAddress",        (uint32_t)&GetProcAddress },
     { "LoadLibraryA",          (uint32_t)&LoadLibraryA },
     { "FreeLibrary",           (uint32_t)&FreeLibrary },

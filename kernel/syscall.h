@@ -17,6 +17,7 @@
 #define SYS_FREE    11  /* ebx = ptr (heap bump; no-op por ahora)     */
 #define SYS_DREAD   12  /* ebx=nombre, ecx=buf, edx=off, esi=max      */
 #define SYS_DLIST   13  /* ebx=idx dir, ecx=name[16], edx=&size       */
+#define SYS_SELFNAME 14 /* ebx=buf, ecx=max: nombre del exe actual    */
 
 void syscall_init(void);            /* registra el gate 0x80 (DPL=3) */
 void syscall_handler(registers_t *regs);

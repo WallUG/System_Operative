@@ -19,11 +19,12 @@ mingw-w64 en ring 3, gracias a shims de `kernel32.dll` y `msvcrt.dll`.
 | 8    | PE32 (.exe), modulos Win32 fixed ring 3, run dual MZ/ELF |
 | 9    | **`.exe` mingw real**: imports PE estándar + shims kernel32/msvcrt → `run hello_win.exe` imprime y devuelve `exit:42` |
 | 10   | **APIs de fichero Win32**: syscalls DREAD/DLIST, `CreateFileA`/`ReadFile`/`FindFirstFileA` en kernel32 + `dir.exe` real incluido en el ISO |
+| 11   | **APIs de proceso Win32**: `SYS_SELFNAME` (exe_name por tarea), `GetCurrentProcessId`/`GetModuleFileNameA` reales + `proc.exe` real incluido en el ISO. Escalera de compatibilidad 10/10 |
 
 ## Requisitos
 
 - `gcc -m32` / `ld` / `nasm` / `qemu-system-i386` / `python3` (host Linux)
-- `i686-w64-mingw32-gcc` (para generar los `.exe` de prueba de las Fases 9-10)
+- `i686-w64-mingw32-gcc` (para generar los `.exe` de prueba de las Fases 9-11)
 - `xorriso` (solo target `iso`/`test_cd`)
 
 ## Compilar y probar
@@ -33,7 +34,7 @@ make os-image.bin -j4   # boot + kernel + fs.bin (MEFS, 19 archivos)
 make run                # QEMU con disco raw (ventana + teclado)
 make test               # headless: consola por serial (shell por COM1)
 make iso && make test_cd
-make win_hello          # compila los exe de las Fases 9-10 e imprime sus imports
+make win_hello          # compila los exe de las Fases 9-11 e imprime sus imports
 ```
 
 Prueba de la Fase 9 (headless, shell por serial):
@@ -58,6 +59,17 @@ timeout 40 sh -c '(sleep 6; printf "run dir.exe\n"; sleep 5) | \
 Salida esperada: lista de los 19 archivos del MEFS (con `FindFirstFileA`)
 y el contenido de `readme.txt` (leído con `CreateFileA` + `ReadFile`),
 terminando en `exit:0`.
+
+Prueba de la Fase 11 (APIs de proceso de Win32):
+
+```sh
+timeout 40 sh -c '(sleep 6; printf "run proc.exe\n"; sleep 5) | \
+  qemu-system-i386 -display none -monitor none -serial stdio -no-reboot \
+  -drive format=raw,file=os-image.bin'
+```
+
+Salida esperada: `proc: GetCurrentProcessId = 3`, `proc: GetModuleFileNameA
+= 'proc.exe' (8 chars)`, `proc: longitud de la cadena = 8` y `exit:7`.
 
 ## Estructura
 
@@ -113,6 +125,12 @@ Todos los detalles, decisiones y bugs encontrados están en `DESIGN.md`.
 - Fase 10 completada: `dir.exe` (mingw real) lista el FS y lee un
   archivo con `FindFirstFileA`/`CreateFileA`/`ReadFile`; ejecutable y
   `readme.txt` van dentro del ISO.
+- Fase 11 completada: `proc.exe` (mingw real) obtiene su PID real y su
+  nombre con `GetCurrentProcessId`/`GetModuleFileNameA` (SYS_SELFNAME);
+  `exit:7` viaja por el CRT. Escalera de compatibilidad **10/10 PASS**
+  (disco y CD): hello.elf, quick.exe, winapi.exe, hello_win.exe, dir.exe,
+  fork.exe, exec.exe, console.exe, input interactivo, proc.exe.
 - Roadmap tentativo: long mode (64 bits), ATA con escritura de archivos
-  (CreateFileA con GENERIC_WRITE), argv real desde la shell, más
-  DLLs/shims (user32 gráfico), según el interés.
+  (CreateFileA con GENERIC_WRITE), argv real desde la shell
+  (GetCommandLineA con argc/argv de la línea de `run`), Stage 6
+  (user32 gráfico: MessageBox/ventanas), según el interés.

@@ -141,11 +141,13 @@ int task_create(const char *name, void (*entry)(void))
     return task_init(t, name);
 }
 
-int task_create_user(const char *name, uint32_t pd, uint32_t entry)
+int task_create_user(const char *name, const char *exe, uint32_t pd,
+                     uint32_t entry)
 {
     uint32_t stack_frame;
     uint32_t *sp;
     task_t *t;
+    uint32_t i;
 
     t = free_slot();
     if (t == NULL)
@@ -154,6 +156,10 @@ int task_create_user(const char *name, uint32_t pd, uint32_t entry)
     stack_frame = pmm_alloc_frame();
     if (stack_frame == 0)
         return -1;
+
+    for (i = 0; exe[i] && i < TASK_EXE_LEN - 1; i++)
+        t->exe_name[i] = exe[i];
+    t->exe_name[i] = 0;
 
     /* Pila de usuario: USER_STACK_SIZE (64 KiB) mapeada como USER en el
      * tope de la region de usuario (los CRTs de Windows consumen pila).
@@ -296,6 +302,27 @@ uint32_t sched_task_count(void)
     return task_count;
 }
 
+/* 1 si alguna tarea de usuario (PD propio, distinta de la idle) esta
+ * READY/RUNNING. La shell (tarea idle) la usa para no robar la entrada
+ * de consola mientras un programa de usuario corre. Las tareas demo de
+ * kernel (T-A/T-B) no cuentan: comparten el PD del kernel. */
+int sched_user_busy(void)
+{
+    task_t *t;
+    uint32_t kpd = paging_kernel_pd();
+
+    if (!sched_enabled)
+        return 0;
+    t = current;
+    do {
+        if (t->cr3 != kpd &&
+            (t->state == TASK_READY || t->state == TASK_RUNNING))
+            return 1;
+        t = t->next;
+    } while (t != current);
+    return 0;
+}
+
 uint32_t sched_current_pid(void)
 {
     return current ? current->pid : 0;
@@ -314,6 +341,28 @@ uint32_t sched_current_cr3(void)
 uint32_t sched_user_heap(void)
 {
     return current ? current->heap_cur : 0;
+}
+
+void sched_get_exe_name(char *dst, uint32_t max)
+{
+    uint32_t i;
+
+    if (dst == NULL || max == 0)
+        return;
+    for (i = 0; current && i < max - 1 && current->exe_name[i]; i++)
+        dst[i] = current->exe_name[i];
+    dst[i] = 0;
+}
+
+void sched_set_exe_name(const char *name)
+{
+    uint32_t i;
+
+    if (current == NULL)
+        return;
+    for (i = 0; name[i] && i < TASK_EXE_LEN - 1; i++)
+        current->exe_name[i] = name[i];
+    current->exe_name[i] = 0;
 }
 
 void sched_user_heap_set(uint32_t p)

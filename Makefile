@@ -97,10 +97,11 @@ DLL_SRCS  = user/win32/kernel32.c user/win32/user32.c user/win32/ntdll.c \
             user/win32/msvcrt.c
 DLL_ELFS  = $(patsubst user/win32/%.c,$(BUILD)/user/win32/%.elf,$(DLL_SRCS))
 
-# Fase 9: .exe compilado con la toolchain REAL de Windows (CRT de
+# Fase 9/11: .exe compilado con la toolchain REAL de Windows (CRT de
 # mingw-w64). Se usan como pruebas incluidas en fs.bin/ISO.
 MINGW32   = i686-w64-mingw32-gcc
-WIN_APPS  = $(BUILD)/user/win32/hello_win.exe $(BUILD)/user/win32/dir.exe
+WIN_APPS  = $(BUILD)/user/win32/hello_win.exe $(BUILD)/user/win32/dir.exe \
+            $(BUILD)/user/win32/proc.exe
 
 $(BUILD)/user/win32/%.exe: user/win32/%.c
 	@mkdir -p $(dir $@)
@@ -110,6 +111,15 @@ $(BUILD)/user/win32/%.exe: user/win32/%.c
 win_hello: $(WIN_APPS)
 	@echo "OK: $(WIN_APPS) (imports reales de Windows)"
 	@i686-w64-mingw32-objdump -p $(BUILD)/user/win32/dir.exe | sed -n '/The Import Tables/,/^$$/p'
+
+compat_suite: $(USER_ELFS) $(USER_EXES) $(WIN_APPS)
+	@echo "OK: suite base de compatibilidad Win32 construida"
+	@echo "- Fase 1/2: hello.elf"
+	@echo "- Fase 3/6: quick.exe, console.exe, exec.exe, fork.exe"
+	@echo "- Fase 8: winapi.exe"
+	@echo "- Fase 9: hello_win.exe"
+	@echo "- Fase 10: dir.exe"
+	@echo "- Fase 11: proc.exe"
 
 $(BUILD)/user/%.elf: user/%.c tools/user.ld
 	@mkdir -p $(dir $@)

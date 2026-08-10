@@ -78,7 +78,9 @@ static int sys_write(const char *s, uint32_t len)
 
 static void sys_exit(uint32_t code)
 {
-    __asm__ volatile("int $0x80" : : "a"(SYS_EXIT), "b"(code) : "memory");
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r) : "a"(SYS_EXIT), "b"(code) : "memory");
+    (void)r;
     for (;;) ;
 }
 
@@ -242,8 +244,11 @@ void *calloc(unsigned int n, unsigned int size)
 
 void free(void *p)
 {
-    if (p)
-        __asm__ volatile("int $0x80" : : "a"(SYS_FREE) : "memory");
+    if (p) {
+        int r;
+        __asm__ volatile("int $0x80" : "=a"(r) : "a"(SYS_FREE) : "memory");
+        (void)r;
+    }
 }
 
 void *realloc(void *p, unsigned int size)

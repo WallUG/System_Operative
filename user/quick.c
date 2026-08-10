@@ -1,7 +1,7 @@
 /* MyOS - user/quick.c: minimo de 2 syscalls + exit para test del iret */
 #include <stdint.h>
-static void sys_print(const char *s) { __asm__ volatile("int $0x80" : : "a"(1), "b"(s) : "memory"); }
-static void sys_exit(void) { __asm__ volatile("int $0x80" : : "a"(2)); }
+static void sys_print(const char *s) { int r; __asm__ volatile("int $0x80" : "=a"(r) : "a"(1), "b"(s) : "memory"); (void)r; }
+static void sys_exit(void) { int r; __asm__ volatile("int $0x80" : "=a"(r) : "a"(2)); (void)r; }
 void _start(void)
 {
     for (volatile uint32_t d = 0; d < 800000; d++)

@@ -43,6 +43,12 @@ static void read_line(char *line, int max)
     int pos = 0;
     line[0] = 0;
     for (;;) {
+        /* Si corre una tarea de usuario, no robar su entrada de
+         * consola: esperar (hlt) a que termine o ceda. */
+        if (sched_user_busy()) {
+            halt();
+            continue;
+        }
         int c = keyboard_read();
         if (c < 0)
             c = serial_read_char();     /* entrada alternativa por COM1 */
@@ -167,7 +173,12 @@ void shell_loop(void)
             kprint_uint((uint32_t)mapr);
             kprint("(map) ");
             kfree(buf);
-            if (task_create_user("user", pd, entry) < 0) {
+            /* Nombre del ejecutable (para GetModuleFileNameA de Win32). */
+            char exe_nm[32];
+            int kk = 0;
+            while (kk < 31 && line[4 + kk]) { exe_nm[kk] = line[4 + kk]; kk++; }
+            exe_nm[kk] = 0;
+            if (task_create_user("user", exe_nm, pd, entry) < 0) {
                 paging_free_pd(pd);
                 kprint("no se pudo crear la tarea\n");
                 continue;

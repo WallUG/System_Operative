@@ -16,12 +16,16 @@ static void sys_print(const char *s)
 {
     /* clobber "memory": sin el, GCC -O2 elimina las escrituras al buffer
      * (cree que la syscall no lee memoria). */
-    __asm__ volatile("int $0x80" : : "a"(SYS_PRINT), "b"(s) : "memory");
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r) : "a"(SYS_PRINT), "b"(s) : "memory");
+    (void)r;
 }
 
 static void sys_exit(void)
 {
-    __asm__ volatile("int $0x80" : : "a"(SYS_EXIT));
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r) : "a"(SYS_EXIT));
+    (void)r;
 }
 
 void _start(void)
