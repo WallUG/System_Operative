@@ -181,7 +181,6 @@ void mouse_draw_cursor(void)
                 lfb[(cursor_sy + j) * VBE_SCREEN_W + (cursor_sx + i)]
                     = cursor_save[j * MOUSE_CUR_W + i];
     }
-
     /* Guardar y dibujar en la nueva posicion. */
     for (j = 0; j < MOUSE_CUR_H; j++) {
         int yy = mouse_y + j;
@@ -200,6 +199,13 @@ void mouse_draw_cursor(void)
     cursor_sx = mouse_x;
     cursor_sy = mouse_y;
     cursor_drawn = 1;
+}
+
+/* El compositor (Fase 16) pisara el cursor: invalida el save para que
+ * la proxima draw no restaure basura y guarde la zona recompuesta. */
+void mouse_cursor_invalidate(void)
+{
+    cursor_drawn = 0;
 }
 
 int mouse_read(int *x, int *y, int *buttons)

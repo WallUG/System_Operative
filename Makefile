@@ -33,6 +33,7 @@ OBJS      = $(BUILD)/entry.o \
             $(BUILD)/gdt.o \
             $(BUILD)/gdt_asm.o \
             $(BUILD)/syscall.o \
+            $(BUILD)/winmgr.o \
             $(BUILD)/elf.o \
             $(BUILD)/pe.o \
             $(BUILD)/win32.o \
@@ -98,7 +99,8 @@ USER_EXES = $(patsubst user/%.c,$(BUILD)/user/%.exe,$(USER_SRCS))
 # Conjunto minimo que se incluye en fs.bin (Fase 12): solo lo que usa la
 # escalera. Los ELF nativos restantes se siguen compilando con
 # compat_suite pero no ocupan sectores del FS (que mide 512 sectores).
-FS_USER_ELFS = $(BUILD)/user/hello.elf $(BUILD)/user/mouseinfo.elf
+FS_USER_ELFS = $(BUILD)/user/hello.elf $(BUILD)/user/mouseinfo.elf \
+               $(BUILD)/user/win_demo.elf
 FS_USER_EXES = $(filter %quick.exe %winapi.exe %fork.exe %exec.exe %console.exe,\
                        $(USER_EXES))
 

@@ -1,0 +1,377 @@
+/* MyOS - kernel/winmgr.c
+ * Gestor de ventanas en el kernel (Fase 16, opcion B).
+ *
+ * Modelo:
+ *  - La app pinta su area cliente en un buffer propio (SYS_MALLOC) y lo
+ *    registra con SYS_WINCREATE. El kernel guarda {va, sz, pd}.
+ *  - El kernel compone: fondo snapshot -> ventanas en orden z (marco,
+ *    titulo, boton X del kernel + blit del cliente leido del usuario).
+ *  - El kernel consume los eventos de WM: BUTTON_DOWN en el titulo
+ *    inicia drag (raise previo), MOVE/UP lo completan, el boton X se
+ *    entrega como EV_WINCLOSE a la app. Los clics en el area cliente se
+ *    entregan sin tocar (la ventana se sube al top primero).
+ *
+ * Limites aceptados en esta fase: composicion completa (fondo + todas
+ * las ventanas) en cada cambio; el cursor del raton se re-dibuja al
+ * final de cada composicion (lo pisaria el blit). */
+
+#include <stdint.h>
+#include <string.h>
+#include "winmgr.h"
+#include "mem/heap.h"
+#include "mem/paging.h"
+#include "drivers/vbe.h"
+#include "drivers/mouse.h"
+#include "kprint.h"
+
+#define C_FRAME     0x00C0C0C0u
+#define C_TITLE     0x00000088u
+#define C_TITLE_TX  0x00FFFFFFu
+#define C_X_BG      0x00CC3333u
+#define C_X_TX      0x00FFFFFFu
+
+typedef struct {
+    int      id;
+    char     title[24];
+    int      x, y, w, h;          /* rect total (marco incluido)       */
+    int      cx, cy, cw, ch;      /* area cliente                       */
+    uint32_t buf_va;              /* buffer del cliente (ring 3)       */
+    uint32_t buf_sz;
+    uint32_t pd;                  /* PD de la app duena                 */
+    int      z;                   /* 0 = fondo; mayor = mas arriba      */
+    int      visible;
+    int      dragging;
+    int      drag_dx, drag_dy;    /* offset del clic dentro de la vent */
+} win_t;
+
+static win_t wins[WM_MAX_WINS];
+static int wm_next_id = 1;
+static uint32_t *wm_background;   /* snapshot del LFB (kmalloc)         */
+static int wm_active = 0;         /* hay alguna ventana visible         */
+
+static win_t *wm_hit(int px, int py)
+{
+    int i, best = -1, bestz = -1;
+    for (i = 0; i < WM_MAX_WINS; i++) {
+        if (!wins[i].visible || wins[i].z <= bestz)
+            continue;
+        if (px >= wins[i].x && px < wins[i].x + wins[i].w &&
+            py >= wins[i].y && py < wins[i].y + wins[i].h) {
+            best = i;
+            bestz = wins[i].z;
+        }
+    }
+    return best >= 0 ? &wins[best] : NULL;
+}
+
+static win_t *wm_find(int id)
+{
+    int i;
+    for (i = 0; i < WM_MAX_WINS; i++)
+        if (wins[i].visible && wins[i].id == id)
+            return &wins[i];
+    return NULL;
+}
+
+static win_t *wm_dragging(void)
+{
+    int i;
+    for (i = 0; i < WM_MAX_WINS; i++)
+        if (wins[i].visible && wins[i].dragging)
+            return &wins[i];
+    return NULL;
+}
+
+/* Sube la ventana al top del z-order (reordena los demas hacia abajo). */
+static void wm_raise(win_t *w)
+{
+    int top = -1, i;
+    for (i = 0; i < WM_MAX_WINS; i++)
+        if (wins[i].visible && wins[i].z > top)
+            top = wins[i].z;
+    if (w->z == top)
+        return;
+    for (i = 0; i < WM_MAX_WINS; i++) {
+        if (wins[i].visible && wins[i].z > w->z)
+            wins[i].z--;
+    }
+    w->z = top;
+}
+
+/* Primer arranque: snapshot del LFB actual (la consola vgafx queda como
+ * fondo bajo las ventanas). */
+static void wm_ensure_bg(void)
+{
+    if (wm_background || !vbe_graphics_active)
+        return;
+    wm_background = kmalloc(VBE_SCREEN_W * VBE_SCREEN_H * 4);
+    if (wm_background) {
+        memcpy(wm_background, (void *)vbe_lfb_phys,
+               VBE_SCREEN_W * VBE_SCREEN_H * 4);
+    }
+}
+
+/* Blit del area cliente desde el buffer de la app (validado por pagina
+ * con el PD de la app) hacia el LFB. */
+static void wm_blit_client(const win_t *w)
+{
+    volatile uint32_t *lfb = (volatile uint32_t *)vbe_lfb_phys;
+    uint32_t y;
+
+    if (!w->buf_va)
+        return;
+    for (y = 0; y < (uint32_t)w->ch; y++) {
+        uint8_t *dst = (uint8_t *)lfb +
+                       ((uint32_t)(w->cy + y) * VBE_SCREEN_W + w->cx) * 4;
+        uint32_t row = 0;
+        uint32_t n = (uint32_t)w->cw * 4;
+        while (n > 0) {
+            uint32_t va = w->buf_va + row;
+            uint32_t chunk = 0x1000 - (va & 0xFFF);
+            if (chunk > n)
+                chunk = n;
+            if (va >= USER_VADDR_END || !paging_is_user(w->pd, va)) {
+                row += n;
+                n = 0;
+                break;              /* buffer invalido: dejar el resto */
+            }
+            memcpy(dst + row, (void *)va, chunk);
+            row += chunk;
+            n -= chunk;
+        }
+    }
+}
+
+/* Composicion completa: fondo snapshot + ventanas en orden z + cursor. */
+static void wm_compose(void)
+{
+    volatile uint32_t *lfb = (volatile uint32_t *)vbe_lfb_phys;
+    int zz, i;
+
+    if (!vbe_graphics_active)
+        return;
+
+    if (wm_background) {
+        memcpy((void *)lfb, wm_background, VBE_SCREEN_W * VBE_SCREEN_H * 4);
+    }
+    for (zz = 0; zz < WM_MAX_WINS; zz++) {
+        for (i = 0; i < WM_MAX_WINS; i++) {
+            const win_t *w = &wins[i];
+            int j;
+
+            if (!w->visible || w->z != zz)
+                continue;
+            /* marco y titulo (el kernel los dibuja, la app solo el
+             * area cliente) */
+            for (j = 0; j < WM_FRAME; j++) {
+                int k;
+                for (k = w->x; k < w->x + w->w; k++) {
+                    if (k >= 0 && k < VBE_SCREEN_W && w->y + j >= 0 &&
+                        w->y + j < VBE_SCREEN_H)
+                        lfb[(w->y + j) * VBE_SCREEN_W + k] = C_FRAME;
+                    if (k >= 0 && k < VBE_SCREEN_W &&
+                        w->y + w->h - 1 - j >= 0 &&
+                        w->y + w->h - 1 - j < VBE_SCREEN_H)
+                        lfb[(w->y + w->h - 1 - j) * VBE_SCREEN_W + k] =
+                            C_FRAME;
+                }
+                for (k = w->y; k < w->y + w->h; k++) {
+                    if (k >= 0 && k < VBE_SCREEN_H && w->x + j >= 0 &&
+                        w->x + j < VBE_SCREEN_W)
+                        lfb[k * VBE_SCREEN_W + w->x + j] = C_FRAME;
+                    if (k >= 0 && k < VBE_SCREEN_H &&
+                        w->x + w->w - 1 - j >= 0 &&
+                        w->x + w->w - 1 - j < VBE_SCREEN_W)
+                        lfb[k * VBE_SCREEN_W + w->x + w->w - 1 - j] =
+                            C_FRAME;
+                }
+            }
+            /* titulo */
+            for (j = 0; j < WM_TITLE_H; j++) {
+                int k;
+                for (k = w->x + WM_FRAME; k < w->x + w->w - WM_FRAME; k++) {
+                    if (k >= 0 && k < VBE_SCREEN_W &&
+                        w->y + j >= 0 && w->y + j < VBE_SCREEN_H)
+                        lfb[(w->y + j) * VBE_SCREEN_W + k] = C_TITLE;
+                }
+            }
+            /* boton X (16x16, arriba a la derecha) */
+            {
+                int bx0 = w->x + w->w - WM_FRAME - WM_X_BTN;
+                for (j = 0; j < WM_X_BTN; j++) {
+                    int k;
+                    for (k = 0; k < WM_X_BTN; k++) {
+                        int xx = bx0 + k, yy = w->y + WM_FRAME + j;
+                        if (xx >= 0 && xx < VBE_SCREEN_W && yy >= 0 &&
+                            yy < VBE_SCREEN_H)
+                            lfb[yy * VBE_SCREEN_W + xx] = C_X_BG;
+                    }
+                }
+            }
+            wm_blit_client(w);
+        }
+    }
+    /* el blit pisa el cursor: re-dibujarlo */
+    mouse_cursor_invalidate();
+    mouse_draw_cursor();
+}
+
+int wm_create(const char *title, int x, int y, int w, int h,
+              uint32_t buf_va, uint32_t buf_sz, uint32_t pd)
+{
+    win_t *win = NULL;
+    int i;
+
+    if (!vbe_graphics_active || w < 50 || h < 50 ||
+        w > VBE_SCREEN_W || h > VBE_SCREEN_H)
+        return -1;
+    for (i = 0; i < WM_MAX_WINS; i++)
+        if (!wins[i].visible) {
+            win = &wins[i];
+            break;
+        }
+    if (!win)
+        return -1;
+
+    wm_ensure_bg();
+    memset(win, 0, sizeof(*win));
+    win->id = wm_next_id++;
+    for (i = 0; title && title[i] && i < (int)sizeof(win->title) - 1; i++)
+        win->title[i] = title[i];
+    win->title[i] = 0;
+    win->x = x;
+    win->y = y;
+    win->w = w;
+    win->h = h;
+    win->cx = x + WM_FRAME;
+    win->cy = y + WM_TITLE_H;
+    win->cw = w - 2 * WM_FRAME;
+    win->ch = h - WM_TITLE_H - WM_FRAME;
+    win->buf_va = buf_va;
+    win->buf_sz = buf_sz;
+    win->pd = pd;
+    win->visible = 1;
+    wm_raise(win);
+    wm_active = 1;
+    wm_compose();
+    return win->id;
+}
+
+int wm_close(int id)
+{
+    win_t *w = wm_find(id);
+    if (!w)
+        return -1;
+    w->visible = 0;
+    w->dragging = 0;
+    {
+        int any = 0, i;
+        for (i = 0; i < WM_MAX_WINS; i++)
+            if (wins[i].visible)
+                any = 1;
+        wm_active = any;
+    }
+    wm_compose();
+    return 0;
+}
+
+int wm_move(int id, int dx, int dy)
+{
+    win_t *w = wm_find(id);
+    if (!w)
+        return -1;
+    w->x += dx;
+    w->y += dy;
+    w->cx = w->x + WM_FRAME;
+    w->cy = w->y + WM_TITLE_H;
+    wm_compose();
+    return 0;
+}
+
+int wm_update(int id)
+{
+    win_t *w = wm_find(id);
+    if (!w)
+        return -1;
+    wm_compose();
+    return 0;
+}
+
+int wm_info(int id, uint32_t *out)
+{
+    win_t *w = wm_find(id);
+    if (!w)
+        return -1;
+    out[0] = (uint32_t)w->x;
+    out[1] = (uint32_t)w->y;
+    out[2] = (uint32_t)w->w;
+    out[3] = (uint32_t)w->h;
+    out[4] = (uint32_t)w->cx;
+    out[5] = (uint32_t)w->cy;
+    out[6] = (uint32_t)w->cw;
+    out[7] = (uint32_t)w->ch;
+    return 0;
+}
+
+/* Filtro de eventos: devuelve 0 si el evento debe entregarse a la app
+ * (SYS_EVENT), -1 si el WM lo consume (arrastre, raise). */
+int wm_filter_event(mouse_event_t *ev, uint32_t pd)
+{
+    win_t *w;
+
+    (void)pd;
+    if (!wm_active || !vbe_graphics_active)
+        return 0;
+
+    switch (ev->type) {
+    case EV_BUTTON_DOWN:
+        w = wm_dragging();
+        if (w) {                    /* clic durante un drag: se ignora */
+            w->dragging = 0;
+            return -1;
+        }
+        w = wm_hit(ev->x, ev->y);
+        if (!w)
+            return 0;
+        if (ev->y >= w->cy) {       /* area cliente: raise + entregar */
+            if (ev->x < w->x + w->w - WM_FRAME - WM_X_BTN)
+                wm_raise(w);
+            return 0;
+        }
+        if (ev->x >= w->x + w->w - WM_FRAME - WM_X_BTN) {
+            /* boton X: la app decide cerrar con SYS_WINCLOSE */
+            ev->type = EV_WINCLOSE;
+            ev->key = w->id;
+            return 0;
+        }
+        /* barra de titulo: iniciar arrastre */
+        w->dragging = 1;
+        w->drag_dx = ev->x - w->x;
+        w->drag_dy = ev->y - w->y;
+        return -1;
+    case EV_MOVE:
+        w = wm_dragging();
+        if (w) {
+            int nx = ev->x - w->drag_dx;
+            int ny = ev->y - w->drag_dy;
+            if (nx != w->x || ny != w->y) {
+                w->x = nx;
+                w->y = ny;
+                w->cx = w->x + WM_FRAME;
+                w->cy = w->y + WM_TITLE_H;
+                wm_compose();
+            }
+            return -1;
+        }
+        return 0;
+    case EV_BUTTON_UP:
+        w = wm_dragging();
+        if (w) {
+            w->dragging = 0;
+            return -1;
+        }
+        return 0;
+    default:
+        return 0;
+    }
+}

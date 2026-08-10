@@ -155,8 +155,15 @@ Todos los detalles, decisiones y bugs encontrados están en `DESIGN.md`.
   botones (`MyOS_PollEvent`/`MyOS_DrawButton`/`MyOS_WidgetHit`/
   `MyOS_ButtonFeed`) con hover y estado presionado, validada por
   screendump en los tres estados; `MessageBoxA` refactorizado sobre ella.
-  Escalera **14/14 PASS** (disco). Fase 16 en curso: gestor de ventanas
-  (z-order, repaint parcial, arrastre) como antesala del escritorio.
+  Escalera **14/14 PASS** (disco).
+- Fase 16 completada: **gestor de ventanas en el kernel** — `SYS_WINCREATE`
+  (18)/`SYS_WINCLOSE` (19)/`SYS_WINMOVE` (20)/`SYS_WINUPDATE` (21)/
+  `SYS_WININFO` (22); composición centralizada (marco, título y botón X
+  del kernel + área cliente de la app en ring 3), z-order con snapshot del
+  fondo, arrastre por la barra de título (consumido por el WM) y botón X
+  entregado como `EV_WINCLOSE` 5. `win_demo.c` validado con QMP
+  (screendumps: superposición inicial, ventana arrastrada, ventana
+  cerrada). Escalera **14/14 PASS** (disco).
 - Roadmap tentativo: long mode (64 bits), ATA con escritura de archivos
   (CreateFileA con GENERIC_WRITE), GUI completa (widgets → window manager
   con z-order → escritorio con barra de tareas y explorador de archivos),

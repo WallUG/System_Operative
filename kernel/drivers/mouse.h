@@ -23,6 +23,7 @@ typedef struct {
 void mouse_init(void);
 void mouse_irq(void);
 void mouse_draw_cursor(void);
+void mouse_cursor_invalidate(void);
 int  mouse_read(int *x, int *y, int *buttons);
 void mouse_event_push_key(int key);
 int  mouse_event_dequeue(mouse_event_t *ev);

@@ -29,6 +29,7 @@
 #include "drivers/keyboard.h"
 #include "drivers/mouse.h"
 #include "drivers/vbe.h"
+#include "winmgr.h"
 #include "fs/mefs.h"
 
 #define IDT_GATE_INT_DPL3 0xEE      /* presente, DPL=3, 32-bit int gate */
@@ -76,6 +77,23 @@ static int user_memcpy_out(void *dst, const void *src, uint32_t n,
         if (a >= USER_VADDR_END || !paging_is_user(pd, a))
             return -1;
         *(uint8_t *)a = s[i];
+    }
+    return 0;
+}
+
+/* Copia bytes de memoria de usuario al kernel (validando paginas). */
+static int user_memcpy_in(void *dst, const void *src, uint32_t n,
+                          uint32_t pd)
+{
+    const uint8_t *s = (const uint8_t *)src;
+    uint8_t *d = (uint8_t *)dst;
+    uint32_t a, i;
+
+    for (i = 0; i < n; i++) {
+        a = (uint32_t)s + i;
+        if (a >= USER_VADDR_END || !paging_is_user(pd, a))
+            return -1;
+        d[i] = s[i];
     }
     return 0;
 }
@@ -402,8 +420,52 @@ void syscall_handler(registers_t *regs)
             regs->eax = -1;
             break;
         }
+        /* Fase 16: el WM consume los eventos de ventana (arrastre,
+         * raise); lo que sobre se entrega a la app. */
+        if (wm_filter_event(&ev, pd) != 0) {
+            regs->eax = -1;
+            break;
+        }
         if (user_memcpy_out((char *)regs->ebx, (const char *)&ev,
                             sizeof(ev), pd) != 0) {
+            regs->eax = -1;
+            break;
+        }
+        regs->eax = 0;
+        break;
+    }
+    case SYS_WINCREATE: { /* ebx=&{title*,x,y,w,h,buf_va,buf_sz} -> id */
+        struct {
+            uint32_t title, x, y, w, h, buf_va, buf_sz;
+        } a;
+        char title[24];
+        int r;
+        if (user_memcpy_in(&a, (const void *)regs->ebx, sizeof(a), pd) != 0 ||
+            user_strcpy(title, sizeof(title), (const char *)a.title,
+                        pd) != 0) {
+            regs->eax = -1;
+            break;
+        }
+        r = wm_create(title, (int)a.x, (int)a.y, (int)a.w, (int)a.h,
+                      a.buf_va, a.buf_sz, pd);
+        regs->eax = r;
+        break;
+    }
+    case SYS_WINCLOSE:   /* ebx=id */
+        regs->eax = wm_close((int)regs->ebx);
+        break;
+    case SYS_WINMOVE: {  /* ebx=id, ecx=dx, edx=dy */
+        regs->eax = wm_move((int)regs->ebx, (int)regs->ecx, (int)regs->edx);
+        break;
+    }
+    case SYS_WINUPDATE:  /* ebx=id */
+        regs->eax = wm_update((int)regs->ebx);
+        break;
+    case SYS_WININFO: {  /* ebx=id, ecx=&{x,y,w,h,cx,cy,cw,ch} */
+        uint32_t info[8];
+        if (wm_info((int)regs->ebx, info) != 0 ||
+            user_memcpy_out((char *)regs->ecx, (const char *)info,
+                            sizeof(info), pd) != 0) {
             regs->eax = -1;
             break;
         }
