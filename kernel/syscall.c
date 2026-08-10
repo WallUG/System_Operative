@@ -134,6 +134,7 @@ static void sys_exec(const char *name, registers_t *regs)
     paging_user_map(sched_current_cr3(), USER_ESP0_TOP - USER_STACK_SIZE,
                     USER_STACK_SIZE);
     win32_crt_ret_init(sched_current_cr3());
+    win32_tib_set_cmdline(sched_current_cr3(), name);
     regs->esp = USER_ESP0_INIT;
     regs->user_esp = USER_ESP0_INIT;
     sched_user_heap_set(USER_HEAP_BASE);    /* heap nuevo (bump en 0) */

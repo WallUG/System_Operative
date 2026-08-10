@@ -4,13 +4,14 @@
  * contra nuestros shims). Valida:
  *   - GetCurrentProcessId  (pid real de la tarea via SYS_GETPID)
  *   - GetModuleFileNameA   (nombre del exe lanzado via SYS_SELFNAME)
+ *   - argc/argv reales     (GetCommandLineA -> TIB -> __getmainargs)
  *   - ExitProcess/exit     (terminacion con codigo de salida)
  */
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
 
-int main(void)
+int main(int argc, char **argv)
 {
     DWORD pid = GetCurrentProcessId();
     char buf[64];
@@ -22,6 +23,13 @@ int main(void)
         printf("'%s' (%lu chars)\n", buf, (unsigned long)n);
     } else {
         printf("FALLO (n=%lu)\n", (unsigned long)n);
+    }
+
+    printf("proc: argc = %d\n", argc);
+    {
+        int i;
+        for (i = 0; i < argc; i++)
+            printf("proc: argv[%d] = '%s'\n", i, argv[i]);
     }
 
     printf("proc: longitud de la cadena = %lu\n",

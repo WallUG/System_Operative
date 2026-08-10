@@ -60,8 +60,8 @@ int  task_create(const char *name, void (*entry)(void));
  * el entry debe ser su direccion de entrada (ya mapeada en pd).
  * Asigna y mapea una pila de usuario nueva en USER_ESP0_TOP-PAGE_SIZE.
  * El entry debe terminar con SYS_EXIT (si retorna, task_stub_exit). */
-int  task_create_user(const char *name, const char *exe, uint32_t pd,
-                      uint32_t entry);
+int  task_create_user(const char *name, const char *exe,
+                      const char *cmdline, uint32_t pd, uint32_t entry);
 /* Fork: copia el espacio de usuario (paginacion) del padre y el marco
  * registers_t (hijo reanuda tras int 0x80 con eax=0). Devuelve el pid
  * del hijo, -1 si falla. Solo valido desde una tarea de usuario. */

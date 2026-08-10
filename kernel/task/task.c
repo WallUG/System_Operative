@@ -141,8 +141,8 @@ int task_create(const char *name, void (*entry)(void))
     return task_init(t, name);
 }
 
-int task_create_user(const char *name, const char *exe, uint32_t pd,
-                     uint32_t entry)
+int task_create_user(const char *name, const char *exe, const char *cmdline,
+                     uint32_t pd, uint32_t entry)
 {
     uint32_t stack_frame;
     uint32_t *sp;
@@ -171,6 +171,8 @@ int task_create_user(const char *name, const char *exe, uint32_t pd,
     }
     /* Return address de arranque del CRT (ver win32_crt_ret_init). */
     win32_crt_ret_init(pd);
+    /* Linea de comandos real (GetCommandLineA/__getmainargs). */
+    win32_tib_set_cmdline(pd, cmdline);
 
     /* Marco falso para ring 3: el iret restaura tambien esp/ss de
      * usuario (la CPU pushea 5 dwords al interrumpir desde ring 3). */

@@ -37,6 +37,12 @@
  * FS de la GDT, base = WIN32_TIB_VA, apunta aqui). %fs:0x18 = Self. */
 #define WIN32_TIB_VA        0x84000000u
 
+/* Linea de comandos del proceso (GetCommandLineA/__getmainargs): el
+ * kernel la copia al TIB de cada tarea en este offset (hasta 128 B);
+ * ring 3 la lee directamente via %fs (sin syscall). */
+#define WIN32_TIB_CMDLINE_OFF 0x100u
+#define WIN32_TIB_CMDLINE_LEN 128u
+
 /* Export single: name, funcion VA dentro del modulo. */
 #define WIN32_EXPORT_MAX    64          /* por DLL */
 #define WIN32_EXPORT_NAME   32          /* nombre de export, hasta "SetUnhandledExceptionFilter" */
@@ -68,6 +74,10 @@ int  win32_map_all(uint32_t pd);
 /* Mapea y rellena el TIB (Thread Information Block) de usuario en
  * WIN32_TIB_VA: una pagina USER nueva con Self/StackBase/StackLimit. */
 int  win32_tib_map(uint32_t pd);
+/* Copia la linea de comandos (con la que la shell/SYS_EXEC lanzo el
+ * proceso) al TIB de la tarea en WIN32_TIB_CMDLINE_OFF: la lee
+ * GetCommandLineA y __getmainargs desde ring 3. 0 = OK. */
+int  win32_tib_set_cmdline(uint32_t pd, const char *cmd);
 /* Escribe [USER_ESP0_INIT] = msvcrt!_crt_ret: return address de
  * arranque del CRT de mingw (lea esp,ecx-4; ret). pd = el de la tarea. */
 int  win32_crt_ret_init(uint32_t pd);

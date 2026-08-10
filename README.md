@@ -19,7 +19,7 @@ mingw-w64 en ring 3, gracias a shims de `kernel32.dll` y `msvcrt.dll`.
 | 8    | PE32 (.exe), modulos Win32 fixed ring 3, run dual MZ/ELF |
 | 9    | **`.exe` mingw real**: imports PE estándar + shims kernel32/msvcrt → `run hello_win.exe` imprime y devuelve `exit:42` |
 | 10   | **APIs de fichero Win32**: syscalls DREAD/DLIST, `CreateFileA`/`ReadFile`/`FindFirstFileA` en kernel32 + `dir.exe` real incluido en el ISO |
-| 11   | **APIs de proceso Win32**: `SYS_SELFNAME` (exe_name por tarea), `GetCurrentProcessId`/`GetModuleFileNameA` reales + `proc.exe` real incluido en el ISO. Escalera de compatibilidad 10/10 |
+| 11   | **APIs de proceso Win32**: `SYS_SELFNAME` (exe_name por tarea), `GetCurrentProcessId`/`GetModuleFileNameA` reales, **`GetCommandLineA` real (argc/argv de la línea de `run`)** + `proc.exe` real incluido en el ISO. Escalera de compatibilidad 11/11 |
 
 ## Requisitos
 
@@ -69,7 +69,9 @@ timeout 40 sh -c '(sleep 6; printf "run proc.exe\n"; sleep 5) | \
 ```
 
 Salida esperada: `proc: GetCurrentProcessId = 3`, `proc: GetModuleFileNameA
-= 'proc.exe' (8 chars)`, `proc: longitud de la cadena = 8` y `exit:7`.
+= 'proc.exe' (8 chars)`, `proc: argc = 1`, `proc: argv[0] = 'proc.exe'` y
+`exit:7`. Con argumentos (`run proc.exe uno "dos tres" 4`) imprime
+`argc = 4` y `argv[2] = 'dos tres'`.
 
 ## Estructura
 
@@ -127,10 +129,11 @@ Todos los detalles, decisiones y bugs encontrados están en `DESIGN.md`.
   `readme.txt` van dentro del ISO.
 - Fase 11 completada: `proc.exe` (mingw real) obtiene su PID real y su
   nombre con `GetCurrentProcessId`/`GetModuleFileNameA` (SYS_SELFNAME);
-  `exit:7` viaja por el CRT. Escalera de compatibilidad **10/10 PASS**
-  (disco y CD): hello.elf, quick.exe, winapi.exe, hello_win.exe, dir.exe,
-  fork.exe, exec.exe, console.exe, input interactivo, proc.exe.
+  línea de comandos real (`GetCommandLineA` → `argc/argv` con la línea
+  de `run`, quoting incluido); `exit:7` viaja por el CRT. Escalera de
+  compatibilidad **11/11 PASS** (disco y CD): hello.elf, quick.exe,
+  winapi.exe, hello_win.exe, dir.exe, fork.exe, exec.exe, console.exe,
+  input interactivo, proc.exe, proc.exe con argumentos.
 - Roadmap tentativo: long mode (64 bits), ATA con escritura de archivos
-  (CreateFileA con GENERIC_WRITE), argv real desde la shell
-  (GetCommandLineA con argc/argv de la línea de `run`), Stage 6
-  (user32 gráfico: MessageBox/ventanas), según el interés.
+  (CreateFileA con GENERIC_WRITE), Stage 6 (user32 gráfico:
+  MessageBox/ventanas), según el interés.

@@ -225,6 +225,23 @@ int win32_tib_map(uint32_t pd)
     return paging_user_map_frame(pd, WIN32_TIB_VA, frame);
 }
 
+/* Linea de comandos del proceso (GetCommandLineA): se copia al TIB de
+ * la tarea en WIN32_TIB_CMDLINE_OFF; ring 3 la lee por %fs. */
+int win32_tib_set_cmdline(uint32_t pd, const char *cmd)
+{
+    uint32_t frame, i;
+    char *dst;
+
+    frame = paging_user_frame(pd, WIN32_TIB_VA);
+    if (frame == 0)
+        return -1;
+    dst = (char *)(frame + WIN32_TIB_CMDLINE_OFF);
+    for (i = 0; i < WIN32_TIB_CMDLINE_LEN - 1 && cmd[i]; i++)
+        dst[i] = cmd[i];
+    dst[i] = 0;
+    return 0;
+}
+
 /* Escribe en [USER_ESP0_INIT] la direccion de msvcrt!_crt_ret: es el
  * "return address" que el CRT de mingw deja ubicado en la base de la
  * pila para el ret final de mainCRTStartup (lea esp,ecx-4 / ret). */

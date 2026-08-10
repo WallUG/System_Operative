@@ -137,10 +137,17 @@ uint32_t GetModuleFileNameA(uint32_t hmodule, char *buf, uint32_t max)
     return n;
 }
 
+/* Linea de comandos real del proceso: el kernel la copia al TIB de la
+ * tarea (WIN32_TIB_CMDLINE_OFF) al lanzarla o hacer exec; %fs:0x18 da
+ * la base del TIB de la tarea actual. */
+#define WIN32_TIB_VA          0x84000000u
+#define WIN32_TIB_CMDLINE_OFF 0x100u
+
 char *GetCommandLineA(void)
 {
-    static char cmd[] = "program.exe\0";
-    return cmd;
+    uint32_t tib = 0;
+    __asm__ volatile("mov %%fs:0x18, %0" : "=r"(tib));
+    return (char *)(tib + WIN32_TIB_CMDLINE_OFF);
 }
 
 static char *env_block[] = { (char *)"PATH=.\0HOME=.\0", 0 };

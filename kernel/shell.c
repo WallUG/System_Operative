@@ -142,9 +142,25 @@ void shell_loop(void)
                     kprint("\n");
             }
         } else if (strncmp(line, "run ", 4) == 0) {
-            /* leer el ELF del FS a un buffer del kernel, mapearlo en un
-             * PD de usuario aislado y crear la tarea (ring 3) */
-            uint32_t size = (uint32_t)mefs_size(line + 4);
+            /* leer el ELF/PE del FS a un buffer del kernel, mapearlo en
+             * un PD de usuario aislado y crear la tarea (ring 3).
+             * Primer token = archivo; el resto de la linea es la linea
+             * de comandos real (GetCommandLineA -> argc/argv). */
+            char exe_nm[32];
+            char cmdline[WIN32_TIB_CMDLINE_LEN];
+            int kk = 0, cl = 0;
+            while (kk < 31 && line[4 + kk] && line[4 + kk] != ' '
+                   && line[4 + kk] != '\t') {
+                exe_nm[kk] = line[4 + kk];
+                kk++;
+            }
+            exe_nm[kk] = 0;
+            while (cl < (int)(WIN32_TIB_CMDLINE_LEN - 1) && line[4 + cl]) {
+                cmdline[cl] = line[4 + cl];
+                cl++;
+            }
+            cmdline[cl] = 0;
+            uint32_t size = (uint32_t)mefs_size(exe_nm);
             if (size == 0 || size > 0x100000) {
                 kprint("archivo no encontrado o demasiado grande\n");
                 continue;
@@ -154,7 +170,7 @@ void shell_loop(void)
                 kprint("memoria insuficiente\n");
                 continue;
             }
-            if (mefs_read(line + 4, buf, size) != (int)size) {
+            if (mefs_read(exe_nm, buf, size) != (int)size) {
                 kprint("error leyendo archivo\n");
                 kfree(buf);
                 continue;
@@ -173,24 +189,14 @@ void shell_loop(void)
             kprint_uint((uint32_t)mapr);
             kprint("(map) ");
             kfree(buf);
-            /* Nombre del ejecutable (para GetModuleFileNameA de Win32). */
-            char exe_nm[32];
-            int kk = 0;
-            while (kk < 31 && line[4 + kk]) { exe_nm[kk] = line[4 + kk]; kk++; }
-            exe_nm[kk] = 0;
-            if (task_create_user("user", exe_nm, pd, entry) < 0) {
+            if (task_create_user("user", exe_nm, cmdline, pd, entry) < 0) {
                 paging_free_pd(pd);
                 kprint("no se pudo crear la tarea\n");
                 continue;
             }
             kprint("ok(create)\n");
             kprint("Ejecutando ");
-            { char nm[32];
-              int k = 0;
-              while (k < 31 && line[4 + k]) { nm[k] = line[4 + k]; k++; }
-              nm[k] = 0;
-              kprint(nm);
-            }
+            kprint(exe_nm);
             kprint(" en ring 3 (PD aislado)...\n");
         } else if (strcmp(line, "pf") == 0) {
             kprint("Provocando #PF: escritura en 0x50000000 (no mapeado)...\n");

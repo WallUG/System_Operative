@@ -305,18 +305,62 @@ void *localeconv(void) { return &lc; }
 
 /* --- __getmainargs --- */
 
-static char *argv0 = "hello.exe";
+/* Linea de comandos real del proceso: vive en el TIB (el kernel la
+ * escribe al lanzar/exec), %fs:0x18 da la base del TIB actual. */
+#define WIN32_TIB_VA          0x84000000u
+#define WIN32_TIB_CMDLINE_OFF 0x100u
+
+static const char *cmdline_from_tib(void)
+{
+    uint32_t tib = 0;
+    __asm__ volatile("mov %%fs:0x18, %0" : "=r"(tib));
+    return (const char *)(tib + WIN32_TIB_CMDLINE_OFF);
+}
+
+/* Parseo estilo Windows de la linea de comandos: espacios separan
+ * argumentos, comillas dobles agrupan (sin escapes anidados, sufiente
+ * para la shell y las pruebas). Devuelve el numero de argumentos. */
+static int split_cmdline(const char *cmd, char *out, char **argv, int max)
+{
+    int n = 0;
+    while (*cmd) {
+        while (*cmd == ' ' || *cmd == '\t')
+            cmd++;
+        if (*cmd == 0)
+            break;
+        if (n >= max - 1)
+            break;
+        argv[n++] = out;
+        if (*cmd == '"') {
+            cmd++;
+            while (*cmd && *cmd != '"')
+                *out++ = *cmd++;
+            if (*cmd == '"')
+                cmd++;
+        } else {
+            while (*cmd && *cmd != ' ' && *cmd != '\t')
+                *out++ = *cmd++;
+        }
+        *out++ = 0;
+    }
+    return n;
+}
 
 int __getmainargs(int *argc, char ***argv, char ***envp,
                   int dowildcard, void *startup)
 {
-    static char *argv_list[2];
+    static char *argv_list[33];
+    static char buf[256];
     static char *envp_list[1];
     (void)dowildcard;
     (void)startup;
-    argv_list[0] = argv0;
+    *argc = split_cmdline(cmdline_from_tib(), buf, argv_list, 33);
+    if (*argc < 1) {
+        argv_list[0] = (char *)"program.exe";   /* nunca deberia pasar */
+        *argc = 1;
+    }
+    argv_list[*argc] = 0;
     envp_list[0] = 0;
-    *argc = 1;
     *argv = argv_list;
     if (envp)
         *envp = envp_list;
