@@ -87,7 +87,7 @@ void kmain(uint32_t boot_info_ptr)
         kprint(" entradas, RAM usable ~");
         kprint_uint(total_mb);
         kprint(" MiB\n");
-        kprint("PMM: bitmap en 0x20000, frames libres = ");
+        kprint("PMM: bitmap en .bss, frames libres = ");
         kprint_uint(pmm_free_count());
         kprint("\n");
     }

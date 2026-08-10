@@ -2,14 +2,20 @@
  * Bitmap de frames fisicos. Inicializa todo como "en uso" y despues
  * libera las regiones tipo 1 (usable) del E820 a partir de 1 MiB.
  * Lo que queda reservado de serie: < 1 MiB (IVT, BIOS, video, kernel,
- * buffer E820 y el propio bitmap) y el rango del heap (ver heap.c). */
+ * buffer E820) y el rango del heap (ver heap.c). El bitmap vive en el
+ * .bss del kernel (no en una direccion fija: el .bss ya cubre hasta
+ * 0x228A4 y una direccion fija como 0x20000 chocaria con mods/sector_buf). */
 
 #include <stdint.h>
 #include "pmm.h"
 #include "mmap.h"
 #include "kprint.h"
 
-static uint8_t *bitmap = (uint8_t *)PMM_BITMAP_ADDR;
+/* El bitmap vive en el .bss del kernel: el linker lo ubica junto al
+ * resto de variables. NUNCA en una direccion fija (0x20000) porque el
+ * .bss (mods de win32, sector_buf/entries de mefs, kbd_buffer, ...)
+ * ya cubre 0x16360-0x228A4 y pisaria el bitmap. */
+static uint8_t bitmap[PMM_MAX_MEM / PMM_BLOCK_SIZE / 8];
 static uint32_t max_frames = PMM_MAX_MEM / PMM_BLOCK_SIZE;   /* 0x20000 */
 static uint32_t free_frames;
 
