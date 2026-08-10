@@ -203,6 +203,8 @@ int win32_map_all(uint32_t pd)
         if (map_module(pd, i) != 0)
             return -1;
     }
+    if (paging_user_map_lfb(pd) != 0)
+        return -1;
     return win32_tib_map(pd);
 }
 

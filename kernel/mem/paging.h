@@ -17,6 +17,8 @@
 
 #include <stdint.h>
 
+#include "drivers/vbe.h"
+
 #define PAGE_SIZE           0x1000
 #define PAGE_ALIGN(a)       (((a) + 0xFFF) & ~0xFFFu)
 
@@ -38,6 +40,15 @@
 
 /* Kernel identity: 0-1 GiB (PDEs 0..255). */
 #define KERNEL_PDE_END      256
+
+/* LFB VBE (Fase 12): el kernel lo mapea identity como superpage
+ * supervisor en 0xE0000000 y cada PD de usuario lo ve como paginas
+ * USER/RW en VBE_LFB_USER_VA (dentro de la region de usuario). */
+void paging_map_kernel_lfb(void);
+/* Mapea el LFB VBE (frames fisicos 0xE0000000..) como USER en pd. */
+int  paging_user_map_lfb(uint32_t pd);
+/* 1 si `frame` es del LFB VBE (jamas se libera con pmm_free_frame). */
+int  paging_is_lfb_frame(uint32_t frame);
 
 /* Habilita paginacion: PD global del kernel, identity 0-1 GiB con
  * paginas de 4 MiB supervisor (sin bit USER). */

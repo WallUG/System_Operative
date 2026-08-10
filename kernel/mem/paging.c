@@ -75,6 +75,38 @@ void paging_switch(uint32_t pd)
     __asm__ volatile("mov %0, %%cr3" : : "r"(pd) : "memory");
 }
 
+/* --- LFB VBE (Fase 12) --- */
+
+void paging_map_kernel_lfb(void)
+{
+    uint32_t *pd = (uint32_t *)paging_kernel_pd();
+
+    if (vbe_lfb_phys == 0)
+        return;
+    pd[vbe_lfb_phys >> 22] = vbe_lfb_phys | PDE_PRESENT | PDE_RW | PDE_PS;
+}
+
+int paging_is_lfb_frame(uint32_t frame)
+{
+    return vbe_lfb_phys != 0 &&
+           frame >= vbe_lfb_phys &&
+           frame < vbe_lfb_phys + VBE_LFB_PAGES * PAGE_SIZE;
+}
+
+int paging_user_map_lfb(uint32_t pd)
+{
+    uint32_t i;
+
+    if (vbe_lfb_phys == 0)
+        return 0;
+    for (i = 0; i < VBE_LFB_PAGES; i++) {
+        if (paging_user_map_frame(pd, VBE_LFB_USER_VA + i * PAGE_SIZE,
+                                  vbe_lfb_phys + i * PAGE_SIZE) != 0)
+            return -1;
+    }
+    return 0;
+}
+
 static int in_user_range(uint32_t vaddr, uint32_t size)
 {
     return vaddr >= USER_VADDR_BASE && size <= USER_VADDR_END - vaddr &&
@@ -125,6 +157,12 @@ uint32_t paging_create_user_pd(void)
     kpd = (uint32_t *)kernel_pd_addr;
     for (i = 0; i < KERNEL_PDE_END; i++)
         pd[i] = kpd[i];
+
+    /* Heredar tambien la superpagina del LFB (0xFD000000): el kernel
+     * escribe ahi (consola grafica vgafx) con el CR3 del proceso
+     * durante los syscalls. */
+    if (vbe_lfb_phys != 0)
+        pd[vbe_lfb_phys >> 22] = kpd[vbe_lfb_phys >> 22];
 
     return pd_addr;
 }
@@ -218,6 +256,10 @@ int paging_copy_user_space(uint32_t dst_pd, uint32_t src_pd)
         for (i = 0; i < PT_COUNT; i++) {
             if (!(spt[i] & PDE_PRESENT))
                 continue;
+            if (paging_is_lfb_frame(spt[i] & 0xFFFFF000u)) {
+                dpt[i] = spt[i];    /* LFB: compartido, sin copiar */
+                continue;
+            }
             frame = pmm_alloc_frame();
             if (frame == 0)
                 return -1;
@@ -239,8 +281,9 @@ void paging_free_user_space(uint32_t pd)
             continue;
         pt = (uint32_t *)(tpd[pde] & 0xFFFFF000u);
         for (i = 0; i < PT_COUNT; i++) {
-            if (pt[i] & PDE_PRESENT)
-                pmm_free_frame(pt[i] & 0xFFFFF000u);
+            if (pt[i] & PDE_PRESENT &&
+                !paging_is_lfb_frame(pt[i] & 0xFFFFF000u))
+                pmm_free_frame(pt[i] & 0xFFFFF000u);   /* LFB: no se libera */
         }
         pmm_free_frame((uint32_t)pt);
         tpd[pde] = 0;

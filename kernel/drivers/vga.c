@@ -8,6 +8,8 @@
 #include "vga.h"
 #include "io.h"
 #include "string.h"
+#include "vbe.h"
+#include "vgafx.h"
 
 #define VGA_BASE    0xB8000
 #define VGA_WIDTH   80
@@ -53,6 +55,12 @@ void vga_clear(void)
 
 void vga_putc(char c)
 {
+    /* En modo grafico (VBE activo) el buffer 0xB8000 no se muestra:
+     * dibujar en el LFB con la consola grafica. */
+    if (vbe_graphics_active) {
+        vgafx_putc(c);
+        return;
+    }
     switch (c) {
     case '\n':
         vga_row++;

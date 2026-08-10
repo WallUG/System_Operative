@@ -18,6 +18,9 @@
 #include "drivers/serial.h"
 #include "drivers/timer.h"
 #include "drivers/keyboard.h"
+#include "drivers/vbe.h"
+#include "drivers/vgafx.h"
+#include "drivers/mouse.h"
 #include "task/task.h"
 #include "gdt.h"
 #include "syscall.h"
@@ -72,7 +75,17 @@ void kmain(uint32_t boot_info_ptr)
 {
     const bootinfo_t *bi = (const bootinfo_t *)boot_info_ptr;
     serial_init();
-    vga_init();
+
+    /* Fase 12: activar VBE (800x600x32) lo antes posible; si hay LFB el
+     * kernel pasa a la consola grafica (vgafx) y 0xB8000 queda oculto. */
+    vbe_init();
+    if (vbe_graphics_active)
+        vgafx_init();
+    else
+        vga_init();
+    mouse_init();                   /* raton PS/2 (IRQ12), Fase 13 */
+    if (vbe_graphics_active)
+        mouse_draw_cursor();
 
     kprint("MyOS 0.4.0 - gestion de memoria\n");
 
@@ -114,6 +127,9 @@ void kmain(uint32_t boot_info_ptr)
 
     /* --- Paginacion: PSE, identity map 0-1 GiB con paginas de 4 MiB --- */
     paging_init();
+    /* Mapear el LFB (0xFD000000, fuera del identity de 1 GiB) antes de
+     * imprimir: con VBE activo la consola grafica escribe en el LFB. */
+    paging_map_kernel_lfb();
     {
         volatile uint32_t *p = (volatile uint32_t *)0x1000000;  /* 16 MiB */
         *p = 0x11223344u;
@@ -121,6 +137,13 @@ void kmain(uint32_t boot_info_ptr)
         kprint_hex32(paging_pd_addr());
         kprint(", write/read en 16 MiB -> ");
         kprint_hex32(*p);
+        kprint("\n");
+    }
+
+    /* --- Video VBE (Fase 12): dispi -> 800x600x32, LFB mapeado --- */
+    if (vbe_graphics_active) {
+        kprint("VBE: 800x600x32 activo, LFB 0x");
+        kprint_hex32(vbe_lfb_phys);
         kprint("\n");
     }
 

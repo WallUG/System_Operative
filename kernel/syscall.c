@@ -372,6 +372,17 @@ void syscall_handler(registers_t *regs)
         regs->eax = (int32_t)n;
         break;
     }
+    case SYS_GFXINFO: { /* ebx=&struct{lfb_va,w,h,bpp} (user32, Fase 12) */
+        uint32_t info[4] = { VBE_LFB_USER_VA, VBE_SCREEN_W,
+                             VBE_SCREEN_H, VBE_SCREEN_BPP };
+        if (user_memcpy_out((char *)regs->ebx, (const char *)info,
+                            sizeof(info), pd) != 0) {
+            regs->eax = -1;
+            break;
+        }
+        regs->eax = 0;
+        break;
+    }
     default:
         break;
     }

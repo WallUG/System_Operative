@@ -4,7 +4,7 @@
 El "boot image" es os-image.bin completo (boot + kernel + fs.bin): la
 BIOS (SeaBIOS/QEMU) lo carga entero en 0x7C00 con load segment 0x07C0 y
 boot.asm detecta modo CD (dl >= 0xE0), copia el kernel a 0x10000 y la
-imagen MEFS a 0x50000 (mefs_init_mem en el kernel).
+imagen MEFS a 0x140000 (mefs_init_mem en el kernel).
 
 Estructura (sectores de 2048 B):
    0-15  area de sistema (ceros)
