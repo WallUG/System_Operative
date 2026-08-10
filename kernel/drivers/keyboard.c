@@ -41,6 +41,15 @@ void keyboard_init(void)
 {
     kbd_head = 0;
     kbd_tail = 0;
+
+    /* El bootloader (enable_a20) deja el teclado deshabilitado en el 8042
+     * (comando 0xAD) y nunca lo re-habilita: sin esto el 8042 ignora el
+     * teclado (ni IRQ1 ni datos en 0x60). */
+    while (inb(0x64) & 0x02)        /* esperar input buffer libre */
+        ;
+    outb(0x64, 0xAE);               /* enable keyboard */
+    while (inb(0x64) & 0x01)        /* drenar bytes pendientes */
+        inb(0x60);
 }
 
 void keyboard_irq(void)

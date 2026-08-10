@@ -219,7 +219,10 @@ enable_a20:
     pop ax
     or al, 0x02                 ; bit A20
     out 0x60, al
-    ret                         ; no se re-habilita el teclado: ya no se usa
+    call a20_wait_input
+    mov al, 0xAE
+    out 0x64, al                ; re-habilitar teclado
+    ret
 
 a20_wait_input:                 ; espera buffer de comando libre (bit 2 = 0)
     in al, 0x64
@@ -268,14 +271,9 @@ print_string:
     lodsb
     or al, al
     jz .done
-    cmp al, 13                  ; ignorar CR y LF (una sola linea)
-    je .skip
-    cmp al, 10
-    je .skip
     mov ah, 0x07                ; atributo: gris claro sobre negro
     mov [es:bx], ax
     add bx, 2
-.skip:
     jmp .loop
 .done:
     pop bx
@@ -288,9 +286,9 @@ print_string:
 ; ------------------------------------------------------------------
 BOOT_DRIVE db 0
 
-msg_boot       db "MyOS boot", 13, 10, 0
-msg_a20_fail   db "A20 FAIL", 13, 10, 0
-msg_disk_err   db "DISK FAIL", 13, 10, 0
+msg_boot       db "MyOS boot", 0
+msg_a20_fail   db "A20 FAIL", 0
+msg_disk_err   db "DISK FAIL", 0
 
 dap:                            ; Disk Address Packet (int 0x13, ah=0x42)
     db 0x10                     ; tamano del paquete (16 bytes)
