@@ -134,6 +134,14 @@ Todos los detalles, decisiones y bugs encontrados están en `DESIGN.md`.
   compatibilidad **11/11 PASS** (disco y CD): hello.elf, quick.exe,
   winapi.exe, hello_win.exe, dir.exe, fork.exe, exec.exe, console.exe,
   input interactivo, proc.exe, proc.exe con argumentos.
+- Fase 12 completada: **modo gráfico VBE 800x600x32** (dispi + LFB leído
+  del BAR0 PCI, consola del kernel dibujando en el framebuffer) y
+  `messagebox.exe` (mingw real) abriendo una ventana gráfica real
+  (`MessageBoxA` contra user32.dll) con el botón OK. Escalera de
+  compatibilidad **13/13 PASS** (disco y CD).
+- Fase 13 completada: **ratón PS/2 (IRQ12)** con cursor en el framebuffer
+  (driver 8042, paquete de 3 bytes, save/restore del cursor; validado con
+  `mouse_move` del monitor QEMU + screendump).
 - Roadmap tentativo: long mode (64 bits), ATA con escritura de archivos
-  (CreateFileA con GENERIC_WRITE), Stage 6 (user32 gráfico:
-  MessageBox/ventanas), según el interés.
+  (CreateFileA con GENERIC_WRITE), Stage 6 (user32 gráfico: eventos de
+  ratón, widgets interactivos, ventanas y escritorio), según el interés.
