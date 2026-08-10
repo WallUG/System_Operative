@@ -8,8 +8,14 @@
 #include <stdint.h>
 
 #define SYS_WRITE   7
-#define SYS_READ    6
 #define SYS_GFXINFO 15
+#define SYS_MOUSEINFO 16
+#define SYS_EVENT   17
+
+#define EV_MOVE         1
+#define EV_BUTTON_DOWN  2
+#define EV_BUTTON_UP    3
+#define EV_KEY          4
 
 /* --- syscalls --- */
 
@@ -23,22 +29,32 @@ static int sys_write(const char *s, uint32_t len)
     return r;
 }
 
-static int sys_read(char *buf, uint32_t max)
-{
-    int r;
-    __asm__ volatile("int $0x80"
-                     : "=a"(r)
-                     : "a"(SYS_READ), "b"(buf), "c"(max)
-                     : "memory");
-    return r;
-}
-
 static int sys_gfxinfo(uint32_t *info)
 {
     int r;
     __asm__ volatile("int $0x80"
                      : "=a"(r)
                      : "a"(SYS_GFXINFO), "b"(info)
+                     : "memory");
+    return r;
+}
+
+static int sys_mouseinfo(uint32_t *mi)
+{
+    int r;
+    __asm__ volatile("int $0x80"
+                     : "=a"(r)
+                     : "a"(SYS_MOUSEINFO), "b"(mi)
+                     : "memory");
+    return r;
+}
+
+static int sys_event(uint32_t *ev)
+{
+    int r;
+    __asm__ volatile("int $0x80"
+                     : "=a"(r)
+                     : "a"(SYS_EVENT), "b"(ev)
                      : "memory");
     return r;
 }
@@ -114,13 +130,15 @@ static void drawtext(int x, int y, const char *s, uint32_t fg)
 
 /* --- MessageBoxA --- */
 
-/* Botones: 0 = OK. Devuelve IDOK (1) al pulsar Enter. */
+/* Botones: 0 = OK. Devuelve IDOK (1) al hacer clic en OK o pulsar Enter. */
 int MessageBoxA(void *h, const char *text, const char *caption, uint32_t type)
 {
     uint32_t info[4];
-    char key[2];
+    uint32_t ev[5];
     int wx, wy, ww, wh;
     int tx, ty;
+    int bx, by, bw, bh;             /* rect del boton OK */
+    int pressed = 0;
 
     (void)h;
     (void)type;
@@ -152,18 +170,34 @@ int MessageBoxA(void *h, const char *text, const char *caption, uint32_t type)
     ty = wy + 34;
     drawtext(tx, ty, text, COLOR_TEXT);
     ty += 20;
-    drawtext(tx, ty, "Pulsa Enter para cerrar", COLOR_TEXT);
+    drawtext(tx, ty, "Haz clic en OK o pulsa Enter para cerrar", COLOR_TEXT);
 
-    fillrect(wx + ww / 2 - 30, wy + wh - 42, 60, 22, COLOR_BTN);
-    drawtext(wx + ww / 2 - 13, wy + wh - 40, "OK", COLOR_BTN_TX);
+    bx = wx + ww / 2 - 30;
+    by = wy + wh - 42;
+    bw = 60;
+    bh = 22;
+    fillrect(bx, by, bw, bh, COLOR_BTN);
+    drawtext(bx + 17, by + 2, "OK", COLOR_BTN_TX);
 
-    /* Espera Enter (SYS_READ: teclado o serial). SYS_READ devuelve 0
-     * si la linea fue vacia (solo Enter): ambas cierran el dialogo. */
+    /* Bucle de eventos (no bloqueante): clic sobre OK o Enter (EV_KEY)
+     * cierran el dialogo. El scheduler desaloja el bucle ocupado por
+     * tick, asi que no congela el resto del sistema. */
     for (;;) {
-        if (sys_read(key, sizeof(key)) >= 0)
-            break;
+        if (sys_event(ev) != 0)
+            continue;
+        if (ev[0] == EV_BUTTON_DOWN &&
+            ev[1] >= bx && ev[1] < bx + bw &&
+            ev[2] >= by && ev[2] < by + bh) {
+            pressed = 1;
+            /* estado presionado: colores invertidos */
+            fillrect(bx, by, bw, bh, COLOR_TEXT);
+            drawtext(bx + 17, by + 2, "OK", COLOR_BTN);
+        }
+        if (ev[0] == EV_BUTTON_UP && pressed)
+            return 1;
+        if (ev[0] == EV_KEY && ev[4] == '\n')
+            return 1;
     }
-    return 1;                       /* IDOK */
 }
 
 typedef struct {

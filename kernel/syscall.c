@@ -27,6 +27,8 @@
 #include "win32.h"
 #include "drivers/serial.h"
 #include "drivers/keyboard.h"
+#include "drivers/mouse.h"
+#include "drivers/vbe.h"
 #include "fs/mefs.h"
 
 #define IDT_GATE_INT_DPL3 0xEE      /* presente, DPL=3, 32-bit int gate */
@@ -377,6 +379,31 @@ void syscall_handler(registers_t *regs)
                              VBE_SCREEN_H, VBE_SCREEN_BPP };
         if (user_memcpy_out((char *)regs->ebx, (const char *)info,
                             sizeof(info), pd) != 0) {
+            regs->eax = -1;
+            break;
+        }
+        regs->eax = 0;
+        break;
+    }
+    case SYS_MOUSEINFO: { /* ebx=&struct{x,y,buttons} (Fase 14) */
+        int mi[3];
+        mouse_read(&mi[0], &mi[1], &mi[2]);
+        if (user_memcpy_out((char *)regs->ebx, (const char *)mi,
+                            sizeof(mi), pd) != 0) {
+            regs->eax = -1;
+            break;
+        }
+        regs->eax = 0;
+        break;
+    }
+    case SYS_EVENT: { /* ebx=&struct{type,x,y,buttons,key}; -1 si vacio */
+        mouse_event_t ev;
+        if (mouse_event_dequeue(&ev) != 0) {
+            regs->eax = -1;
+            break;
+        }
+        if (user_memcpy_out((char *)regs->ebx, (const char *)&ev,
+                            sizeof(ev), pd) != 0) {
             regs->eax = -1;
             break;
         }

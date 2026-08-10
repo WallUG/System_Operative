@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include "keyboard.h"
 #include "io.h"
+#include "mouse.h"
 
 #define KBD_DATA   0x60
 #define KBD_BUF    64
@@ -63,6 +64,7 @@ void keyboard_irq(void)
     char c = scancode_table[scancode & 0x7F];
     if (c == 0)
         return;
+    mouse_event_push_key(c);        /* Fase 14: eventos graficos */
 
     int next = (kbd_head + 1) % KBD_BUF;
     if (next != kbd_tail) {         /* buffer lleno: descartar */

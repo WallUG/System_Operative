@@ -19,6 +19,8 @@
 #define SYS_DLIST   13  /* ebx=idx dir, ecx=name[16], edx=&size       */
 #define SYS_SELFNAME 14 /* ebx=buf, ecx=max: nombre del exe actual    */
 #define SYS_GFXINFO 15  /* ebx=&struct{lfb_va,w,h,bpp}: info grafica  */
+#define SYS_MOUSEINFO 16 /* ebx=&struct{x,y,buttons}: posicion raton  */
+#define SYS_EVENT 17    /* ebx=&struct{type,x,y,buttons,key}: -1 vacio */
 
 void syscall_init(void);            /* registra el gate 0x80 (DPL=3) */
 void syscall_handler(registers_t *regs);

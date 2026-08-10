@@ -21,12 +21,32 @@
 #define MOUSE_CUR_W 8
 #define MOUSE_CUR_H 8
 
+#define EV_QUEUE_MAX 64
+
 static volatile int mouse_x = 0;
 static volatile int mouse_y = 0;
 static volatile int mouse_buttons = 0;
 
 static int mouse_state = 0;         /* 0..2: bytes del paquete pendientes */
 static uint8_t mouse_pkt[3];
+static uint8_t mouse_buttons_prev = 0;
+
+static mouse_event_t ev_queue[EV_QUEUE_MAX];
+static volatile int ev_head = 0;    /* posicion de escritura */
+static volatile int ev_tail = 0;    /* posicion de lectura */
+
+static void event_push(int type, int x, int y, int buttons, int key)
+{
+    int next = (ev_head + 1) % EV_QUEUE_MAX;
+    if (next == ev_tail)            /* cola llena: descartar */
+        return;
+    ev_queue[ev_head].type = type;
+    ev_queue[ev_head].x = x;
+    ev_queue[ev_head].y = y;
+    ev_queue[ev_head].buttons = buttons;
+    ev_queue[ev_head].key = key;
+    ev_head = next;
+}
 
 /* Flecha 8x8 (blanco sobre lo que haya; el fondo queda transparente). */
 static const unsigned char cursor_bits[MOUSE_CUR_H] = {
@@ -119,6 +139,15 @@ void mouse_irq(void)
         if (mouse_pkt[0] & 0xC0)    /* overflow X/Y: paquete invalido */
             return;
         mouse_buttons = mouse_pkt[0] & 0x07;
+        if (mouse_buttons != mouse_buttons_prev) {
+            if (mouse_buttons & ~mouse_buttons_prev)
+                event_push(EV_BUTTON_DOWN, mouse_x, mouse_y,
+                           mouse_buttons, 0);
+            if (mouse_buttons_prev & ~mouse_buttons)
+                event_push(EV_BUTTON_UP, mouse_x, mouse_y,
+                           mouse_buttons, 0);
+            mouse_buttons_prev = mouse_buttons;
+        }
         dx = (int8_t)mouse_pkt[1];
         dy = (int8_t)mouse_pkt[2];
         mouse_x += dx;
@@ -131,6 +160,7 @@ void mouse_irq(void)
             mouse_y = 0;
         if (mouse_y >= VBE_SCREEN_H)
             mouse_y = VBE_SCREEN_H - 1;
+        event_push(EV_MOVE, mouse_x, mouse_y, mouse_buttons, 0);
         mouse_draw_cursor();
     }
 }
@@ -177,5 +207,19 @@ int mouse_read(int *x, int *y, int *buttons)
     *x = mouse_x;
     *y = mouse_y;
     *buttons = mouse_buttons;
+    return 0;
+}
+
+void mouse_event_push_key(int key)
+{
+    event_push(EV_KEY, 0, 0, 0, key);
+}
+
+int mouse_event_dequeue(mouse_event_t *ev)
+{
+    if (ev_head == ev_tail)
+        return -1;
+    *ev = ev_queue[ev_tail];
+    ev_tail = (ev_tail + 1) % EV_QUEUE_MAX;
     return 0;
 }
