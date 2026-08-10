@@ -15,6 +15,13 @@
 static volatile char kbd_buffer[KBD_BUF];
 static volatile int kbd_head = 0;   /* posicion de escritura */
 static volatile int kbd_tail = 0;   /* posicion de lectura */
+static volatile int kbd_shift = 0;  /* Shift izq/der pulsado */
+
+/* Scancodes set 1 de las teclas Shift (make/break). */
+#define KBD_SC_LSHIFT_DOWN 0x2A
+#define KBD_SC_LSHIFT_UP   0xAA
+#define KBD_SC_RSHIFT_DOWN 0x36
+#define KBD_SC_RSHIFT_UP   0xB6
 
 /* Scancode set 1 (US QWERTY), tecla base sin shift. 0 = sin caracter. */
 static const char scancode_table[128] = {
@@ -42,6 +49,7 @@ void keyboard_init(void)
 {
     kbd_head = 0;
     kbd_tail = 0;
+    kbd_shift = 0;
 
     /* El bootloader (enable_a20) deja el teclado deshabilitado en el 8042
      * (comando 0xAD) y nunca lo re-habilita: sin esto el 8042 ignora el
@@ -57,6 +65,14 @@ void keyboard_irq(void)
 {
     uint8_t scancode = inb(KBD_DATA);
 
+    if (scancode == KBD_SC_LSHIFT_DOWN || scancode == KBD_SC_RSHIFT_DOWN) {
+        kbd_shift = 1;
+        return;
+    }
+    if (scancode == KBD_SC_LSHIFT_UP || scancode == KBD_SC_RSHIFT_UP) {
+        kbd_shift = 0;
+        return;
+    }
     /* bit 7 = key release: ignorar (solo keydown) */
     if (scancode & 0x80)
         return;
@@ -64,6 +80,8 @@ void keyboard_irq(void)
     char c = scancode_table[scancode & 0x7F];
     if (c == 0)
         return;
+    if (c == '-' && kbd_shift)
+        c = '_';
     mouse_event_push_key(c);        /* Fase 14: eventos graficos */
 
     int next = (kbd_head + 1) % KBD_BUF;
