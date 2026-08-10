@@ -128,6 +128,84 @@ static void drawtext(int x, int y, const char *s, uint32_t fg)
     }
 }
 
+/* --- Widgets (Fase 15) ---
+ * Mini-API de widgets para el escritorio (Fase 17). Un boton es un rect
+ * con label y dos pares de colores (normal / presionado); el estado se
+ * actualiza con los eventos de SYS_EVENT y se repinta solo en las
+ * transiciones (hover -> press -> click). No se expande CreateWindowEx
+ * ni GDI de Windows: es API propia, exportada como MyOS_*. */
+
+typedef struct {
+    int      x, y, w, h;        /* rect del boton */
+    const char *label;
+    uint32_t fg, bg;            /* colores normal */
+    uint32_t fg_p, bg_p;        /* colores presionado (invertidos) */
+    int      hovered, pressed;
+} user32_button_t;
+
+static int point_in_rect(int px, int py, int x, int y, int w, int h)
+{
+    return px >= x && px < x + w && py >= y && py < y + h;
+}
+
+/* Dibuja el boton segun su estado (hover: fondo mas claro; press: colores
+ * invertidos). El label se centra con la fuente 8x16. */
+static void user32_draw_button(user32_button_t *b)
+{
+    uint32_t bg, fg;
+    int lw;
+
+    if (b->pressed) {
+        bg = b->bg_p;
+        fg = b->fg_p;
+    } else if (b->hovered) {
+        bg = b->bg;
+        fg = b->fg;
+        bg = 0x00AAAAAAu;       /* hover: fondo mas claro */
+        fg = 0x00000000u;
+    } else {
+        bg = b->bg;
+        fg = b->fg;
+    }
+    fillrect(b->x, b->y, b->w, b->h, bg);
+    lw = (int)strlen32(b->label) * 8;
+    drawtext(b->x + (b->w - lw) / 2, b->y + (b->h - 16) / 2,
+             b->label, fg);
+}
+
+/* Procesa un evento contra el boton: repinta en cada transicion de estado
+ * y devuelve 1 cuando recibe un click completo (down+up dentro del rect). */
+static int user32_button_feed(user32_button_t *b, uint32_t *ev)
+{
+    int in = point_in_rect((int)ev[1], (int)ev[2], b->x, b->y, b->w, b->h);
+
+    if (ev[0] == EV_BUTTON_DOWN) {
+        if (!in)
+            return 0;
+        b->pressed = 1;
+        user32_draw_button(b);
+        return 0;
+    }
+    if (ev[0] == EV_BUTTON_UP) {
+        if (b->pressed) {
+            b->pressed = 0;
+            b->hovered = in;
+            user32_draw_button(b);
+            return in ? 1 : 0;  /* click completo solo si suelta dentro */
+        }
+        if (b->hovered != in) {
+            b->hovered = in;
+            user32_draw_button(b);
+        }
+        return 0;
+    }
+    if (ev[0] == EV_MOVE && !b->pressed && b->hovered != in) {
+        b->hovered = in;
+        user32_draw_button(b);
+    }
+    return 0;
+}
+
 /* --- MessageBoxA --- */
 
 /* Botones: 0 = OK. Devuelve IDOK (1) al hacer clic en OK o pulsar Enter. */
@@ -137,8 +215,7 @@ int MessageBoxA(void *h, const char *text, const char *caption, uint32_t type)
     uint32_t ev[5];
     int wx, wy, ww, wh;
     int tx, ty;
-    int bx, by, bw, bh;             /* rect del boton OK */
-    int pressed = 0;
+    user32_button_t btn;
 
     (void)h;
     (void)type;
@@ -172,12 +249,18 @@ int MessageBoxA(void *h, const char *text, const char *caption, uint32_t type)
     ty += 20;
     drawtext(tx, ty, "Haz clic en OK o pulsa Enter para cerrar", COLOR_TEXT);
 
-    bx = wx + ww / 2 - 30;
-    by = wy + wh - 42;
-    bw = 60;
-    bh = 22;
-    fillrect(bx, by, bw, bh, COLOR_BTN);
-    drawtext(bx + 17, by + 2, "OK", COLOR_BTN_TX);
+    btn.x = wx + ww / 2 - 30;
+    btn.y = wy + wh - 42;
+    btn.w = 60;
+    btn.h = 22;
+    btn.label = "OK";
+    btn.fg = COLOR_BTN_TX;
+    btn.bg = COLOR_BTN;
+    btn.fg_p = COLOR_BTN;
+    btn.bg_p = COLOR_TEXT;
+    btn.hovered = 0;
+    btn.pressed = 0;
+    user32_draw_button(&btn);
 
     /* Bucle de eventos (no bloqueante): clic sobre OK o Enter (EV_KEY)
      * cierran el dialogo. El scheduler desaloja el bucle ocupado por
@@ -185,15 +268,7 @@ int MessageBoxA(void *h, const char *text, const char *caption, uint32_t type)
     for (;;) {
         if (sys_event(ev) != 0)
             continue;
-        if (ev[0] == EV_BUTTON_DOWN &&
-            ev[1] >= bx && ev[1] < bx + bw &&
-            ev[2] >= by && ev[2] < by + bh) {
-            pressed = 1;
-            /* estado presionado: colores invertidos */
-            fillrect(bx, by, bw, bh, COLOR_TEXT);
-            drawtext(bx + 17, by + 2, "OK", COLOR_BTN);
-        }
-        if (ev[0] == EV_BUTTON_UP && pressed)
+        if (user32_button_feed(&btn, ev))
             return 1;
         if (ev[0] == EV_KEY && ev[4] == '\n')
             return 1;
@@ -207,5 +282,9 @@ typedef struct {
 
 win32_export_t __exports[] __attribute__((section(".exports"))) = {
     { "MessageBoxA", (uint32_t)&MessageBoxA },
+    { "MyOS_PollEvent", (uint32_t)sys_event },
+    { "MyOS_DrawButton", (uint32_t)user32_draw_button },
+    { "MyOS_WidgetHit", (uint32_t)point_in_rect },
+    { "MyOS_ButtonFeed", (uint32_t)user32_button_feed },
     { "", 0 },
 };

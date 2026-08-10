@@ -23,6 +23,7 @@ mingw-w64 en ring 3, gracias a shims de `kernel32.dll` y `msvcrt.dll`.
 | 12   | **GUI: VBE 800x600x32** (dispi + LFB del BAR0 PCI, consola gráfica `vgafx`) y `MessageBoxA` real dibujando una ventana con botón OK |
 | 13   | **Ratón PS/2 (IRQ12) + cursor** en el framebuffer (driver 8042, paquete de 3 bytes, save/restore) |
 | 14   | **Syscalls de eventos gráficos** (`SYS_MOUSEINFO` 16, `SYS_EVENT` 17, cola FIFO global) y **primer widget interactivo**: el botón OK de `MessageBoxA` responde al clic (estado presionado) |
+| 15   | **Widgets interactivos en user32**: mini-API de widgets (`MyOS_PollEvent`/`MyOS_DrawButton`/`MyOS_WidgetHit`/`MyOS_ButtonFeed`) con botones con hover y press, lista para el escritorio |
 
 ## Requisitos
 
@@ -149,9 +150,13 @@ Todos los detalles, decisiones y bugs encontrados están en `DESIGN.md`.
   de eventos de ratón y teclado (`SYS_MOUSEINFO` 16 / `SYS_EVENT` 17) y
   `MessageBoxA` con el botón OK **clickeable** (hit-testing + estado
   presionado; cierre con clic o Enter). Escalera de compatibilidad
-  **14/14 PASS** (disco). Fase 15 en curso: widgets interactivos en user32
-  (mini-API `user32_poll_event`/`user32_widget_hit` como base del
-  escritorio de la Fase 17).
+  **14/14 PASS** (disco).
+- Fase 15 completada: **widgets interactivos en user32** — mini-API de
+  botones (`MyOS_PollEvent`/`MyOS_DrawButton`/`MyOS_WidgetHit`/
+  `MyOS_ButtonFeed`) con hover y estado presionado, validada por
+  screendump en los tres estados; `MessageBoxA` refactorizado sobre ella.
+  Escalera **14/14 PASS** (disco). Fase 16 en curso: gestor de ventanas
+  (z-order, repaint parcial, arrastre) como antesala del escritorio.
 - Roadmap tentativo: long mode (64 bits), ATA con escritura de archivos
   (CreateFileA con GENERIC_WRITE), GUI completa (widgets → window manager
   con z-order → escritorio con barra de tareas y explorador de archivos),
