@@ -67,7 +67,7 @@ static win_t *wm_hit(int px, int py)
     int i, best = -1, bestz = -1;
     for (i = 0; i < WM_MAX_WINS; i++) {
         int z;
-        if (!wins[i].visible)
+        if (!wins[i].visible || (wins[i].flags & WM_FLAG_BG))
             continue;
         z = wins[i].z + (wins[i].flags & WM_FLAG_FIXED ? 0x1000 : 0);
         if (z <= bestz)
@@ -86,12 +86,30 @@ static win_t *wm_topmost(void)
     int i, best = -1, bestz = -1;
     for (i = 0; i < WM_MAX_WINS; i++) {
         int z;
-        if (!wins[i].visible)
+        if (!wins[i].visible || (wins[i].flags & WM_FLAG_BG))
             continue;
         z = wins[i].z + (wins[i].flags & WM_FLAG_FIXED ? 0x1000 : 0);
         if (z > bestz) {
             best = i;
             bestz = z;
+        }
+    }
+    return best >= 0 ? &wins[best] : NULL;
+}
+
+/* Ventana superior NO fija (excluye la taskbar): destino del teclado
+ * cuando hay una app abierta. La barra de tareas es la mas alta del
+ * z-order (FIXED = +0x1000) y si se usara wm_topmost() el teclado
+ * nunca llegaria a las apps del escritorio. */
+static win_t *wm_topmost_app(void)
+{
+    int i, best = -1, bestz = -1;
+    for (i = 0; i < WM_MAX_WINS; i++) {
+        if (!wins[i].visible || (wins[i].flags & (WM_FLAG_FIXED | WM_FLAG_BG)))
+            continue;
+        if (wins[i].z > bestz) {
+            best = i;
+            bestz = wins[i].z;
         }
     }
     return best >= 0 ? &wins[best] : NULL;
@@ -121,20 +139,18 @@ static win_t *wm_dragging(void)
 static void wm_raise(win_t *w)
 {
     int top = -1, i;
-    if (w->flags & WM_FLAG_FIXED)
+    if (w->flags & (WM_FLAG_FIXED | WM_FLAG_BG))
         return;
     for (i = 0; i < WM_MAX_WINS; i++)
         if (wins[i].visible && !(wins[i].flags & WM_FLAG_FIXED) &&
             wins[i].z > top)
             top = wins[i].z;
-    if (w->z == top)
-        return;
     for (i = 0; i < WM_MAX_WINS; i++) {
         if (wins[i].visible && !(wins[i].flags & WM_FLAG_FIXED) &&
             wins[i].z > w->z)
             wins[i].z--;
     }
-    w->z = top;
+    w->z = top + 1;             /* por encima de todos los no fijos */
 }
 
 /* Primer arranque: snapshot del LFB actual (la consola vgafx queda como
@@ -162,19 +178,25 @@ static void wm_blit_client(const win_t *w)
     for (y = 0; y < (uint32_t)w->ch; y++) {
         uint8_t *dst = (uint8_t *)lfb +
                        ((uint32_t)(w->cy + y) * VBE_SCREEN_W + w->cx) * 4;
-        uint32_t row = 0;
+        uint32_t row = y * (uint32_t)w->cw * 4;  /* linea del buffer     */
         uint32_t n = (uint32_t)w->cw * 4;
         while (n > 0) {
             uint32_t va = w->buf_va + row;
             uint32_t chunk = 0x1000 - (va & 0xFFF);
+            uint32_t base = va & ~0xFFFu;
+            uint32_t off  = va & 0xFFFu;
+            uint32_t frame;
             if (chunk > n)
                 chunk = n;
-            if (va >= USER_VADDR_END || !paging_is_user(w->pd, va)) {
+            frame = paging_user_frame(w->pd, base);
+            if (frame == 0) {
                 row += n;
                 n = 0;
-                break;              /* buffer invalido: dejar el resto */
+                break;
             }
-            memcpy(dst + row, (void *)va, chunk);
+            uint8_t *src = (uint8_t *)(frame + off);
+            memcpy(dst, src, chunk);
+            dst += chunk;
             row += chunk;
             n -= chunk;
         }
@@ -316,7 +338,7 @@ int wm_create(const char *title, int x, int y, int w, int h,
     win_t *win = NULL;
     int i;
 
-    if (!vbe_graphics_active || w < 50 || h < 50 ||
+    if (!vbe_graphics_active || w < 50 || h < 20 ||
         w > VBE_SCREEN_W || h > VBE_SCREEN_H)
         return -1;
     for (i = 0; i < WM_MAX_WINS; i++)
@@ -482,6 +504,13 @@ int wm_event_claim(uint32_t pd, mouse_event_t *ev)
     return -1;
 }
 
+/* Devuelve 1 si hay alguna ventana visible (el escritorio manda sobre la
+ * consola: vgafx suprime el dibujado en pantalla mientras exista). */
+int wm_has_windows(void)
+{
+    return wm_active;
+}
+
 /* Devuelve el PD al que enrutar (WM_ROUTE_TO_PD), WM_ROUTE_CONSUMED o
  * WM_ROUTE_RAW (sin ventanas: el evento va al llamador). */
 int wm_route(mouse_event_t *ev)
@@ -555,7 +584,9 @@ int wm_route(mouse_event_t *ev)
             return (int)w->pd;
         return wm_focus_pd ? (int)wm_focus_pd : WM_ROUTE_RAW;
     case EV_KEY:
-        w = wm_topmost();           /* teclado: la ventana de foco */
+        w = wm_topmost_app();   /* la app abierta (no la taskbar) */
+        if (!w)
+            w = wm_topmost();
         if (!w)
             return WM_ROUTE_RAW;
         wm_focus_pd = w->pd;

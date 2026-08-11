@@ -26,6 +26,9 @@
 #define WM_FLAG_FIXED    0x1      /* siempre arriba (taskbar); sin drag  */
 #define WM_FLAG_NOFRAME  0x2      /* sin marco/titulo/X: el cliente      */
                                   /* ocupa todo el rect de la ventana    */
+#define WM_FLAG_BG       0x4      /* fondo del escritorio: siempre z=0,  */
+                                  /* sin raise/foco y opaca al hit-test  */
+                                  /* (los clics pasan al foco)           */
 
 /* Resultados de wm_route(). */
 #define WM_ROUTE_RAW      0       /* sin ventanas: entregar al llamador  */
@@ -46,6 +49,9 @@ int wm_info(int id, uint32_t *out);
  * snapshot de fondo. La invoca sched_kill_current antes de liberar el
  * espacio de usuario. */
 void wm_cleanup_pd(uint32_t pd);
+
+/* 1 si hay ventanas visibles (la consola vgafx se suprime en pantalla). */
+int wm_has_windows(void);
 
 /* Enrutamiento de un evento (Fase 17): consume el drag, transforma el
  * boton X en EV_WINCLOSE y devuelve WM_ROUTE_TO_PD con el PD destino
