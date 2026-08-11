@@ -15,7 +15,7 @@
 ;
 ; Mapa de memoria relevante (ver DESIGN.md):
 ;   0x7000  boot_info | 0x7C00 bootloader | 0x7E00 E820 | 0x10000 kernel
-;   0x140000 imagen MEFS (modo CD, 256 KB, reservada por el PMM)
+;   0x140000 imagen MEFS (modo CD, ~286 KB, reservada por el PMM)
 ;   0x180000 PD/PT del kernel (pmm_reserve_range) | 0x90000 pila PM
 ;   VGA 0xB8000
 ;
@@ -30,7 +30,7 @@
 KERNEL_LOAD_SEG  equ 0x1000        ; segmento:0x1000 -> fisica 0x10000
 KERNEL_OFFSET    equ 0x0000
 KERNEL_SECTORS   equ 128           ; 128 sectores = 64 KB (kernel pad)
-FS_SECTORS       equ 512           ; fs.bin rellenado a 512 sectores (Makefile)
+FS_SECTORS       equ 560           ; fs.bin rellenado a 560 sectores (Makefile)
 CODE_SEG         equ gdt_code - gdt_start
 DATA_SEG         equ gdt_data - gdt_start
 MMAP_ADDR        equ 0x7E00        ; buffer E820: dword contador + entradas de 20 B
@@ -133,8 +133,8 @@ write_bootinfo:
 ; Modo CD (El Torito no-emulation): la BIOS cargo la imagen completa
 ; (boot + kernel + fs.bin) en 0x7C00. Mapa en RAM:
 ;   0x7C00 boot (512 B) | 0x7E00 kernel (KERNEL_SECTORS*512 = 64 KB)
-;   0x17E00: imagen MEFS (FS_SECTORS*512 = 256 KB, max 512 sectores:
-;   0x140000 + 0x40000 = 0x180000, borde del rango reservado del PMM)
+;   0x17E00: imagen MEFS (FS_SECTORS*512 = 286 KB, max 560 sectores:
+;   0x140000 + 0x46000 = 0x186000, borde del rango reservado del PMM)
 ; Copias con rep movsd: el 66 fija operando (movsd + ECX) y el 67
 ; (db 0x67) ESI/EDI de 32 bits; sin el 67 se usarian SI/DI de 16
 ; bits (truncado). Orden: primero el FS, luego el kernel hacia ATRAS
