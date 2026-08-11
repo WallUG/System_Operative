@@ -159,6 +159,12 @@ static void sys_exec(const char *name, registers_t *regs)
     regs->user_esp = USER_ESP0_INIT;
     sched_user_heap_set(USER_HEAP_BASE);    /* heap nuevo (bump en 0) */
 
+    /* exec reescribio las tablas de pagina del CR3 actual (paging_free_user_
+     * space + elf_load_into + win32_map_all) sin cambiar de tarea: el fetch
+     * del entry podria usar traducciones TLB viejas que apuntan a frames
+     * liberados/reusados. Flush forzado con mov cr3,cr3. */
+    paging_switch(sched_current_cr3());
+
     /* Continuar en el nuevo entry; eax=0 "exito" (nunca se usa). */
     regs->eip = entry;
     regs->eax = 0;

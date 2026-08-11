@@ -10,12 +10,22 @@
 #include "vbe.h"
 #include "string.h"
 #include "font8x16.h"
+#include "winmgr.h"
 
 #define COLOR_BG       0x00000000u
 #define COLOR_FG       0x00FFFFFFu
 
 static int vgafx_row = 0;
 static int vgafx_col = 0;
+
+/* Mientras el WM tiene ventanas (escritorio), la consola NO pinta en el
+ * LFB (el escritorio manda sobre la pantalla); el texto sigue yendose
+ * por serial intacto. Al cerrarse la ultima ventana el cursor continua
+ * donde estaba y la siguiente linea vuelve a aparecer. */
+static int vgafx_suppressed(void)
+{
+    return wm_has_windows();
+}
 
 static void vgafx_putglyph(int x, int y, char c, uint32_t fg, uint32_t bg)
 {
@@ -64,6 +74,8 @@ static void vgafx_scroll(void)
 
 void vgafx_putc(char c)
 {
+    if (vgafx_suppressed())
+        return;
     switch (c) {
     case '\n':
         vgafx_row++;

@@ -77,8 +77,10 @@ void pmm_init(void)
 
     /* El kernel arranca desde 1 MiB: reservar el rango bajo completo
      * (PD/PT del kernel, pilas de las tareas de arranque) para que el
-     * asignador nunca entregue dos veces una misma pagina de esa zona. */
-    pmm_reserve_range(0x100000, 0x80000);
+     * asignador nunca entregue dos veces una misma pagina de esa zona.
+     * Cubre tambien la imagen MEFS en RAM (modo CD): 0x140000 +
+     * FS_SECTORS*512 (560 sectores = 286 KB) termina en 0x186000. */
+    pmm_reserve_range(0x100000, 0x86000);
 }
 
 uint32_t pmm_free_count(void)

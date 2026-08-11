@@ -59,6 +59,25 @@ void keyboard_init(void)
     outb(0x64, 0xAE);               /* enable keyboard */
     while (inb(0x64) & 0x01)        /* drenar bytes pendientes */
         inb(0x60);
+
+    /* Habilitar la IRQ del teclado (bit 0) en el byte de config del 8042.
+     * QEMU no levanta IRQ1 mientras ese bit este a 0 (el raton lo hace en
+     * mouse_init con el bit 1): sin esto los scancodes se acumulan en 0x60
+     * sin interrumpir. */
+    while (inb(0x64) & 0x02)
+        ;
+    outb(0x64, 0x20);               /* lee config byte */
+    while (!(inb(0x64) & 0x01))
+        ;
+    {
+        uint8_t config = inb(0x60);
+        while (inb(0x64) & 0x02)
+            ;
+        outb(0x64, 0x60);           /* escribe config byte */
+        while (inb(0x64) & 0x02)
+            ;
+        outb(0x60, config | 0x01);
+    }
 }
 
 void keyboard_irq(void)
