@@ -93,8 +93,13 @@ user/win32/      shims de DLLs: kernel32.dll, user32.dll, ntdll.dll,
                  msvcrt.dll, dir.exe (listado FS vía API Win32) y
                  hello_win.exe (CRT mingw real)
 tools/           makepe.py (ELF → PE MyOS), makeiso.py, makefs.py
+docs/            documentación técnica formal por subsistema
 DESIGN.md        decisiones de diseño y bitácora por fases (leer primero)
 ```
+
+Documentación técnica completa por subsistema: **`docs/`** — arquitectura,
+arranque, memoria, multitarea, filesystem, syscalls, drivers, GUI/window
+manager, capa Win32, y la evaluación de correr apps Windows GUI reales.
 
 ## Cómo funciona lo de los .exe (Fase 8-9)
 
@@ -181,9 +186,6 @@ Todos los detalles, decisiones y bugs encontrados están en `DESIGN.md`.
   `f17_test.py` **OK 1-5 + DONE** (fork + 2 procesos × 2 ventanas,
   limpieza total). **Arranque por ISO (El Torito) validado: 14/14 PASS**.
 - Roadmap tentativo: long mode (64 bits), ATA con escritura de archivos
-  (CreateFileA con GENERIC_WRITE), según el interés.
-- **Plan de documentación futura**: `DESIGN.md`/README documentan lo
-  esencial por fase; está pendiente una documentación formal y detallada
-  (arquitectura, flujo de arranque, ABI, drivers, loader PE, GUI) como
-  recurso de estudio y referencia. Es trabajo planificado, no parte de
-  esta fase.
+  (CreateFileA con GENERIC_WRITE), **apps Windows GUI reales** (ver
+  `docs/10-win32-gui-eval.md`: primero nuestro notepad mingw, luego un
+  exe externo como Metapad), según el interés.
