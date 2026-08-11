@@ -25,7 +25,7 @@ mingw-w64 en ring 3, gracias a shims de `kernel32.dll` y `msvcrt.dll`.
 | 14   | **Syscalls de eventos gráficos** (`SYS_MOUSEINFO` 16, `SYS_EVENT` 17, cola FIFO global) y **primer widget interactivo**: el botón OK de `MessageBoxA` responde al clic (estado presionado) |
 | 15   | **Widgets interactivos en user32**: mini-API de widgets (`MyOS_PollEvent`/`MyOS_DrawButton`/`MyOS_WidgetHit`/`MyOS_ButtonFeed`) con botones con hover y press, lista para el escritorio |
 | 16   | **Gestor de ventanas en el kernel** (winmgr): `SYS_WINCREATE` 18-`SYS_WININFO` 22, composición centralizada con marco/título/botón X, z-order con snapshot del fondo, arrastre por la barra de título |
-| 17   | **Enrutado de eventos por PD + limpieza al morir la tarea**: colas FIFO por app (`wm_route`), `EV_KEY` → ventana superior, clic/drag → dueño bajo el cursor; `wm_cleanup_pd` al morir la tarea; **fix: el kernel zeroea su `.bss` en el arranque → funciona el arranque por CD (ISO + El Torito)** |
+| 17   | **Escritorio completo + enrutado por PD + limpieza al morir**: colas FIFO por app (`wm_route`), `EV_KEY` → ventana superior, clic/drag → dueño bajo el cursor; `wm_cleanup_pd` al morir la tarea; **escritorio funcional** (`desktop.c`: wallpaper, taskbar, botón EXPLORADOR; `explorer.c`: lista MEFS, selección, visor de texto; `win_two.c`: visor); **fixes críticos**: TLB flush en `exec`, IRQ1 teclado, z-order del WM, blit cliente corregido, FS truncado (512→560 sectores). Escalera **14/14 PASS** (disco e ISO). |
 
 ## Requisitos
 
@@ -166,25 +166,22 @@ Todos los detalles, decisiones y bugs encontrados están en `DESIGN.md`.
   entregado como `EV_WINCLOSE` 5. `win_demo.c` validado con QMP
   (screendumps: superposición inicial, ventana arrastrada, ventana
   cerrada). Escalera **14/14 PASS** (disco).
-- Fase 17 completada: **enrutado de eventos por PD** — el modelo de la
-  Fase 14 (cola global + un único consumidor) no sirve con 2+ procesos
-  gráficos: `wm_route` enruta cada evento a la cola FIFO de la app dueña
-  (`EV_KEY` → ventana superior, clic/drag → dueño bajo el cursor),
-  `SYS_EVENT` reclama solo su propia cola y `SYS_WINCLOSE` valida el
-  dueño. **Bug #1**: al morir una tarea, `wm_cleanup_pd` libera sus
-  ventanas, su cola y recalcula fondo/foco (validado con `win_two.c`:
-  fork + 2 procesos × 2 ventanas, limpieza total y shell al prompt).
-  **Bug de arranque por CD**: el kernel nunca zeroeaba su `.bss` (que el
-  linker coloca hasta 0x2A974, más allá de los 64 KB del kernel.bin); en
-  modo CD la BIOS cargaba los bytes de `fs.bin` encima del `.bss` y las
-  variables del scheduler quedaban corruptas → panic. Fix: `_start`
-  zeroea `__bss_start..__bss_end` (entry.asm + símbolos en linker.ld).
-  Escalera **14/14 PASS** tanto en disco como en **ISO (El Torito)**,
-  y el tope de reintentos del serial (THRE) evita cuelgues por
-  backpressure del chardev de QEMU.
+- Fase 17 completada: **entorno de escritorio funcional** —
+  `desktop.c` (wallpaper + taskbar con botón EXPLORADOR), `explorer.c`
+  (lista MEFS con `SYS_DLIST`, selección por clic, Enter abre visor de
+  texto `win_two.c`), `winlib.h` (API compartida). **Enrutado de eventos
+  por PD** — `wm_route` enruta `EV_KEY` a la ventana superior, clic/drag
+  al dueño bajo el cursor; `SYS_EVENT` reclama solo su cola; `wm_cleanup_pd`
+  libera ventanas y colas al morir la tarea. **5 bugs críticos corregidos**:
+  (1) TLB flush en `sys_exec`, (2) IRQ1 teclado habilitada, (3) z-order
+  del WM (raise + excluir BG), (4) blit cliente con offset correcto,
+  (5) FS truncado (`FS_SECTORS=512→560`, PMM reserva extendida).
+  **Validación completa**: `desktop_test.py` **OK 1-9 + DONE**,
+  `ladder_test.py` **14/14 PASS** (incluye messagebox GUI),
+  `f17_test.py` **OK 1-5 + DONE** (fork + 2 procesos × 2 ventanas,
+  limpieza total). **Arranque por ISO (El Torito) validado: 14/14 PASS**.
 - Roadmap tentativo: long mode (64 bits), ATA con escritura de archivos
-  (CreateFileA con GENERIC_WRITE), escritorio completo (barra de tareas y
-  explorador de archivos sobre MEFS), según el interés.
+  (CreateFileA con GENERIC_WRITE), según el interés.
 - **Plan de documentación futura**: `DESIGN.md`/README documentan lo
   esencial por fase; está pendiente una documentación formal y detallada
   (arquitectura, flujo de arranque, ABI, drivers, loader PE, GUI) como

@@ -210,3 +210,28 @@ kernel lo usa para elegir la fuente del filesystem: `mefs_init_mem`
 - **Fase 17 (z-order plano y routing)**: con todas las ventanas en z=0 (el `wm_raise` con `z==top` no sube nada), `wm_topmost()` devuelve la primera visible en el array → los eventos de teclado van siempre a esa ventana. Para el test es suficiente; el raise real (clic en cliente) se mantiene de la Fase 16.
 - **Fase 17 (validacion final)**: `win_two.c` (en fs.bin) hace `fork` al inicio: padre e hijo crean cada uno 2 ventanas (A azul 0x0060B0, B roja 0xB04030, 320x200) con sus PDs separados y loguean su pid (`dem[pid=3]: ventanas A=1 B=3`, `two[pid=4]: ventanas A=2 B=4`). Con QMP se inyecta `q` dos veces: cada tecla cierra un proceso (`fin` + `exit:0` + limpieza `nw=2`); la shell vuelve al prompt y el screendump final da `azul=0 rojo=0 marco=0` (sin restos). **Nota de test**: el `q` inyectado tambien cae en el buffer PS/2 de la shell; al morir ambos procesos la shell reanuda su linea pendiente ("qq") y necesita un Enter para volver a mostrar el prompt.
 - **Fase 17 (bug de arranque desde CD, corregido)**: el ISO (El Torito) crasheaba durante el arranque (panic en el primer `timer IRQ`, `current`/`tasks`/`tick_count` corruptos con bytes de codigo de los DLLs). **Causa raiz**: el kernel nunca zeroeaba su `.bss`; el linker lo coloca hasta 0x2A974, mas alla de los 64 KB de `kernel.bin` que el bootloader copia a 0x10000-0x20000. En modo disco la RAM de QEMU arranca en 0 y funcionaba de casualidad; en modo CD la BIOS carga la imagen completa de `os-image.bin` en 0x7C00 y los bytes de `fs.bin` caen encima de la zona `.bss` > 0x20000. Fix en `kernel/entry.asm`: `_start` zeroea `__bss_start..__bss_end` (símbolos nuevos en `linker.ld`) con `rep stosb`, preservando `boot_info` en `edx`. **Escalera 14/14 PASS tanto en ISO como en disco**; el test `ladder_cd_test.py` valida el arranque real por El Torito.
+
+## Bitácora de la Fase 17 (completación: escritorio funcional + correcciones críticas)
+
+Tras la integración inicial de la Fase 17, el test de escritorio (`desktop_test.py`) y la escalera de compatibilidad (`ladder_test.py`) revelaron cinco problemas adicionales que se corrigieron en esta sesión:
+
+- **Bug #2: TLB obsoleto tras `exec`** — `sys_exec` reescribe las tablas de página del CR3 actual (`elf_load_into` + `win32_map_all`) pero no flushea la TLB. El primer fetch del entry point usaba una traducción vieja que apuntaba a un frame liberado → `#PF err=5, cr2=0` con `[eip]` a ceros. Fix: `paging_switch(sched_current_cr3())` al final de `sys_exec` (syscall.c:166).
+
+- **Bug #3: IRQ1 del teclado nunca habilitada** — `mouse_init` activaba la IRQ12 (bit 1 del config byte del 8042) pero `keyboard_init` solo enviaba `0xAE` (activar dispositivo) sin poner el bit 0 (IRQ1 enable). QEMU nunca generaba IRQ1 y los scancodes quedaban en `0x60`. Fix en `keyboard_init`: leer config (0x20→0x60) y escribir `config | 0x01`.
+
+- **Bug #4: Z-order degenerado del WM** — `wm_raise` tenía un fast-path (`w->z == top`) que impedía que el z creciera (todo quedaba en 0), y `wm_topmost_app` no excluía la ventana BG → las teclas se enrutaban a la ventana "Fondo" (escritorio) en vez del explorer. Fix: `w->z = top + 1` en `wm_raise` + excluir `WM_FLAG_BG` en `wm_topmost_app`.
+
+- **Bug #5: Blit del cliente con offset erróneo** — en `wm_blit_client`, `memcpy(dst + row, src, chunk)` sumaba el offset del buffer de usuario (`row`) al puntero LFB destino, escribiendo en coordenadas de pantalla incorrectas y dejando visible el snapshot de la consola. Fix: punteros `src`/`dst` separados y avance lineal de `dst`.
+
+- **Bug #6: FS truncado por `FS_SECTORS=512`** — el FS real creció a 538 sectores con las apps nuevas (desktop/explorer/messagebox/win_two/dir) y el `truncate` cortaba 26 sectores → `messagebox.exe` (LBA 577-666) ilegible ("error leyendo archivo"). Fix sincronizado en 3 sitios: Makefile y boot.asm → `FS_SECTORS=560`, y `pmm_reserve_range(0x100000, 0x86000)` en pmm.c para que la imagen MEFS en RAM (0x140000..0x186000) no se entregue a nadie.
+
+**Entorno de escritorio funcional (nuevas apps en `user/`)**:
+- `desktop.c`: wallpaper a pantalla completa (ventana `WM_FLAG_BG`), barra de tareas (`WM_FLAG_FIXED`) con botón "EXPLORADOR" y hint "q:salir". Clic en el botón → `fork` + `exec explorer.elf` en proceso hijo con PD aislado.
+- `explorer.c`: explorador de archivos con listado MEFS (`SYS_DLIST`), selección por clic, Enter abre visor de texto. `q` cierra.
+- `win_two.c`: visor de texto simple con scroll para el explorador.
+- `winlib.h`: librería compartida de syscalls de ventanas y helpers de eventos.
+
+**Validación final (build limpio, sin instrumentación de debug):**
+- `desktop_test.py`: **OK 1-9 + DONE** (escritorio listo, wallpaper+taskbar, clic lanza explorer, ventana sobre escritorio, fila seleccionada, **Enter abre visor**, q cierra explorer, q cierra escritorio, sin restos).
+- `ladder_test.py`: **14/14 PASS** (incluye `messagebox.exe` abre ventana GUI + cierra con Enter IDOK=1, y `mouseinfo.elf`).
+- `f17_test.py`: **OK 1-5 + DONE** (fork + 2 procesos × 2 ventanas, limpieza total al morir, shell al prompt, sin restos).
