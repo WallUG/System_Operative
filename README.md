@@ -183,8 +183,23 @@ Todos los detalles, decisiones y bugs encontrados están en `DESIGN.md`.
   (5) FS truncado (`FS_SECTORS=512→560`, PMM reserva extendida).
   **Validación completa**: `desktop_test.py` **OK 1-9 + DONE**,
   `ladder_test.py` **14/14 PASS** (incluye messagebox GUI),
-  `f17_test.py` **OK 1-5 + DONE** (fork + 2 procesos × 2 ventanas,
-  limpieza total). **Arranque por ISO (El Torito) validado: 14/14 PASS**.
+   `f17_test.py` **OK 1-5 + DONE** (fork + 2 procesos × 2 ventanas,
+   limpieza total). **Arranque por ISO (El Torito) validado: 14/14 PASS**.
+- Fase 18 completada: **GDI de dibujo + metapad.exe 100% cargado** —
+  `gdi32.dll` con DC de dibujo real (buffer del cliente de user32,
+  `TextOutA`/`FillRect`/`Rectangle`/`LineTo` (Bresenham)/`PatBlt`, objetos
+  GDI stock+creados, `GetTextMetricsA`/`GetDeviceCaps`, stubs de impresión)
+  y **3 módulos nuevos** (`comctl32.dll` con `CreateToolbarEx` fake y
+  `InitCommonControls` por ordinal 8, `comdlg32.dll`/`advapi32.dll`/
+  `shell32.dll`), región Win32 de 5 a 9 DLLs. **`pe.c` reubica PE con
+  ImageBase baja** (0x00400000 de metapad) aplicando la tabla `.reloc` a
+  0x81000000; **teclado set 1 completo** (shift/caps/símbolos, Ctrl/Alt en
+  el evento, teclas VK especiales). `gdidemo.exe` (prueba) y **metapad.exe
+  contento con los imports de sus 8 DLLs**: ventana + menú (146 items) +
+  control RichEdit, sin crash. **Validado por screendump + conteo de
+  píxeles** (rectángulo azul exacto, línea roja diagonal, fondo de texto
+  opaco en gdidemo; cliente blanco de metapad) y **escalera 14/14 PASS**
+  en disco y CD.
 - Roadmap tentativo: long mode (64 bits), ATA con escritura de archivos
   (CreateFileA con GENERIC_WRITE), **apps Windows GUI reales** (ver
   `docs/10-win32-gui-eval.md`: primero nuestro notepad mingw, luego un

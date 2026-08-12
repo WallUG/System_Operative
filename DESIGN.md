@@ -103,6 +103,7 @@ kernel lo usa para elegir la fuente del filesystem: `mefs_init_mem`
 - [x] Fase 15 - **Widgets interactivos en user32**: mini-API de widgets para el escritorio (`user32_button_t` con rect+label+colores normal/presionado y estado hover/pressed; `user32_draw_button` repinta segun estado, `user32_button_feed` procesa eventos y devuelve 1 en click completo, `point_in_rect` de hit-testing; exportadas como `MyOS_PollEvent`/`MyOS_DrawButton`/`MyOS_WidgetHit`/`MyOS_ButtonFeed`); `MessageBoxA` refactorizado sobre la mini-API (hover = fondo mas claro, press = colores invertidos, click = down+up dentro del rect). Validado por screendump en los tres estados del boton. **Escalera 14/14 PASS** en disco
 - [x] Fase 16 - **Gestor de ventanas en el kernel** (opcion B): `kernel/winmgr.c/h` con hasta 8 ventanas (rect total + area cliente `cx/cy/cw/ch`, buffer de la app en ring 3 leido con validacion por pagina, z-order, snapshot del LFB como fondo); el kernel dibuja marco/titulo/boton X y blitea el cliente en orden z; `wm_filter_event` en `SYS_EVENT` consume drag (titulo) y entrega el boton X como `EV_WINCLOSE` 5 (key = id); syscalls `SYS_WINCREATE` 18 (struct por valor con `user_memcpy_in`), `SYS_WINCLOSE` 19, `SYS_WINMOVE` 20, `SYS_WINUPDATE` 21, `SYS_WININFO` 22 (x/y/w/h + cliente). `win_demo.c` (2 ventanas) validado con QMP: arrastre real por el titulo, cierre por X con recomposicion limpia. **Escalera 14/14 PASS** en disco
 - [x] Fase 17 - **Enrutado de eventos por PD + limpieza al morir la tarea**: el modelo de la Fase 14 (cola global + un unico consumidor) no sirve con 2+ procesos graficos. `SYS_EVENT` drena la cola global y `wm_route` la enruta por PD a colas FIFO por app (`wm_client_t`, hasta 4); EV_KEY → `wm_topmost()`, EV_BUTTON_*/MOVE → dueno bajo el cursor (o foco), drag consumido; cada app reclama solo su cola. `SYS_WINCLOSE` valida dueno (`wm_close(id, pd)`). **Bug #1 corregido**: al morir una tarea, `wm_cleanup_pd(cr3)` en `sched_kill_current` elimina sus ventanas, libera su cola y recalcula fondo/foco. `win_two.c` (fork + 2 procesos con 2 ventanas cada uno) validado por QMP: dos `q` cierran ambos procesos (limpieza 2 ventanas x2), la shell vuelve al prompt y el screendump final no deja restos de ventanas. **Escalera 14/14 PASS** en disco
+- [x] Fase 18 - **GDI de dibujo + metapad.exe 100% cargado**: modulo `gdi32.dll` (0xB4000000) con DC de dibujo (`myos_dc_t`/`gdi_dc.h`, buffer del cliente creado por `GetDC/ReleaseDC` de user32, px_disp BGRx) y primitivas `TextOutA`/`FillRect`/`Rectangle`/`MoveToEx`/`LineTo` (Bresenham)/`PatBlt` con objetos GDI (stock index+1, creados en tabla `gdi_obj[]` con handles 0x1000+slot*4: `CreateSolidBrush`/`CreatePen`/`CreateFontIndirectA`/`SelectObject`/`DeleteObject`), atributos (`SetText*/GetText*`/`SetBkMode`), métrica (`GetTextMetricsA`/`TextFaceA`/`CharWidthA`/`GetDeviceCaps` con resolución real via `SYS_GFXINFO`) y stubs de impresión. Modulos nuevos `comctl32.dll` (0xB5000000: `InitCommonControls` ord#8/`InitCommonControlsEx` ord#17, `CreateToolbarEx` handle fake, `PropertySheetA` 0), `comdlg32.dll` (0xB6000000: stubs), `advapi32.dll` (0xB7000000: registro), `shell32.dll` (0xB8000000). **`kernel/pe.c`: reubicacion de PE con ImageBase baja (0x00400000 de metapad) aplicando la tabla `.reloc` a `PE_REBASE_BASE` 0x81000000**. **Teclado set 1 completo** (`keyboard.c`): mayusculas/simbolos, modificadores Ctrl/Alt/Shift/Caps en `buttons` del evento, teclas VK especiales (flechas/home/end/del...) como `EV_KEY` 0x100+. `gdi_demo.c` → `gdidemo.exe` (mingw `-luser32 -lgdi32`, subsystem windows) de prueba; `FS_SECTORS` 560→1100. **metapad.exe (3.6, mingw) carga al 100%**: imports resueltos de sus 8 DLLs (KERNEL32/USER32/GDI32/COMCTL32/COMDLG32/ADVAPI32/SHELL32/msvcrt), ventana con menu (146 items), control hijo RichEdit20A virtual, `GetDC`/paint sincrono. Validado por screendump + conteo de pixeles: gdidemo con rectangulo azul `#4060C0` (4400 px exactos), relleno gris `#C0C0C0`, diagonal roja `#C02020` (LineTo) y fondo de texto `#F0F0F0` (bk opaco); metapad con cliente blanco + titulo + marco. **Escalera 14/14 PASS** en disco y CD
 
 ## Notas de implementación (bitácora)
 
@@ -235,3 +236,59 @@ Tras la integración inicial de la Fase 17, el test de escritorio (`desktop_test
 - `desktop_test.py`: **OK 1-9 + DONE** (escritorio listo, wallpaper+taskbar, clic lanza explorer, ventana sobre escritorio, fila seleccionada, **Enter abre visor**, q cierra explorer, q cierra escritorio, sin restos).
 - `ladder_test.py`: **14/14 PASS** (incluye `messagebox.exe` abre ventana GUI + cierra con Enter IDOK=1, y `mouseinfo.elf`).
 - `f17_test.py`: **OK 1-5 + DONE** (fork + 2 procesos × 2 ventanas, limpieza total al morir, shell al prompt, sin restos).
+
+## Bitácora de la Fase 18 (GDI de dibujo + metapad.exe 100% cargado)
+
+### Objetivo y alcance
+
+La meta de la Fase 18 fue que **`metapad.exe` real (3.6, mingw-w64) cargara y ejecutara al 100 %**: ventana, menús, control de edición y dibujo. Para ello se reescribió el **GDI de dibujo** de user32→gdi32 (que antes era solo la ventana de `messagebox.exe`) y se amplió la capa Win32 de 3 a 9 módulos fijos.
+
+### Modulo gdi32.dll (0xB4000000)
+
+- **DC de dibujo**: `user/win32/gdi_dc.h` define `myos_dc_t` (magic `GDI_DC_MAGIC 'DC1'M`, `buf` = buffer del cliente de la ventana en ring 3 en formato LFB BGRx, `cw/ch`, `ox/oy` para DC de hijos virtuales, `fg/bg`, `bk_mode`, `font/brush/pen` seleccionados, `pen_x/pen_y`). `GetDC/ReleaseDC` de user32 fabrican el DC apuntando al buffer del cliente (ventana top-level) o al rect del hijo en el padre (`ox/oy`), y `gdi32` dibuja dentro con `px_disp` (swap BGR↔RGB).
+- **Primitivas**: `TextOutA` (glifos 8×16 de `font8x16_basic`, bk opaco/transparente), `GetTextExtentPoint32A`, `FillRect`, `PatBlt` (con el brush seleccionado), `Rectangle` (relleno con brush + borde con pen, NULL-safe), `MoveToEx`/`LineTo` (Bresenham, respeta `PS_NULL`).
+- **Objetos GDI**: stock = `index+1` crudo (como Windows); creados en `gdi_obj[32]` con handles `slot*4+0x1000` (para distinguir de stock). `CreateSolidBrush`, `CreatePen` (ancho ignorado, sólido o NULL), `CreateFontIndirectA` (handle sin glifos propios: toda fuente es la 8×16 VGA), `SelectObject`/`DeleteObject` con tipos (brush/pen/fuente).
+- **Atributos y métrica**: `SetTextColor`/`GetTextColor`, `SetBkColor`/`GetBkColor`, `SetBkMode` (`GDI_BK_OPAQUE`/`TRANSPARENT`), `SetMapMode` (solo MM_TEXT), `GetTextMetricsA`/`GetTextFaceA`/`GetCharWidthA` (todo 8×16: tmHeight=16/tmAveCharWidth=8), `GetDeviceCaps` (HORZRES/VERTRES reales del LFB vía `SYS_GFXINFO`, 32 bpp, 96 dpi).
+- **Impresión**: `StartDocA`/`EndDoc`/`StartPage`/`EndPage`/`AbortDoc`/`SetAbortProc` devuelven éxito sin hacer nada (metapad no llega a imprimir porque `PrintDlgA` es stub).
+
+### Modulos nuevos
+
+- **comctl32.dll** (0xB5000000): `InitCommonControls` (exportada por **ordinal 8**, como la importa metapad) y `InitCommonControlsEx` (ordinal 17) sin efectos; `CreateToolbarEx` → **handle fake 0x200** (metapad solo comprueba que no sea NULL para habilitar la barra; no hay toolbar real); `PropertySheetA` → 0 (el diálogo de propiedades no abre).
+- **comdlg32.dll** (0xB6000000): `GetOpenFileNameA`/`GetSaveFileNameA`/`FindTextA`/`ReplaceTextA`/`ChooseFontA`/`ChooseColorA`/`PrintDlgA`/`PageSetupDlgA` → **0 (FALSE, stubs de la Fase 18)**. Se reemplazan en las Fases C/D (diálogo Abrir real sobre MEFS, menús por WM_COMMAND).
+- **advapi32.dll** (0xB7000000): `RegCreateKeyExA`/`RegOpenKeyExA`/`RegQueryValueExA`/`RegSetValueExA`/`RegCloseKey` (en memoria, backend trivial por ahora) e `IsTextUnicode`.
+- **shell32.dll** (0xB8000000): `ShellExecuteA`, `DragQueryFileA`/`DragFinish`.
+
+`kernel/win32.c` `dll_descs[]` pasa de 5 a **9 módulos fijos** (`WIN32_REGION_BASE + i*0x100000`, i=0..8); `Makefile` `DLL_SRCS`/`DLL_ELFS` registra todos y `tools/dll32.ld` ancla cada base con `-defsym=DLL_BASE`.
+
+### Carga de metapad.exe (la pieza que faltaba en el loader)
+
+`metapad.exe` viene con **ImageBase en 0x00400000** (memoria baja), fuera del rango de usuario de MyOS (0x80000000+). `kernel/pe.c`:
+
+- `pe_image_base()` lee la base real de la cabecera opcional en vez de asumir 0x80000000.
+- `pe_apply_relocs(pd, buf, size, old_base, new_base)` aplica la **tabla `.reloc`** (data directory 5) reasentando la imagen de `old_base` a `PE_REBASE_BASE 0x81000000`: recorre bloques (PageRVA + word de 16 bits tipo/offset), tipo 3 = HIGH/LOW (`dword += delta`) y **escribe por el frame físico del PD** (identity map), no sobre el binario en RAM.
+- `load_sections`/`pe_entry` reciben la base final; la IAT se parchea tras mapear.
+
+Con esto metapad **carga y ejecuta**: imports resueltos de sus 8 DLLs (msvcrt, COMCTL32, KERNEL32, USER32, GDI32, COMDLG32, ADVAPI32, SHELL32), registra su clase, crea la ventana top-level, el **control hijo RichEdit20A** (clase built-in de user32 con buffer `child_text` y repintado), el menú (146 items parseados) y los aceleradores; `GetDC`/paint síncrono funcionan sobre el GDI nuevo.
+
+### Teclado set 1 completo (requisito de edición)
+
+Para poder escribir texto (Fase A siguiente) `kernel/drivers/keyboard.c` deja de ignorar shift/etc.:
+
+- Decodificación completa del set 1 US: mayúsculas con Shift/Caps y símbolos de fila superior con Shift.
+- **Modificadores** Ctrl (`0x1D`), Alt (`0x38`) y Caps (`0x3A`) en make/break; se entregan en el campo `buttons` del `EV_KEY` (bit0=ctrl, bit1=alt, bit2=shift) para distinguir `Ctrl+A` de `a`.
+- Teclas especiales como **EV_KEY con key = 0x100+** (VK_*_SPECIAL): flechas, Home/End, PageUp/Down, Del/Ins.
+- El buffer de consola (`keyboard_read`) sigue recibiendo solo los caracteres imprimibles.
+
+### Validación
+
+- `gdidemo.exe` (mingw, `-Wl,--subsystem,windows -luser32 -lgdi32`): `Rectangle(20,20,180,100)` con brush azul, `FillRect(30,30,170,90)` gris claro interior, `MoveToEx(20,120)/LineTo(180,200)` con pen rojo, `TextOutA` con bk opaco. QEMU headless (serial + monitor): `CreateWindowExA id=1`, 2× BeginPaint/EndPaint/ReleaseDC, `exit:0`; **screendump + conteo de píxeles**: `#4060C0` 4400 px (=160×80 azul − 140×60 del relleno interior, exacto), `#C0C0C0` (FillRect + marco), `#C02020` 161 px (diagonal de LineTo), `#F0F0F0` (fondo opaco del texto). Se eliminaron los píxeles de debug que `Rectangle()` pintaba en (0,0)/(0,1).
+- `metapad.exe` en QEMU: ventana con título, cliente blanco (`#FFFFFF` 241578 px) y marco, control RichEdit creado, `GetDC`/`ReleaseDC` OK, sin crash; la shell vuelve al prompt.
+- **Escalera 14/14 PASS** en disco (**floppy/HD raw**) y **CD (El Torito)**.
+
+### Pendientes (fases siguientes)
+
+- **A** — edición real: enrutar `WM_CHAR`/`WM_KEYDOWN` al hijo RichEdit enfocado e insertar/borrar en `child_text` con repintado.
+- **B** — abrir archivo por línea de comandos (`run metapad.exe file.txt`, `argv` ya viaja por el TIB).
+- **C** — diálogo Abrir real (`GetOpenFileNameA` sobre lista MEFS con `FindFirstFileA/FindNextFileA`).
+- **D** — menús/WM_COMMAND + `TrackPopupMenuEx` visible.
+- **E** — FS de escritura (MEFS read-only hoy) para Guardar de verdad.
