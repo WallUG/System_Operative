@@ -723,6 +723,9 @@ static uint32_t child_parent[CHILD_MAX];
 static int      child_x[CHILD_MAX], child_y[CHILD_MAX];
 static int      child_w[CHILD_MAX], child_h[CHILD_MAX];
 static char     child_text[CHILD_MAX][CHILD_TXTLEN];
+static int      child_cur[CHILD_MAX];   /* caret (indice en child_text)  */
+static int      child_edit[CHILD_MAX];  /* 1 = control editable (EDIT/RichEdit) */
+static uint32_t focus_edit;             /* control de edicion enfocado  */
 
 /* DCs de gdi32: uno por hwnd (pool estatico). */
 static myos_dc_t dc_pool[MAX_WNDPROCS];
@@ -736,6 +739,8 @@ static myos_dc_t dc_pool[MAX_WNDPROCS];
 
 static uint32_t builtin_wndproc(uint32_t hwnd, uint32_t m, uint32_t a,
                                 uint32_t b);
+static void child_paint(uint32_t i);    /* pinta un hijo en el padre */
+static void child_repaint(uint32_t i);  /* repinta hijo + sys_winupdate */
 
 typedef struct {
     const char *name;
@@ -865,11 +870,18 @@ static void event_to_wm(const uint32_t *ev)
         else
             msgq_push(hwnd, WM_MBUTTONUP, 0, (ev[2] << 16) | ev[1]);
         break;
-    case EV_KEY:
-        msgq_push(hwnd, WM_KEYDOWN, key, 1);
+    case EV_KEY: {
+        /* Las teclas van al control de edicion enfocado (si hay), no al
+         * primer wndproc: asi el WM_CHAR llega al RichEdit/EDIT. */
+        uint32_t target = hwnd;
+        if (focus_edit && focus_edit < MAX_WNDPROCS &&
+            wnd_proc[focus_edit])
+            target = focus_edit;
+        msgq_push(target, WM_KEYDOWN, key, ev[3]);
         if (key >= 32 && key <= 126)
-            msgq_push(hwnd, WM_CHAR, key, 1);
+            msgq_push(target, WM_CHAR, key, ev[3]);
         break;
+    }
     case EV_WINCLOSE:
         msgq_push(hwnd, WM_CLOSE, 0, 0);
         break;
@@ -956,6 +968,11 @@ uint32_t CreateWindowExA(uint32_t e, uint32_t cls, uint32_t name,
         child_w[i] = w;
         child_h[i] = h;
         child_text[i][0] = 0;
+        child_cur[i] = 0;
+        child_edit[i] = ci_eq((const char *)cls, "EDIT") ||
+                        ci_eq((const char *)cls, "RichEdit20A") ? 1 : 0;
+        if (child_edit[i])
+            focus_edit = id;        /* primer editor: foco inicial */
         wnd_proc[id] = proc;
         wnd_buf[id] = 0;
         wnd_cw[id] = w;
@@ -1016,6 +1033,7 @@ static void wm_paint_window(uint32_t hwnd)
 {
     uint32_t p, buf;
     uint32_t cw, ch;
+    int i;
 
     if (hwnd >= MAX_WNDPROCS || wnd_proc[hwnd] == 0)
         return;
@@ -1041,6 +1059,11 @@ static void wm_paint_window(uint32_t hwnd)
     }
     ((uint32_t(*)(uint32_t, uint32_t, uint32_t, uint32_t))p)
         (hwnd, WM_PAINT, 0, 0);
+    /* repintar los hijos virtuales del padre tras su WM_PAINT: el texto
+     * de los EDIT/RichEdit no debe borrarse cuando el padre repinta */
+    for (i = 0; i < CHILD_MAX; i++)
+        if (child_parent[i] == hwnd && wnd_proc[CHILD_BASE + i])
+            child_paint((uint32_t)i);
     if (!is_child(hwnd))
         sys_winupdate(hwnd);
 }
@@ -1407,8 +1430,145 @@ uint32_t EndPaint(uint32_t hwnd, const myos_paintstruct_t *ps)
 }
 
 /* --- wndproc built-in (clases RichEdit20A/EDIT/STATIC/...) ---
- * WM_SETTEXT/GetWindowText mantienen el texto; WM_PAINT dibuja el
- * texto en el buffer del padre (cliente blanco, letra negra). */
+ * WM_SETTEXT/GetWindowText mantienen el texto; el paint dibuja el texto
+ * en el buffer del padre (cliente blanco, letra negra) multilinea con
+ * caret visible y salto de linea en '\n'; WM_CHAR/WM_KEYDOWN editan. */
+
+/* memmove propio: user32 es freestanding (no linkea msvcrt/libc). */
+static void memmove_myos(void *d, const void *s, uint32_t n)
+{
+    uint8_t *dd = (uint8_t *)d;
+    const uint8_t *ss = (const uint8_t *)s;
+    if (dd < ss)
+        while (n--)
+            *dd++ = *ss++;
+    else if (dd > ss) {
+        dd += n;
+        ss += n;
+        while (n--)
+            *--dd = *--ss;
+    }
+}
+
+/* Pinta el texto (y el caret) de un hijo en el buffer del padre. */
+static void child_paint(uint32_t i)
+{
+    uint32_t parent = child_parent[i];
+    uint32_t *px = (uint32_t *)wnd_buf[parent];
+    int px0 = child_x[i], py0 = child_y[i];
+    int pw = child_w[i], ph = child_h[i];
+    int cw = wnd_cw[parent];
+    const char *s = child_text[i];
+    int cx = px0, cy = py0;
+    int cur = child_cur[i], idx = 0;
+    int cur_x = px0, cur_y = py0;
+    int x, y;
+
+    if (px == 0)
+        return;
+    /* fondo del editor: blanco */
+    for (y = py0; y < py0 + ph && y < cw && y < wnd_ch[parent]; y++) {
+        uint32_t *row = px + (uint32_t)y * (uint32_t)cw;
+        for (x = px0; x < px0 + pw && x < cw; x++)
+            row[x] = px_disp(0x00FFFFFFu);
+    }
+    /* texto 8x16 en negro, clip al rect del hijo, '\n' salta de linea */
+    while (*s && cy < py0 + ph) {
+        char c = *s;
+        const unsigned char *g;
+        if (c == '\n') {
+            idx++;
+            cx = px0;
+            cy += 16;
+            if (idx == cur) {
+                cur_x = cx;
+                cur_y = cy;
+            }
+            s++;
+            continue;
+        }
+        if (c < 32 || c > 126)
+            c = '?';
+        g = font8x16_basic[c - 32];
+        for (y = 0; y < 16 && cy + y < py0 + ph; y++)
+            for (x = 0; x < 8; x++)
+                if (g[y] & (0x80u >> x)) {
+                    int xx = cx + x, yy = cy + y;
+                    if (xx < px0 + pw && xx < cw && yy >= py0)
+                        px[(uint32_t)yy * (uint32_t)cw + (uint32_t)xx] =
+                            px_disp(0x00000000u);
+                }
+        idx++;
+        if (idx == cur) {
+            cur_x = cx + 8;
+            cur_y = cy;
+        }
+        cx += 8;
+        if (cx >= px0 + pw) {
+            cx = px0;
+            cy += 16;
+        }
+        s++;
+    }
+    /* caret (barra 1x16) en la posicion de insercion */
+    if (cur >= 0) {
+        if (cur_x >= px0 + pw)
+            cur_x = px0 + pw - 1;
+        if (cur_x < px0)
+            cur_x = px0;
+        if (cur_y < py0)
+            cur_y = py0;
+        for (y = 0; y < 16 && cur_y + y < py0 + ph && cur_y + y >= py0; y++)
+            px[(uint32_t)(cur_y + y) * (uint32_t)cw + (uint32_t)cur_x] =
+                px_disp(0x00000000u);
+    }
+}
+
+/* Repinta un hijo y hace que el kernel recomponga el top-level padre. */
+static void child_repaint(uint32_t i)
+{
+    uint32_t parent = child_parent[i];
+    uint32_t hwnd;
+
+    if (i >= CHILD_MAX)
+        return;
+    hwnd = CHILD_BASE + i;
+    if (!wnd_proc[hwnd])
+        return;
+    child_paint(i);
+    if (parent < MAX_WNDPROCS && wnd_proc[parent])
+        sys_winupdate(parent);
+}
+
+/* Inserta/borra un caracter en el caret del control (hijo builtin). */
+static void child_insert(uint32_t hwnd, char ch)
+{
+    uint32_t i = hwnd - CHILD_BASE;
+    char *t = child_text[i];
+    int len = 0, cur = child_cur[i];
+    while (t[len])
+        len++;
+    if (cur < 0)
+        cur = 0;
+    if (cur > len)
+        cur = len;
+    if (ch == '\b') {
+        if (cur > 0) {
+            child_cur[i] = cur - 1;
+            memmove_myos(t + cur - 1, t + cur, (uint32_t)(len - cur + 1));
+            child_repaint(i);
+        }
+        return;
+    }
+    if (ch == '\n' || (ch >= 32 && ch <= 126)) {
+        if (len < CHILD_TXTLEN - 1) {
+            memmove_myos(t + cur + 1, t + cur, (uint32_t)(len - cur + 1));
+            t[cur] = ch;
+            child_cur[i] = cur + 1;
+            child_repaint(i);
+        }
+    }
+}
 
 uint32_t builtin_wndproc(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
 {
@@ -1424,6 +1584,8 @@ uint32_t builtin_wndproc(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
             k++;
         }
         child_text[i][k] = 0;
+        child_cur[i] = k;
+        child_repaint(i);
         return 1;
     }
     if (m == WM_GETTEXT) {
@@ -1439,51 +1601,93 @@ uint32_t builtin_wndproc(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
         dst[k] = 0;
         return (uint32_t)k;
     }
-    if (m == WM_PAINT) {
-        /* pinta el texto en el buffer del padre (coords del hijo) */
-        uint32_t i = hwnd - CHILD_BASE;
-        uint32_t parent = child_parent[i];
-        uint32_t *px = (uint32_t *)wnd_buf[parent];
-        int px0 = child_x[i], py0 = child_y[i];
-        int pw = child_w[i], ph = child_h[i];
-        int cw = wnd_cw[parent];
-        const char *s = child_text[i];
-        int cx = px0, cy = py0;
-        int x, y;
-
-        if (px == 0)
+    if (m == WM_CHAR) {
+        child_insert(hwnd, (char)a);
+        return 0;
+    }
+    if (m == WM_KEYDOWN) {
+        /* Enter/BackSpace llegan por KEYDOWN (no pasan el filtro CHAR) */
+        if (a == '\n' || a == '\b') {
+            child_insert(hwnd, (char)a);
             return 0;
-        /* fondo del editor: blanco */
-        for (y = py0; y < py0 + ph && y < cw && y < wnd_ch[parent]; y++) {
-            uint32_t *row = px + (uint32_t)y * (uint32_t)cw;
-            for (x = px0; x < px0 + pw && x < cw; x++)
-                row[x] = px_disp(0x00FFFFFFu);
         }
-        /* texto 8x16 en negro, clip al rect del hijo */
-        while (*s && cy < py0 + ph) {
-            char c = *s;
-            const unsigned char *g;
-            if (c < 32 || c > 126)
-                c = '?';
-            g = font8x16_basic[c - 32];
-            for (y = 0; y < 16 && cy + y < py0 + ph; y++)
-                for (x = 0; x < 8; x++)
-                    if (g[y] & (0x80u >> x)) {
-                        int xx = cx + x, yy = cy + y;
-                        if (xx < px0 + pw && xx < cw && yy >= py0)
-                            px[(uint32_t)yy * (uint32_t)cw + (uint32_t)xx] =
-                                px_disp(0x00000000u);
-                    }
-            cx += 8;
-            if (cx >= px0 + pw) {
-                cx = px0;
-                cy += 16;
+        /* teclas VK especiales (0x100+) y DEL; mover/borrar con caret */
+        uint32_t i = hwnd - CHILD_BASE;
+        char *t = child_text[i];
+        int len = 0, cur = child_cur[i], k;
+        while (t[len])
+            len++;
+        if (cur < 0)
+            cur = 0;
+        if (cur > len)
+            cur = len;
+        switch ((int)a) {
+        case 0x100: /* LEFT */
+            child_cur[i] = cur > 0 ? cur - 1 : 0;
+            child_repaint(i);
+            break;
+        case 0x101: /* RIGHT */
+            child_cur[i] = cur < len ? cur + 1 : len;
+            child_repaint(i);
+            break;
+        case 0x104: /* HOME */
+            child_cur[i] = 0;
+            child_repaint(i);
+            break;
+        case 0x105: /* END */
+            child_cur[i] = len;
+            child_repaint(i);
+            break;
+        case 0x108: /* DEL */
+            if (cur < len) {
+                memmove_myos(t + cur, t + cur + 1, (uint32_t)(len - cur));
+                child_repaint(i);
             }
-            s++;
+            break;
+        case 0x102: { /* UP: misma columna en la linea anterior */
+            int linestart = 0, prevstart = 0, col, j, newpos;
+            for (k = cur - 1; k >= 0; k--)
+                if (t[k] == '\n') { linestart = k + 1; break; }
+            if (linestart == 0)
+                break;                          /* ya en la linea 1 */
+            col = cur - linestart;
+            for (j = linestart - 2; j >= 0; j--)
+                if (t[j] == '\n') { prevstart = j + 1; break; }
+            newpos = prevstart + col;
+            if (newpos < prevstart)
+                newpos = prevstart;
+            if (newpos > linestart - 1)
+                newpos = linestart - 1;
+            child_cur[i] = newpos;
+            child_repaint(i);
+            break;
         }
-        /* refresh del top-level: el kernel solo blitea el padre */
-        if (parent < MAX_WNDPROCS && wnd_proc[parent])
-            sys_winupdate(parent);
+        case 0x103: { /* DOWN: misma columna en la linea siguiente */
+            int linestart = 0, endline = len, col, j, newpos;
+            for (k = cur - 1; k >= 0; k--)
+                if (t[k] == '\n') { linestart = k + 1; break; }
+            for (k = cur; k < len; k++)
+                if (t[k] == '\n') { endline = k; break; }
+            if (endline >= len)
+                break;                          /* ya en la ultima linea */
+            col = cur - linestart;
+            newpos = endline + 1 + col;
+            if (newpos > len)
+                newpos = len;
+            if (newpos < endline + 1)
+                newpos = endline + 1;
+            (void)j;
+            child_cur[i] = newpos;
+            child_repaint(i);
+            break;
+        }
+        default:
+            break;
+        }
+        return 0;
+    }
+    if (m == WM_PAINT) {
+        child_paint(hwnd - CHILD_BASE);
         return 0;
     }
     if (m == WM_CLOSE) {
@@ -1493,7 +1697,15 @@ uint32_t builtin_wndproc(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
     return DefWindowProcA(hwnd, m, a, 0);
 }
 
-uint32_t SetFocus(uint32_t hwnd) { (void)hwnd; return 0; }
+uint32_t SetFocus(uint32_t hwnd) {
+    uint32_t prev = focus_edit;
+    if (is_child(hwnd) && child_edit[hwnd - CHILD_BASE]) {
+        focus_edit = hwnd;
+        child_repaint(hwnd - CHILD_BASE);
+    }
+    return prev;
+}
+uint32_t GetFocus(void) { return focus_edit; }
 uint32_t SetWindowTextA(uint32_t hwnd, uint32_t t)
 {
     if (hwnd >= MAX_WNDPROCS || !wnd_proc[hwnd])

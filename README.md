@@ -200,6 +200,15 @@ Todos los detalles, decisiones y bugs encontrados están en `DESIGN.md`.
   píxeles** (rectángulo azul exacto, línea roja diagonal, fondo de texto
   opaco en gdidemo; cliente blanco de metapad) y **escalera 14/14 PASS**
   en disco y CD.
+- Fase A concluida: **edición real en metapad.exe** — `WM_CHAR`/`WM_KEYDOWN`
+  se enrutan al control RichEdit enfocado (`SetFocus`/`GetFocus` reales,
+  foco inicial en el primer editor), el wndproc builtin edita `child_text`
+  (inserción/borrado en el caret: backspace, Enter, flechas, Home/End,
+  Supr, Up/Down entre líneas) y repinta el hijo en el buffer del padre con
+  **caret visible** y salto de línea en `'\n'`. Validado en QEMU: teclear
+  `hola<enter>mundo<backspace><enter>xyz` dibuja el texto (blanco/negro)
+  en el cliente y el caret/edición funcionan (screendumps + diff de
+  píxeles + verificación interactiva).
 - Roadmap tentativo: long mode (64 bits), ATA con escritura de archivos
   (CreateFileA con GENERIC_WRITE), **apps Windows GUI reales** (ver
   `docs/10-win32-gui-eval.md`: primero nuestro notepad mingw, luego un

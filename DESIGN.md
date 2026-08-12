@@ -283,11 +283,11 @@ Para poder escribir texto (Fase A siguiente) `kernel/drivers/keyboard.c` deja de
 
 - `gdidemo.exe` (mingw, `-Wl,--subsystem,windows -luser32 -lgdi32`): `Rectangle(20,20,180,100)` con brush azul, `FillRect(30,30,170,90)` gris claro interior, `MoveToEx(20,120)/LineTo(180,200)` con pen rojo, `TextOutA` con bk opaco. QEMU headless (serial + monitor): `CreateWindowExA id=1`, 2× BeginPaint/EndPaint/ReleaseDC, `exit:0`; **screendump + conteo de píxeles**: `#4060C0` 4400 px (=160×80 azul − 140×60 del relleno interior, exacto), `#C0C0C0` (FillRect + marco), `#C02020` 161 px (diagonal de LineTo), `#F0F0F0` (fondo opaco del texto). Se eliminaron los píxeles de debug que `Rectangle()` pintaba en (0,0)/(0,1).
 - `metapad.exe` en QEMU: ventana con título, cliente blanco (`#FFFFFF` 241578 px) y marco, control RichEdit creado, `GetDC`/`ReleaseDC` OK, sin crash; la shell vuelve al prompt.
+- **Fase A (edición real)** en QEMU (sendkey PS/2): teclado `hola<enter>mundo<backspace><enter>xyz` dibuja el texto en el cliente (diff vs editor vacío: 2673 px en la esquina superior izquierda, fondo blanco y letras negras); `HOME`/flechas mueven el caret (diff edit1→edit2: 30 px en la barra del caret/líneas de texto); backspace borra. Verificado también interactivamente (se escribe y borra dentro de metapad).
 - **Escalera 14/14 PASS** en disco (**floppy/HD raw**) y **CD (El Torito)**.
 
 ### Pendientes (fases siguientes)
 
-- **A** — edición real: enrutar `WM_CHAR`/`WM_KEYDOWN` al hijo RichEdit enfocado e insertar/borrar en `child_text` con repintado.
 - **B** — abrir archivo por línea de comandos (`run metapad.exe file.txt`, `argv` ya viaja por el TIB).
 - **C** — diálogo Abrir real (`GetOpenFileNameA` sobre lista MEFS con `FindFirstFileA/FindNextFileA`).
 - **D** — menús/WM_COMMAND + `TrackPopupMenuEx` visible.
