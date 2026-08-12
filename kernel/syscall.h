@@ -27,6 +27,8 @@
 #define SYS_WINUPDATE 21 /* ebx=id: recompone (la app termino de pin- */
                          /* tar su buffer)                            */
 #define SYS_WININFO 22  /* ebx=id, ecx=&{x,y,w,h,cx,cy,cw,ch}         */
+#define SYS_WINTITLE 23 /* ebx=id, ecx=title*: titulo de la barra      */
+#define SYS_EXEBASE 24  /* base ImageBase del PE actual (0 si ELF)     */
 
 void syscall_init(void);            /* registra el gate 0x80 (DPL=3) */
 void syscall_handler(registers_t *regs);

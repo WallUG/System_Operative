@@ -8,14 +8,60 @@
 #include <stdint.h>
 
 #define SYS_WRITE   7
+#define SYS_MALLOC  10
+#define SYS_FREE    11
 #define SYS_GFXINFO 15
 #define SYS_MOUSEINFO 16
 #define SYS_EVENT   17
+#define SYS_WINCREATE 18
+#define SYS_WINCLOSE 19
+#define SYS_WINMOVE 20
+#define SYS_WINUPDATE 21
+#define SYS_WININFO 22
+#define SYS_WINTITLE 23
+#define SYS_EXEBASE 24
 
 #define EV_MOVE         1
 #define EV_BUTTON_DOWN  2
 #define EV_BUTTON_UP    3
 #define EV_KEY          4
+#define EV_WINCLOSE     5
+
+#define CW_USEDEFAULT   (int)0x80000000u
+
+/* WM_* minimo para el bucle de mensajes */
+#define WM_CREATE       0x0001
+#define WM_DESTROY      0x0002
+#define WM_CLOSE        0x0010
+#define WM_QUIT         0x0012
+#define WM_KEYDOWN      0x0100
+#define WM_KEYUP        0x0101
+#define WM_CHAR         0x0102
+#define WM_MOUSEMOVE    0x0200
+#define WM_LBUTTONDOWN  0x0201
+#define WM_LBUTTONUP    0x0202
+#define WM_RBUTTONDOWN  0x0204
+#define WM_RBUTTONUP    0x0205
+#define WM_MBUTTONDOWN  0x0207
+#define WM_MBUTTONUP    0x0208
+
+#define MK_LBUTTON      0x0001
+#define MK_RBUTTON      0x0002
+#define MK_MBUTTON      0x0010
+
+#define WM_COMMAND      0x0111
+#define WM_SETTEXT      0x000C
+#define WM_GETTEXT      0x000D
+#define WM_PAINT        0x000F
+#define WM_ERASEBKGND   0x0014
+#define WM_FRAME        2           /* igual que kernel/winmgr.h */
+#define WM_TITLE_H      20
+
+#define RT_MENU         4
+#define RT_ACCELERATOR  9
+
+/* DC de gdi32 (GetDC/ReleaseDC de user32 crean el DC; gdi32 dibuja). */
+#include "gdi_dc.h"
 
 /* --- syscalls --- */
 
@@ -59,6 +105,78 @@ static int sys_event(uint32_t *ev)
     return r;
 }
 
+static int sys_wincreate(uint32_t *req)
+{
+    int r;
+    __asm__ volatile("int $0x80"
+                     : "=a"(r)
+                     : "a"(SYS_WINCREATE), "b"(req)
+                     : "memory");
+    return r;
+}
+
+static int sys_winclose(uint32_t id)
+{
+    int r;
+    __asm__ volatile("int $0x80"
+                     : "=a"(r)
+                     : "a"(SYS_WINCLOSE), "b"(id)
+                     : "memory");
+    return r;
+}
+
+static int sys_winupdate(uint32_t id)
+{
+    int r;
+    __asm__ volatile("int $0x80"
+                     : "=a"(r)
+                     : "a"(SYS_WINUPDATE), "b"(id)
+                     : "memory");
+    return r;
+}
+
+static int sys_wintitle(uint32_t id, const char *title)
+{
+    int r;
+    __asm__ volatile("int $0x80"
+                     : "=a"(r)
+                     : "a"(SYS_WINTITLE), "b"(id), "c"(title)
+                     : "memory");
+    return r;
+}
+
+static uint32_t sys_malloc(uint32_t bytes)
+{
+    uint32_t r;
+    __asm__ volatile("int $0x80"
+                     : "=a"(r)
+                     : "a"(SYS_MALLOC), "b"(bytes)
+                     : "memory");
+    return r;
+}
+
+static void sys_free(uint32_t p)
+{
+    uint32_t r;
+    __asm__ volatile("int $0x80"
+                     : "=a"(r)
+                     : "a"(SYS_FREE), "b"(p)
+                     : "memory");
+}
+
+/* Base ImageBase del .exe en curso (SYS_EXEBASE 24; 0 si no hay PE).
+ * user32 vive en la misma PD que el ejecutable, asi que los recursos
+ * del .exe se leen directamente en esa direccion. */
+static uint32_t sys_exebase(void)
+{
+    uint32_t r;
+    __asm__ volatile("int $0x80"
+                     : "=a"(r)
+                     : "a"(SYS_EXEBASE)
+                     : "memory");
+    return r;
+}
+
 /* --- texto a consola (fallback y debug) --- */
 
 static uint32_t strlen32(const char *s)
@@ -90,11 +208,20 @@ static void console_print(const char *s)
 static uint32_t *lfb;
 static uint32_t scr_w, scr_h;
 
+/* El LFB (VBE 32bpp) espera el byte bajo = R (BGRx8888 en memoria);
+ * los colores logicos 0x00RRGGBB se swapean al escribir. */
+static inline uint32_t px_disp(uint32_t c)
+{
+    return ((c & 0x0000FFFFu) << 8) |
+           ((c >> 16) & 0x000000FFu) |
+           (c & 0xFF000000u);
+}
+
 static void putpixel(int x, int y, uint32_t c)
 {
     if (x < 0 || y < 0 || x >= (int)scr_w || y >= (int)scr_h)
         return;
-    lfb[y * scr_w + x] = c;
+    lfb[y * scr_w + x] = px_disp(c);
 }
 
 static void fillrect(int x, int y, int w, int h, uint32_t c)
@@ -206,6 +333,1444 @@ static int user32_button_feed(user32_button_t *b, uint32_t *ev)
     return 0;
 }
 
+/* --- recursos PE: LoadMenuA (Fase 18) ---
+ * El kernel reubica los .exe reales y expone la base final por
+ * SYS_EXEBASE; aqui se leen los recursos del .exe directamente desde
+ * esa direccion (misma PD).
+ * LoadMenuA camina el directorio de recursos (.rsrc) hasta
+ * RT_MENU(4)/id y parsea el template MENUITEMTEMPLATE de 16 bits
+ * (verificado byte a byte contra metapad.exe, menu 130):
+ *   - 0x0080 = fin de popup
+ *   - 0x0010 = popup: titulo UTF-16LE a continuacion
+ *   - palabra < 0x0100 = (flags, id, texto): comando o separador
+ *     (separador = flags 0 + id 0)
+ *   - palabra >= 0x0100 = (id, texto): aparece tras un fin de popup
+ *   - cada texto: UTF-16LE terminado en 0 + 1 palabra de padding
+ *     (sin padding antes de 0x0080) */
+
+#define RT_MENU         4
+#define MNU_POP         1
+#define MNU_CMD         2
+#define MNU_SEP         3
+#define MNU_END         4
+
+typedef struct {
+    uint16_t type;
+    uint16_t depth;
+    uint32_t id;
+    uint32_t flags;
+    char     text[48];
+} menu_item_t;
+
+static uint16_t rd16u(const uint8_t *p)
+{
+    return (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
+}
+
+static uint32_t rd32u(const uint8_t *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8)
+         | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static void wr32u(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)v;
+    p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16);
+    p[3] = (uint8_t)(v >> 24);
+}
+
+/* Camina el arbol de recursos (tipo -> id -> lang) y devuelve puntero
+ * a los datos del recurso y su tamano (0 si no existe). */
+static const uint8_t *find_resource(uint32_t type, uint32_t id,
+                                    uint32_t *size)
+{
+    const uint8_t *img = (const uint8_t *)sys_exebase();
+    const uint8_t *res, *dir;
+    uint32_t pe_off, dir_rva, level, cnt, i;
+
+    if (img == 0 || img[0] != 'M' || img[1] != 'Z')
+        return 0;
+    pe_off = rd32u(img + 0x3C);
+    if (rd16u(img + pe_off + 24) != 0x10B)      /* PE32 */
+        return 0;
+    dir_rva = rd32u(img + pe_off + 24 + 96 + 2 * 8);  /* dir 2: recursos */
+    if (dir_rva == 0)
+        return 0;
+    res = img + dir_rva;
+    dir = res;
+    for (level = 0; level < 3; level++) {
+        cnt = rd16u(dir + 12) + rd16u(dir + 14);
+        for (i = 0; i < cnt; i++) {
+            const uint8_t *e = dir + 16 + i * 8;
+            uint32_t name = rd32u(e);
+            uint32_t target = rd32u(e + 4) & 0x7FFFFFFF;
+            uint32_t want = (level == 0) ? type : id;
+            if (level == 2) {           /* nivel lang: vale cualquiera */
+                const uint8_t *d = res + target;
+                *size = rd32u(d + 4);
+                return img + rd32u(d);
+            }
+            if ((name & 0x80000000) == 0 && name == want) {
+                dir = res + target;
+                break;
+            }
+        }
+        if (i == cnt)
+            return 0;
+    }
+    return 0;
+}
+
+/* Convierte UTF-16LE a ASCII (los textos de los menus son ASCII con
+ * \t). Devuelve el numero de WCHARs consumidos (incl. el 0 final). */
+static int utf16_to_ascii(char *dst, const uint8_t *src, int max)
+{
+    int n = 0;
+    while (n < max - 1) {
+        uint16_t c = rd16u(src + n * 2);
+        if (c == 0)
+            break;
+        dst[n] = (c < 0x80) ? (char)c : '?';
+        n++;
+    }
+    dst[n] = 0;
+    return n + 1;
+}
+
+#define MENU_MAX_ITEMS  256
+static menu_item_t menu_items[MENU_MAX_ITEMS];
+static char menu_tmp[48];
+static int menu_n;
+
+static int menu_add(uint16_t type, uint16_t depth, uint32_t id,
+                    uint32_t flags, const char *text)
+{
+    menu_item_t *it;
+    int i;
+
+    if (menu_n >= MENU_MAX_ITEMS)
+        return 0;
+    it = &menu_items[menu_n++];
+    it->type = type;
+    it->depth = depth;
+    it->id = id;
+    it->flags = flags;
+    it->text[0] = 0;
+    if (text != 0)
+        for (i = 0; i < 47 && text[i]; i++)
+            it->text[i] = text[i];
+    return 1;
+}
+
+static void menu_parse(const uint8_t *tpl, uint32_t size)
+{
+    uint32_t p = 4;      /* wVersion + wOffset */
+    int depth = 0;
+
+    menu_n = 0;
+    while (p + 2 <= size) {
+        uint32_t w = rd16u(tpl + p);
+
+        if (w == 0x0080) {                  /* fin de popup */
+            menu_add(MNU_END, (uint16_t)depth, 0, 0, 0);
+            if (depth > 0)
+                depth--;
+            p += 2;
+            continue;
+        }
+        if (w == 0x0010) {                  /* popup: titulo */
+            int len = utf16_to_ascii(menu_tmp, tpl + p + 2,
+                                     (int)sizeof(menu_tmp));
+            menu_add(MNU_POP, (uint16_t)depth, 0, 0, menu_tmp);
+            depth++;
+            p += 2 + (uint32_t)len * 2;
+            continue;
+        }
+        if (w < 0x0100) {                   /* (flags, id, texto) */
+            uint32_t id = rd16u(tpl + p + 2);
+            if (id >= 0x0800 && p + 4 < size) {
+                int len = utf16_to_ascii(menu_tmp, tpl + p + 4,
+                                         (int)sizeof(menu_tmp));
+                if (len > 1) {              /* comando con flags */
+                    menu_add(MNU_CMD, (uint16_t)depth, id, w, menu_tmp);
+                    p += 4 + (uint32_t)len * 2;
+                    continue;
+                }
+            }
+            menu_add(MNU_SEP, (uint16_t)depth, 0, 0, 0);  /* separador */
+            p += 4;
+            continue;
+        }
+        {                                   /* (id, texto) directo */
+            int len = utf16_to_ascii(menu_tmp, tpl + p + 2,
+                                     (int)sizeof(menu_tmp));
+            if (len > 1) {
+                menu_add(MNU_CMD, (uint16_t)depth, w, 0, menu_tmp);
+                p += 2 + (uint32_t)len * 2;
+            } else {
+                p += 2;
+            }
+        }
+    }
+}
+
+/* Convierte entero a decimal en buf (max 10 digitos). */
+static char *itoa32(char *buf, uint32_t v)
+{
+    char tmp[12];
+    int n = 0;
+    do {
+        tmp[n++] = (char)('0' + v % 10);
+        v /= 10;
+    } while (v);
+    for (int i = 0; i < n; i++)
+        buf[i] = tmp[n - 1 - i];
+    buf[n] = 0;
+    return buf;
+}
+
+typedef struct {
+    uint32_t magic;     /* 'MNUP' */
+    uint32_t count;
+    menu_item_t items[MENU_MAX_ITEMS];
+} menu_t;
+
+static menu_t loaded_menu;
+
+/* Carga un menu de los recursos del ejecutable (RT_MENU). lpMenuName
+ * puede ser un MAKEINTRESOURCE (id en el low word) o un nombre (no
+ * soportado aqui). Devuelve un HMENU opaco (puntero a la copia). */
+uint32_t LoadMenuA(uint32_t hinst, const char *name)
+{
+    const uint8_t *tpl;
+    uint32_t size = 0, id, i, n;
+    char line[80], num[12];
+    int d;
+
+    (void)hinst;
+    if (name == 0)
+        return 0;
+    id = (((uint32_t)(uintptr_t)name >> 16) == 0)
+             ? (uint32_t)(uintptr_t)name
+             : RT_MENU;
+    tpl = find_resource(RT_MENU, id, &size);
+    if (tpl == 0 || size == 0) {
+        console_print("[user32] LoadMenuA: recurso de menu no encontrado\n");
+        return 0;
+    }
+    menu_parse(tpl, size);
+    loaded_menu.magic = 0x4D4E5550u;    /* 'MNUP' */
+    loaded_menu.count = (uint32_t)menu_n;
+    for (i = 0; i < (uint32_t)menu_n; i++)
+        loaded_menu.items[i] = menu_items[i];
+
+    /* dump del arbol a consola (diagnostico de Fase 18) */
+    n = loaded_menu.count;
+    console_print("[user32] LoadMenuA: menu ");
+    console_print(itoa32(num, id));
+    console_print(", ");
+    console_print(itoa32(num, n));
+    console_print(" items\n");
+    for (i = 0; i < n; i++) {
+        menu_item_t *it = &loaded_menu.items[i];
+        line[0] = 0;
+        for (d = 0; d < (int)it->depth && d < 30; d++)
+            line[d] = ' ';
+        {
+            int j = 0;
+            while (it->text[j] && d + j < 45) {
+                if (it->text[j] == '\t')
+                    line[d + j] = ' ';
+                else
+                    line[d + j] = it->text[j];
+                j++;
+            }
+            d += j;
+        }
+        line[d++] = ' ';
+        if (it->type == MNU_POP) {
+            line[d++] = '>';
+            line[d++] = '>';
+            line[d] = 0;
+        } else if (it->type == MNU_END) {
+            line[d++] = '[';
+            line[d++] = 'E';
+            line[d++] = 'N';
+            line[d++] = 'D';
+            line[d++] = ']';
+            line[d] = 0;
+        } else if (it->type == MNU_SEP) {
+            line[d++] = '-';
+            line[d] = 0;
+        } else {
+            line[d++] = '#';
+            line[d] = 0;
+        }
+        console_print(line);
+        if (it->type == MNU_CMD) {
+            console_print(" id=");
+            console_print(itoa32(num, it->id));
+        }
+        console_print("\n");
+    }
+    return (uint32_t)&loaded_menu;
+}
+
+/* --- aceleradores (RT_ACCELERATOR) --- */
+
+#define ACCEL_MAX 64
+static uint16_t accel_key[ACCEL_MAX], accel_id[ACCEL_MAX];
+static int accel_count;
+
+static void msgq_push(uint32_t hwnd, uint32_t m, uint32_t wp, uint32_t lp);
+
+uint32_t LoadAcceleratorsA(uint32_t hinst, uint32_t name)
+{
+    const uint8_t *acc;
+    uint32_t size = 0, i, n;
+    char num[16];
+
+    (void)hinst;
+    if (name == 0 || name > 0xFFFF)
+        return 0;
+    acc = find_resource(RT_ACCELERATOR, name, &size);
+    if (acc == 0 || size < 6)
+        return 0;
+    n = size / 6;
+    if (n > ACCEL_MAX)
+        n = ACCEL_MAX;
+    for (i = 0; i < n; i++) {
+        accel_key[i] = rd16u(acc + i * 6 + 2);   /* wAnsi */
+        accel_id[i] = rd16u(acc + i * 6 + 4);    /* wId */
+    }
+    accel_count = (int)n;
+    console_print("[user32] LoadAcceleratorsA id=");
+    console_print(itoa32(num, name));
+    console_print(" n=");
+    console_print(itoa32(num, n));
+    console_print("\n");
+    return 1;
+}
+
+uint32_t TranslateAcceleratorA(uint32_t hwnd, uint32_t haccel, uint32_t m)
+{
+    const uint8_t *m8 = (const uint8_t *)(uint32_t)m;
+    uint32_t msg = rd32u(m8 + 4);
+    uint32_t key = rd32u(m8 + 8);
+    int i;
+
+    (void)hwnd; (void)haccel;
+    if (msg != WM_KEYDOWN || accel_count == 0)
+        return 0;
+    for (i = 0; i < accel_count; i++)
+        if (accel_key[i] == (uint16_t)key) {
+            msgq_push(rd32u(m8), WM_COMMAND, accel_id[i], 0);
+            return 1;
+        }
+    return 0;
+}
+
+/* --- stubs USER32 (Fase 18) ---
+ * metapad.exe importa 87 funciones de USER32; de momento solo
+ * MessageBoxA/LoadMenuA estan implementadas. El resto devuelve 0
+ * (o un valor inocuo) para que la resolucion de imports no falle y
+ * el programa pueda llegar hasta LoadMenuA. Se implementaran de una
+ * en una segun lo exija la escalera. */
+
+uint32_t CharLowerA(uint32_t s) { (void)s; return 0; }
+uint32_t CharLowerBuffA(uint32_t s, uint32_t n) { (void)s; (void)n; return 0; }
+uint32_t CharUpperBuffA(uint32_t s, uint32_t n) { (void)s; (void)n; return 0; }
+uint32_t CharToOemBuffA(uint32_t s, uint32_t d, uint32_t n) { (void)s; (void)d; (void)n; return 0; }
+uint32_t OemToCharBuffA(uint32_t s, uint32_t d, uint32_t n) { (void)s; (void)d; (void)n; return 0; }
+uint32_t IsCharAlphaA(uint32_t c) { (void)c; return 0; }
+uint32_t IsCharAlphaNumericA(uint32_t c) { (void)c; return 0; }
+uint32_t IsCharLowerA(uint32_t c) { (void)c; return 0; }
+uint32_t IsCharUpperA(uint32_t c) { (void)c; return 0; }
+/* --- minimo WM (ventanas + bucle de mensajes) sobre el WM del kernel ---
+ * Fase 18, slice 2: RegisterClassA/CreateWindowExA -> SYS_WINCREATE,
+ * eventos SYS_EVENT traducidos a WM_* y dispatch al wndproc del .exe. */
+
+#define WNDCLASS_LPFN  4   /* lpfnWndProc */
+#define WNDCLASS_HINST 16  /* hInstance */
+#define WNDCLASS_NAME  36  /* lpszClassName */
+#define MAX_CLASSES    16
+#define MAX_WNDPROCS   64
+
+static uint32_t class_names[MAX_CLASSES];
+static uint32_t class_procs[MAX_CLASSES];
+static uint32_t class_count;
+
+static uint32_t wnd_proc[MAX_WNDPROCS];
+uint32_t DefWindowProcA(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b);
+
+/* --- estado por ventana (slice 2 del Hito B) ---
+ * wnd_buf = buffer del cliente (formato LFB, px_disp) que el kernel
+ * blitea con SYS_WINUPDATE; wnd_cw/wnd_ch = tamano del cliente. Los
+ * hijos virtuales (clases built-in: RichEdit20A/EDIT/...) no crean
+ * ventana en el kernel: viven en user32 y dibujan en el buffer del
+ * padre. */
+
+#define CHILD_BASE     32          /* hwnd de los hijos: 32..63 */
+#define CHILD_MAX      (MAX_WNDPROCS - CHILD_BASE)
+#define CHILD_TXTLEN   1024
+
+static uint32_t wnd_buf[MAX_WNDPROCS];
+static int      wnd_cw[MAX_WNDPROCS], wnd_ch[MAX_WNDPROCS];
+
+static uint32_t child_parent[CHILD_MAX];
+static int      child_x[CHILD_MAX], child_y[CHILD_MAX];
+static int      child_w[CHILD_MAX], child_h[CHILD_MAX];
+static char     child_text[CHILD_MAX][CHILD_TXTLEN];
+
+/* DCs de gdi32: uno por hwnd (pool estatico). */
+static myos_dc_t dc_pool[MAX_WNDPROCS];
+
+/* stock GDI (wingdi.h): handle = indice + 1 */
+#define STOCK_HANDLE(i) ((uint32_t)(i) + 1)
+#define WHITE_BRUSH     0
+#define BLACK_PEN       7
+
+/* --- clases built-in (sin RegisterClass del .exe) --- */
+
+static uint32_t builtin_wndproc(uint32_t hwnd, uint32_t m, uint32_t a,
+                                uint32_t b);
+
+typedef struct {
+    const char *name;
+    uint32_t    fn;         /* builtin_wndproc */
+} builtin_class_t;
+
+static const builtin_class_t builtin_classes[] = {
+    { "RichEdit20A", (uint32_t)&builtin_wndproc },
+    { "EDIT",        (uint32_t)&builtin_wndproc },
+    { "STATIC",      (uint32_t)&builtin_wndproc },
+    { "BUTTON",      (uint32_t)&builtin_wndproc },
+    { "msctls_statusbar32", (uint32_t)&builtin_wndproc },
+    { 0, 0 },
+};
+
+static int is_child(uint32_t hwnd)
+{
+    return hwnd >= CHILD_BASE && hwnd < CHILD_BASE + CHILD_MAX &&
+           child_parent[hwnd - CHILD_BASE] != 0;
+}
+
+/* Rect del hijo en el cliente del padre (si es hijo). */
+static void child_rect(uint32_t hwnd, int *x, int *y, int *w, int *h)
+{
+    uint32_t i = hwnd - CHILD_BASE;
+    *x = child_x[i];
+    *y = child_y[i];
+    *w = child_w[i];
+    *h = child_h[i];
+}
+#define MSGQ_MAX 64
+static uint32_t msgq_hwnd[MSGQ_MAX], msgq_msg[MSGQ_MAX];
+static uint32_t msgq_wp[MSGQ_MAX], msgq_lp[MSGQ_MAX];
+static int msgq_head, msgq_tail;
+static int quit_pending;
+
+static uint32_t str_valid(const char *s)
+{    uint32_t i;
+    if (s == 0)
+        return 0;
+    for (i = 0; i < 512; i++) {
+        char c = s[i];
+        if (c == 0)
+            return 1;
+    }
+    return 0;
+}
+
+static int ci_eq(const char *a, const char *b)
+{
+    for (;;) {
+        char ca = *a, cb = *b;
+        if (ca >= 'A' && ca <= 'Z')
+            ca += 32;
+        if (cb >= 'A' && cb <= 'Z')
+            cb += 32;
+        if (ca != cb)
+            return 0;
+        if (ca == 0)
+            return 1;
+        a++;
+        b++;
+    }
+}
+
+static int class_find(uint32_t name)
+{
+    int i;
+    for (i = 0; i < (int)class_count; i++)
+        if (class_names[i] == name)
+            return i;
+    return -1;
+}
+
+static void msgq_push(uint32_t hwnd, uint32_t m, uint32_t wp, uint32_t lp)
+{
+    int n = (msgq_tail + 1) % MSGQ_MAX;
+    if (n == msgq_head)
+        return;                 /* cola llena: se descarta */
+    msgq_hwnd[msgq_tail] = hwnd;
+    msgq_msg[msgq_tail] = m;
+    msgq_wp[msgq_tail] = wp;
+    msgq_lp[msgq_tail] = lp;
+    msgq_tail = n;
+}
+
+static int msgq_pop(uint32_t *out)
+{
+    if (msgq_head == msgq_tail)
+        return 0;
+    out[0] = msgq_hwnd[msgq_head];
+    out[1] = msgq_msg[msgq_head];
+    out[2] = msgq_wp[msgq_head];
+    out[3] = msgq_lp[msgq_head];
+    msgq_head = (msgq_head + 1) % MSGQ_MAX;
+    return 1;
+}
+
+/* Traduce un evento crudo del kernel (SYS_EVENT) a mensajes WM_* y los
+ * encola. Un EV_KEY produce WM_KEYDOWN + WM_CHAR (si es imprimible). */
+static void event_to_wm(const uint32_t *ev)
+{
+    uint32_t hwnd = 1, buttons = ev[3], key = ev[4];
+    int i;
+    for (i = 1; i < MAX_WNDPROCS; i++)
+        if (wnd_proc[i]) {
+            hwnd = i;
+            break;
+        }
+    switch (ev[0]) {
+    case EV_MOVE:
+        msgq_push(hwnd, WM_MOUSEMOVE, buttons, (ev[2] << 16) | ev[1]);
+        break;
+    case EV_BUTTON_DOWN:
+        if (buttons & 1)
+            msgq_push(hwnd, WM_LBUTTONDOWN, 1, (ev[2] << 16) | ev[1]);
+        else if (buttons & 2)
+            msgq_push(hwnd, WM_RBUTTONDOWN, 1, (ev[2] << 16) | ev[1]);
+        else
+            msgq_push(hwnd, WM_MBUTTONDOWN, 1, (ev[2] << 16) | ev[1]);
+        break;
+    case EV_BUTTON_UP:
+        if (buttons & 1)
+            msgq_push(hwnd, WM_LBUTTONUP, 0, (ev[2] << 16) | ev[1]);
+        else if (buttons & 2)
+            msgq_push(hwnd, WM_RBUTTONUP, 0, (ev[2] << 16) | ev[1]);
+        else
+            msgq_push(hwnd, WM_MBUTTONUP, 0, (ev[2] << 16) | ev[1]);
+        break;
+    case EV_KEY:
+        msgq_push(hwnd, WM_KEYDOWN, key, 1);
+        if (key >= 32 && key <= 126)
+            msgq_push(hwnd, WM_CHAR, key, 1);
+        break;
+    case EV_WINCLOSE:
+        msgq_push(hwnd, WM_CLOSE, 0, 0);
+        break;
+    default:
+        break;
+    }
+}
+
+static void event_to_wm(const uint32_t *ev); /* fwd: usa msgq_push */
+
+uint32_t RegisterClassA(uint32_t wc)
+{
+    uint32_t name, proc;
+    char num[16];
+    console_print("[user32] RegisterClassA wc=");
+    console_print(itoa32(num, wc));
+    console_print("\n");
+    if (wc == 0 || class_count >= MAX_CLASSES)
+        return 0;
+    name = rd32u((const uint8_t *)(uint32_t)wc + WNDCLASS_NAME);
+    proc = rd32u((const uint8_t *)(uint32_t)wc + WNDCLASS_LPFN);
+    console_print("[user32]   name=");
+    console_print(itoa32(num, name));
+    console_print(" proc=");
+    console_print(itoa32(num, proc));
+    console_print("\n");
+    if (proc == 0 || !str_valid((const char *)name))
+        return 0;
+    class_names[class_count] = name;
+    class_procs[class_count] = proc;
+    class_count++;
+    console_print("[user32] RegisterClassA ok\n");
+    return 1;
+}
+
+uint32_t CreateWindowExA(uint32_t e, uint32_t cls, uint32_t name,
+                         uint32_t style, int x, int y, int w, int h,
+                         uint32_t parent, uint32_t menu, uint32_t inst,
+                         uint32_t param)
+{
+    uint32_t req[8], id;
+    char num[16];
+    int ci, i;
+    uint32_t proc;
+    (void)e; (void)menu; (void)inst; (void)param;
+
+    /* Clase built-in (RichEdit20A/EDIT/STATIC/BUTTON/msctls_statusbar32):
+     * no requiere RegisterClass del .exe. */
+    ci = class_find(cls);
+    if (ci >= 0) {
+        proc = class_procs[ci];
+    } else {
+        proc = 0;
+        for (i = 0; builtin_classes[i].name; i++)
+            if (ci_eq((const char *)cls, builtin_classes[i].name)) {
+                proc = builtin_classes[i].fn;
+                break;
+            }
+        if (proc == 0)
+            return 0;
+    }
+    if (x == CW_USEDEFAULT || y == CW_USEDEFAULT) {
+        x = 80;
+        y = 40;
+    }
+    if (w == CW_USEDEFAULT || w <= 0)
+        w = 600;
+    if (h == CW_USEDEFAULT || h <= 0)
+        h = 400;
+    if (!str_valid((const char *)name))
+        name = (uint32_t)"MyOS";
+
+    if (parent != 0) {
+        /* Hijo virtual: sin ventana en el kernel; dibuja en el buffer
+         * del padre (el kernel solo blitea top-levels). */
+        for (i = 0; i < CHILD_MAX; i++)            if (child_parent[i] == 0)
+                break;
+        if (i >= CHILD_MAX)
+            return 0;
+        id = CHILD_BASE + (uint32_t)i;
+        child_parent[i] = parent;
+        child_x[i] = x;
+        child_y[i] = y;
+        child_w[i] = w;
+        child_h[i] = h;
+        child_text[i][0] = 0;
+        wnd_proc[id] = proc;
+        wnd_buf[id] = 0;
+        wnd_cw[id] = w;
+        wnd_ch[id] = h;
+        return id;
+    }
+
+    /* Top-level: buffer del cliente + ventana del kernel. */
+    w = w > 800 ? 800 : w;
+    h = h > 600 ? 600 : h;
+    {
+        int cw = w - 2 * WM_FRAME;          /* marco 2+2 */
+        int ch = h - WM_TITLE_H - WM_FRAME; /* titulo 20 + marco 2 */
+        uint32_t buf = 0;
+        if (cw > 0 && ch > 0)
+            buf = sys_malloc((uint32_t)cw * (uint32_t)ch * 4);
+        req[0] = name;
+        req[1] = (uint32_t)x;
+        req[2] = (uint32_t)y;
+        req[3] = (uint32_t)w;
+        req[4] = (uint32_t)h;
+        req[5] = buf;
+        req[6] = (uint32_t)cw * (uint32_t)ch * 4;
+        req[7] = 0;
+        (void)style;
+        id = (uint32_t)sys_wincreate(req);
+        if (id == 0 || id >= MAX_WNDPROCS) {
+            if (buf)
+                sys_free(buf);
+            return 0;
+        }
+        wnd_proc[id] = proc;
+        wnd_buf[id] = buf;
+        wnd_cw[id] = cw;
+        wnd_ch[id] = ch;
+        console_print("[user32] CreateWindowExA id=");
+        console_print(itoa32(num, id));
+        console_print(" buf=");
+        console_print(itoa32(num, buf));
+        console_print(" cw=");
+        console_print(itoa32(num, (uint32_t)cw));
+        console_print(" ch=");
+        console_print(itoa32(num, (uint32_t)ch));
+        console_print("\n");
+    }
+
+    /* WM_CREATE sincrono, como Windows: el .exe monta sus hijos
+     * (RichEdit, statusbar...) aqui. */
+    ((uint32_t(*)(uint32_t, uint32_t, uint32_t, uint32_t))proc)
+        (id, WM_CREATE, 0, 0);
+    return id;
+}
+
+/* Pinta la ventana: borra el fondo del cliente (blanco) y llama al
+ * wndproc con WM_PAINT; para top-levels ademas recompone el kernel
+ * (SYS_WINUPDATE). Hijos: dibujan en el buffer del padre. */
+static void wm_paint_window(uint32_t hwnd)
+{
+    uint32_t p, buf;
+    uint32_t cw, ch;
+
+    if (hwnd >= MAX_WNDPROCS || wnd_proc[hwnd] == 0)
+        return;
+    p = wnd_proc[hwnd];
+    buf = wnd_buf[hwnd];
+    cw = (uint32_t)wnd_cw[hwnd];
+    ch = (uint32_t)wnd_ch[hwnd];
+
+    if (is_child(hwnd)) {
+        /* el hijo pinta en el buffer del padre; su DC lleva el origen */
+        uint32_t p2 = child_parent[hwnd - CHILD_BASE];
+        buf = wnd_buf[p2];
+        cw = (uint32_t)wnd_cw[p2];
+        ch = (uint32_t)wnd_ch[p2];
+    }
+    if (buf && cw > 0 && ch > 0) {
+        /* borrado del fondo del cliente (blanco por defecto) */
+        uint32_t *px = (uint32_t *)buf;
+        uint32_t n = cw * ch;
+        uint32_t i;
+        for (i = 0; i < n; i++)
+            px[i] = px_disp(0x00FFFFFFu);
+    }
+    ((uint32_t(*)(uint32_t, uint32_t, uint32_t, uint32_t))p)
+        (hwnd, WM_PAINT, 0, 0);
+    if (!is_child(hwnd))
+        sys_winupdate(hwnd);
+}
+
+uint32_t ShowWindow(uint32_t hwnd, int cmd)
+{
+    (void)cmd;
+    if (hwnd < MAX_WNDPROCS && wnd_proc[hwnd])
+        wm_paint_window(hwnd);
+    return 1;
+}
+
+uint32_t UpdateWindow(uint32_t hwnd)
+{
+    if (hwnd < MAX_WNDPROCS && wnd_proc[hwnd])
+        wm_paint_window(hwnd);
+    return 1;
+}
+
+uint32_t DestroyWindow(uint32_t hwnd)
+{
+    if (hwnd < MAX_WNDPROCS) {
+        if (is_child(hwnd)) {
+            uint32_t i = hwnd - CHILD_BASE;
+            child_parent[i] = 0;
+            wnd_proc[hwnd] = 0;
+            return 1;
+        }
+        if (wnd_buf[hwnd])
+            sys_free(wnd_buf[hwnd]);
+        wnd_buf[hwnd] = 0;
+        wnd_proc[hwnd] = 0;
+        sys_winclose(hwnd);
+    }
+    return 1;
+}
+
+uint32_t IsWindow(uint32_t hwnd)
+{
+    return (hwnd < MAX_WNDPROCS && wnd_proc[hwnd]) ? 1 : 0;
+}
+
+uint32_t GetMessageA(uint32_t msg, uint32_t hwnd, uint32_t a, uint32_t b)
+{
+    uint32_t ev[5];
+    uint32_t out[4];
+    (void)hwnd; (void)a; (void)b;
+    for (;;) {
+        if (quit_pending)
+            return 0;
+        if (msgq_pop(out)) {
+            wr32u((uint8_t *)(uint32_t)msg, out[0]);
+            wr32u((uint8_t *)(uint32_t)msg + 4, out[1]);
+            wr32u((uint8_t *)(uint32_t)msg + 8, out[2]);
+            wr32u((uint8_t *)(uint32_t)msg + 12, out[3]);
+            wr32u((uint8_t *)(uint32_t)msg + 16, 0);
+            wr32u((uint8_t *)(uint32_t)msg + 20, 0);
+            wr32u((uint8_t *)(uint32_t)msg + 24, 0);
+            return 1;
+        }
+        if (sys_event(ev) == 0 && ev[0] != 0)
+            event_to_wm(ev);
+    }
+}
+
+uint32_t PeekMessageA(uint32_t msg, uint32_t hwnd, uint32_t a, uint32_t b,
+                      uint32_t rm)
+{
+    uint32_t ev[5];
+    uint32_t out[4];
+    (void)hwnd; (void)a; (void)b; (void)rm;
+    if (msgq_pop(out)) {
+        wr32u((uint8_t *)(uint32_t)msg, out[0]);
+        wr32u((uint8_t *)(uint32_t)msg + 4, out[1]);
+        wr32u((uint8_t *)(uint32_t)msg + 8, out[2]);
+        wr32u((uint8_t *)(uint32_t)msg + 12, out[3]);
+        return 1;
+    }
+    if (sys_event(ev) == 0 && ev[0] != 0) {
+        event_to_wm(ev);
+        if (msgq_pop(out)) {
+            wr32u((uint8_t *)(uint32_t)msg, out[0]);
+            wr32u((uint8_t *)(uint32_t)msg + 4, out[1]);
+            wr32u((uint8_t *)(uint32_t)msg + 8, out[2]);
+            wr32u((uint8_t *)(uint32_t)msg + 12, out[3]);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+uint32_t TranslateMessage(uint32_t msg) { (void)msg; return 0; }
+
+uint32_t DispatchMessageA(uint32_t msg)
+{
+    const uint8_t *m8 = (const uint8_t *)(uint32_t)msg;
+    uint32_t hwnd = rd32u(m8);
+    uint32_t m = rd32u(m8 + 4);
+    uint32_t wp = rd32u(m8 + 8);
+    uint32_t lp = rd32u(m8 + 12);
+    uint32_t p;
+    if (hwnd >= MAX_WNDPROCS)
+        return 0;
+    p = wnd_proc[hwnd];
+    if (p == 0)
+        return DefWindowProcA(hwnd, m, wp, lp);
+    return ((uint32_t(*)(uint32_t, uint32_t, uint32_t, uint32_t))p)
+        (hwnd, m, wp, lp);
+}
+
+uint32_t PostMessageA(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
+{
+    msgq_push(hwnd, m, a, b);
+    return 1;
+}
+
+uint32_t PostQuitMessage(int code)
+{
+    (void)code;
+    quit_pending = 1;
+    msgq_push(0, WM_QUIT, code, 0);
+    return 0;
+}
+
+uint32_t SendMessageA(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
+{
+    uint32_t p;
+    if (hwnd >= MAX_WNDPROCS)
+        return 0;
+    p = wnd_proc[hwnd];
+    if (p == 0)
+        return DefWindowProcA(hwnd, m, a, b);
+    return ((uint32_t(*)(uint32_t, uint32_t, uint32_t, uint32_t))p)
+        (hwnd, m, a, b);
+}
+
+uint32_t SendDlgItemMessageA(uint32_t d, uint32_t i, uint32_t m,
+                             uint32_t a, uint32_t b)
+{ (void)d; (void)i; (void)m; (void)a; (void)b; return 0; }
+
+uint32_t DefWindowProcA(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
+{
+    (void)a; (void)b;
+    if (m == WM_CLOSE) {
+        if (hwnd < MAX_WNDPROCS) {
+            wnd_proc[hwnd] = 0;
+            sys_winclose(hwnd);
+        }
+        PostQuitMessage(0);
+        return 0;
+    }
+    if (m == WM_DESTROY) {
+        PostQuitMessage(0);
+        return 0;
+    }
+    if (m == WM_QUIT) {
+        PostQuitMessage(0);
+        return 0;
+    }
+    if (m == WM_PAINT || m == 0x0014 /* WM_ERASEBKGND */) {
+        /* el fondo blanco ya lo deja wm_paint_window(); si la app llama
+         * a DefWindowProc por su cuenta no hay que pintar nada mas */
+        return m == 0x0014 ? 1 : 0;
+    }
+    return 0;
+}
+
+uint32_t CallWindowProcA(uint32_t p, uint32_t hwnd, uint32_t m,
+                         uint32_t a, uint32_t b)
+{
+    (void)p; (void)hwnd; (void)m; (void)a; (void)b;
+    return DefWindowProcA(hwnd, m, a, b);
+}
+
+/* --- DC de dibujo (slice 2 del Hito B) ---
+ * GetDC crea un DC apuntando al buffer del cliente de la ventana (o
+ * del padre + origen si es un hijo virtual). gdi32.dll dibuja dentro
+ * con sus funciones (TextOutA/FillRect/...). El handle es la VA del
+ * DC del pool; se libera con ReleaseDC. */
+
+static uint32_t dc_lookup(uint32_t hwnd, myos_dc_t **dc)
+{
+    uint32_t buf, parent;
+    int cw, ch, ox, oy;
+
+    if (hwnd >= MAX_WNDPROCS)
+        return 0;
+    if (is_child(hwnd)) {
+        uint32_t i = hwnd - CHILD_BASE;
+        parent = child_parent[i];
+        if (parent >= MAX_WNDPROCS || wnd_buf[parent] == 0)
+            return 0;
+        buf = wnd_buf[parent];
+        cw = wnd_cw[parent];
+        ch = wnd_ch[parent];
+        ox = child_x[i];
+        oy = child_y[i];
+    } else {
+        if (wnd_buf[hwnd] == 0)
+            return 0;
+        buf = wnd_buf[hwnd];
+        cw = wnd_cw[hwnd];
+        ch = wnd_ch[hwnd];
+        ox = 0;
+        oy = 0;
+    }
+    if (dc_pool[hwnd].magic == GDI_DC_MAGIC)
+        *dc = &dc_pool[hwnd];
+    else {
+        myos_dc_t *d = &dc_pool[hwnd];
+        d->magic = GDI_DC_MAGIC;
+        d->buf = buf;
+        d->cw = cw;
+        d->ch = ch;
+        d->ox = ox;
+        d->oy = oy;
+        d->fg = 0x00000000u;        /* texto negro */
+        d->bg = 0x00FFFFFFu;        /* fondo blanco */
+        d->bk_mode = GDI_BK_OPAQUE;
+        d->font = 0;
+        d->brush = STOCK_HANDLE(WHITE_BRUSH);   /* como Windows: brush blanco */
+        d->pen = STOCK_HANDLE(BLACK_PEN);       /* y pen negro por defecto */
+        d->pen_x = 0;
+        d->pen_y = 0;
+        *dc = d;
+    }
+    return 1;
+}
+
+uint32_t GetDC(uint32_t hwnd)
+{
+    myos_dc_t *dc;
+    char num[16];
+    if (!dc_lookup(hwnd, &dc))
+        return 0;
+    console_print("[user32] GetDC hwnd=");
+    console_print(itoa32(num, hwnd));
+    console_print(" -> ");
+    console_print(itoa32(num, (uint32_t)dc));
+    console_print("\n");
+    return (uint32_t)dc;
+}
+
+uint32_t ReleaseDC(uint32_t hwnd, uint32_t dc) {
+    char num[16];
+    console_print("[u32] RD hwnd=");
+    console_print(itoa32(num, hwnd));
+    console_print(" dc=");
+    console_print(itoa32(num, dc));
+    console_print(" lo=");
+    console_print(itoa32(num, (uint32_t)&dc_pool[0]));
+    console_print(" hi=");
+    console_print(itoa32(num, (uint32_t)&dc_pool[MAX_WNDPROCS]));
+    console_print("\n");
+    (void)hwnd;
+    if (dc < (uint32_t)&dc_pool[0] || dc >= (uint32_t)&dc_pool[MAX_WNDPROCS]) return 0;
+    ((myos_dc_t *)dc)->magic = 0;
+    return 1;
+}
+
+/* FillRect: en Windows vive en USER32 (no en GDI32). Rellena el rect del
+ * DC. pinceles stock: indice+1; creados (en gdi32): 0x1000+ (no
+ * resolubles aqui -> blanco). */
+static uint32_t u32_brush_color(uint32_t h)
+{
+    switch ((int)h - 1) {
+    case 0:  return 0x00FFFFFFu;   /* WHITE_BRUSH */
+    case 1:  return 0x00C0C0C0u;   /* LTGRAY_BRUSH */
+    case 2:  return 0x00808080u;   /* GRAY_BRUSH */
+    case 3:  return 0x00404040u;   /* DKGRAY_BRUSH */
+    case 5:  return 0x00FFFFFFu;   /* NULL_BRUSH: pinta igual */
+    default: return 0x00FFFFFFu;
+    }
+}
+
+uint32_t FillRect(uint32_t hdc, const int32_t *rc, uint32_t brush)
+{
+    myos_dc_t *dc;
+    uint32_t c;
+    int l, t, r2, b2, x, y;
+    if (hdc < (uint32_t)&dc_pool[0] ||
+        hdc >= (uint32_t)&dc_pool[MAX_WNDPROCS])
+        return 0;
+    dc = (myos_dc_t *)hdc;
+    if (dc->magic != GDI_DC_MAGIC || rc == 0 || dc->buf == 0)
+        return 0;
+    l = rc[0]; t = rc[1]; r2 = rc[2]; b2 = rc[3];
+    if (l > r2) { int q = l; l = r2; r2 = q; }
+    if (t > b2) { int q = t; t = b2; b2 = q; }
+    c = (brush < 0x1000) ? u32_brush_color(brush)
+                         : (brush ? 0x00FFFFFFu : 0x00FFFFFFu);
+    for (y = t; y < b2; y++) {
+        int ay = dc->oy + y;
+        if (ay < 0 || ay >= dc->ch)
+            continue;
+        {
+            uint32_t *row = (uint32_t *)dc->buf +
+                            (uint32_t)ay * (uint32_t)dc->cw;
+            for (x = l; x < r2; x++) {
+                int ax = dc->ox + x;
+                if (ax < 0 || ax >= dc->cw)
+                    continue;
+                row[ax] = px_disp(c);
+            }
+        }
+    }
+    return 1;
+}
+
+/* BeginPaint: rellena el PAINTSTRUCT (hdc, rcPaint=cliente) y devuelve
+ * el DC. EndPaint libera el DC. */
+#define WM_NULL      0x0000
+typedef struct {
+    int32_t left, top, right, bottom;
+} myos_rect_t;
+
+typedef struct {
+    uint32_t hdc;
+    int      fErase;
+    myos_rect_t rcPaint;
+    int      fRestore, fIncUpdate;
+    uint32_t rgbReserved[32];
+} myos_paintstruct_t;
+
+uint32_t BeginPaint(uint32_t hwnd, myos_paintstruct_t *ps)
+{
+    myos_dc_t *dc;
+    char num[16];
+    if (ps == 0 || !dc_lookup(hwnd, &dc))
+        return 0;
+    console_print("[u32] BP hwnd=");
+    console_print(itoa32(num, hwnd));
+    console_print(" magic=");
+    console_print(itoa32(num, dc->magic));
+    console_print(" pen=");
+    console_print(itoa32(num, dc->pen));
+    console_print(" brush=");
+    console_print(itoa32(num, dc->brush));
+    console_print("\n");
+    ps->hdc = (uint32_t)dc;
+    ps->fErase = 1;
+    ps->rcPaint.left = 0;
+    ps->rcPaint.top = 0;
+    ps->rcPaint.right = wnd_cw[hwnd];
+    ps->rcPaint.bottom = wnd_ch[hwnd];
+    ps->fRestore = 0;
+    ps->fIncUpdate = 0;
+    return ps->hdc;
+}
+
+uint32_t EndPaint(uint32_t hwnd, const myos_paintstruct_t *ps)
+{
+    char num[16];
+    console_print("[u32] EP hwnd=");
+    console_print(itoa32(num, hwnd));
+    console_print(" ps=");
+    console_print(itoa32(num, (uint32_t)ps));
+    console_print(" ps->hdc=");
+    console_print(itoa32(num, ps ? ps->hdc : 0));
+    console_print("\n");
+    if (ps)
+        ReleaseDC(hwnd, ps->hdc);
+    return 1;
+}
+
+/* --- wndproc built-in (clases RichEdit20A/EDIT/STATIC/...) ---
+ * WM_SETTEXT/GetWindowText mantienen el texto; WM_PAINT dibuja el
+ * texto en el buffer del padre (cliente blanco, letra negra). */
+
+uint32_t builtin_wndproc(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
+{
+    (void)b;
+    if (m == WM_SETTEXT) {
+        uint32_t i = hwnd - CHILD_BASE;
+        int k = 0;
+        const char *s = (const char *)a;
+        if (s == 0)
+            s = "";
+        while (s[k] && k < CHILD_TXTLEN - 1) {
+            child_text[i][k] = s[k];
+            k++;
+        }
+        child_text[i][k] = 0;
+        return 1;
+    }
+    if (m == WM_GETTEXT) {
+        uint32_t i = hwnd - CHILD_BASE;
+        int k = 0;
+        char *dst = (char *)a;
+        if (dst == 0)
+            return 0;
+        while (child_text[i][k] && k < (int)b - 1) {
+            dst[k] = child_text[i][k];
+            k++;
+        }
+        dst[k] = 0;
+        return (uint32_t)k;
+    }
+    if (m == WM_PAINT) {
+        /* pinta el texto en el buffer del padre (coords del hijo) */
+        uint32_t i = hwnd - CHILD_BASE;
+        uint32_t parent = child_parent[i];
+        uint32_t *px = (uint32_t *)wnd_buf[parent];
+        int px0 = child_x[i], py0 = child_y[i];
+        int pw = child_w[i], ph = child_h[i];
+        int cw = wnd_cw[parent];
+        const char *s = child_text[i];
+        int cx = px0, cy = py0;
+        int x, y;
+
+        if (px == 0)
+            return 0;
+        /* fondo del editor: blanco */
+        for (y = py0; y < py0 + ph && y < cw && y < wnd_ch[parent]; y++) {
+            uint32_t *row = px + (uint32_t)y * (uint32_t)cw;
+            for (x = px0; x < px0 + pw && x < cw; x++)
+                row[x] = px_disp(0x00FFFFFFu);
+        }
+        /* texto 8x16 en negro, clip al rect del hijo */
+        while (*s && cy < py0 + ph) {
+            char c = *s;
+            const unsigned char *g;
+            if (c < 32 || c > 126)
+                c = '?';
+            g = font8x16_basic[c - 32];
+            for (y = 0; y < 16 && cy + y < py0 + ph; y++)
+                for (x = 0; x < 8; x++)
+                    if (g[y] & (0x80u >> x)) {
+                        int xx = cx + x, yy = cy + y;
+                        if (xx < px0 + pw && xx < cw && yy >= py0)
+                            px[(uint32_t)yy * (uint32_t)cw + (uint32_t)xx] =
+                                px_disp(0x00000000u);
+                    }
+            cx += 8;
+            if (cx >= px0 + pw) {
+                cx = px0;
+                cy += 16;
+            }
+            s++;
+        }
+        /* refresh del top-level: el kernel solo blitea el padre */
+        if (parent < MAX_WNDPROCS && wnd_proc[parent])
+            sys_winupdate(parent);
+        return 0;
+    }
+    if (m == WM_CLOSE) {
+        child_parent[hwnd - CHILD_BASE] = 0;
+        return 0;
+    }
+    return DefWindowProcA(hwnd, m, a, 0);
+}
+
+uint32_t SetFocus(uint32_t hwnd) { (void)hwnd; return 0; }
+uint32_t SetWindowTextA(uint32_t hwnd, uint32_t t)
+{
+    if (hwnd >= MAX_WNDPROCS || !wnd_proc[hwnd])
+        return 0;
+    if (is_child(hwnd)) {
+        uint32_t i = hwnd - CHILD_BASE;
+        int k = 0;
+        const char *s = (const char *)t;
+        if (s == 0)
+            s = "";
+        while (s[k] && k < CHILD_TXTLEN - 1) {
+            child_text[i][k] = s[k];
+            k++;
+        }
+        child_text[i][k] = 0;
+        return 1;
+    }
+    if (str_valid((const char *)t))
+        sys_wintitle(hwnd, (const char *)t);
+    return 1;
+}
+
+uint32_t GetWindowTextA(uint32_t hwnd, uint32_t b, int n)
+{
+    if (is_child(hwnd)) {
+        uint32_t i = hwnd - CHILD_BASE;
+        int k = 0;
+        char *dst = (char *)b;
+        if (dst == 0 || n <= 0)
+            return 0;
+        while (child_text[i][k] && k < n - 1) {
+            dst[k] = child_text[i][k];
+            k++;
+        }
+        dst[k] = 0;
+        return (uint32_t)k;
+    }
+    (void)b; (void)n;
+    return 0;
+}
+
+uint32_t GetWindowTextLengthA(uint32_t hwnd)
+{
+    if (is_child(hwnd)) {
+        uint32_t i = hwnd - CHILD_BASE;
+        uint32_t k = 0;
+        while (child_text[i][k])
+            k++;
+        return k;
+    }
+    return 0;
+}
+uint32_t GetWindowLongA(uint32_t hwnd, int idx) { (void)hwnd; (void)idx; return 0; }
+uint32_t SetWindowLongA(uint32_t hwnd, int idx, uint32_t v) { (void)hwnd; (void)idx; (void)v; return 0; }
+uint32_t SetClassLongA(uint32_t hwnd, int idx, uint32_t v) { (void)hwnd; (void)idx; (void)v; return 0; }
+uint32_t SetWindowPos(uint32_t hwnd, uint32_t after, int x, int y, int w,
+                      int h, uint32_t f)
+{ (void)hwnd; (void)after; (void)x; (void)y; (void)w; (void)h; (void)f; return 0; }
+uint32_t GetWindowRect(uint32_t hwnd, uint32_t r) { (void)hwnd; (void)r; return 0; }
+uint32_t GetClientRect(uint32_t hwnd, uint32_t r)
+{
+    int *rc = (int *)r;
+    if (rc == 0)
+        return 0;
+    if (is_child(hwnd)) {
+        rc[0] = 0;
+        rc[1] = 0;
+        rc[2] = child_w[hwnd - CHILD_BASE];
+        rc[3] = child_h[hwnd - CHILD_BASE];
+    } else {
+        rc[0] = 0;
+        rc[1] = 0;
+        rc[2] = wnd_cw[hwnd];
+        rc[3] = wnd_ch[hwnd];
+    }
+    return 1;
+}
+uint32_t GetWindowPlacement(uint32_t hwnd, uint32_t p) { (void)hwnd; (void)p; return 0; }
+uint32_t GetCursorPos(uint32_t p) { (void)p; return 0; }
+uint32_t SetCursor(uint32_t c) { (void)c; return 0; }
+uint32_t GetParent(uint32_t hwnd) { (void)hwnd; return 0; }
+uint32_t EnableWindow(uint32_t hwnd, int en) { (void)hwnd; (void)en; return 0; }
+uint32_t GetKeyboardState(uint32_t s) { (void)s; return 0; }
+uint32_t SetKeyboardState(uint32_t s) { (void)s; return 0; }
+uint32_t IsDialogMessageA(uint32_t d, uint32_t m) { (void)d; (void)m; return 0; }
+uint32_t RegisterWindowMessageA(uint32_t s) { (void)s; return 0x0400; }
+uint32_t MessageBeep(uint32_t t) { (void)t; return 0; }
+uint32_t LoadIconA(uint32_t i, uint32_t n) { (void)i; (void)n; console_print("[user32] LoadIconA\n"); return 0; }
+uint32_t LoadCursorA(uint32_t i, uint32_t n) { (void)i; (void)n; console_print("[user32] LoadCursorA\n"); return 0; }
+uint32_t LoadStringA(uint32_t i, uint32_t id, uint32_t b, int n)
+{
+    /* RT_STRING (tipo 6): el bloque es (id>>4)+1; dentro, 16 strings
+     * [len u16][utf16]. Lanza mensaje al log si no existe. */
+    const uint8_t *tbl;
+    uint32_t size, inblk, k;
+    char num[16];
+    int pos, out;
+
+    (void)i;
+    if (b == 0 || n <= 0)
+        return 0;
+    tbl = find_resource(6, (id >> 4) + 1, &size);
+    if (tbl == 0) {
+        console_print("[user32] LoadStringA id=");
+        console_print(itoa32(num, id));
+        console_print(" (sin recurso)\n");
+        return 0;
+    }
+    inblk = id & 0xF;
+    pos = 0;
+    out = 0;
+    for (k = 0; k < 16 && k <= inblk; k++) {
+        uint16_t len;
+        int w;
+        if ((uint32_t)pos + 2 > size)
+            return 0;
+        len = rd16u(tbl + pos);
+        pos += 2;
+        if ((uint32_t)pos + (uint32_t)len * 2 > size)
+            return 0;
+        if (k == inblk) {
+            for (w = 0; w < len && out < n - 1; w++) {
+                uint16_t c = rd16u(tbl + pos + w * 2);
+                ((char *)b)[out++] = (c < 0x80) ? (char)c : '?';
+            }
+            break;
+        }
+        pos += len * 2;
+    }
+    ((char *)b)[out] = 0;
+    if (out > 0) {
+        console_print("[user32] LoadStringA id=");
+        console_print(itoa32(num, id));
+        console_print(" -> '");
+        console_print((const char *)b);
+        console_print("'\n");
+    }
+    return (uint32_t)out;
+}
+static void wsprint_uint(char *buf, uint32_t v, int base, int upper)
+{
+    char tmp[16];
+    int n = 0;
+    static const char *dig_l = "0123456789abcdef";
+    static const char *dig_u = "0123456789ABCDEF";
+    const char *dig = upper ? dig_u : dig_l;
+    if (v == 0)
+        tmp[n++] = '0';
+    while (v) {
+        tmp[n++] = dig[v % (uint32_t)base];
+        v /= (uint32_t)base;
+    }
+    while (n)
+        *buf++ = tmp[--n];
+    *buf = 0;
+}
+
+uint32_t wsprintfA(uint32_t b, uint32_t f, ...)
+{
+    char *out = (char *)b;
+    const char *fmt = (const char *)f;
+    uint32_t args[8];
+    int ai = 0, k = 0;
+    __builtin_va_list ap;
+    int i;
+
+    if (fmt == 0)
+        fmt = "";
+    __builtin_va_start(ap, f);
+    for (i = 0; i < 8; i++)
+        args[i] = __builtin_va_arg(ap, uint32_t);
+    __builtin_va_end(ap);
+    while (*fmt && k < 240) {
+        if (*fmt != '%') {
+            out[k++] = *fmt++;
+            continue;
+        }
+        fmt++;
+        if (*fmt == 's' || *fmt == 'S') {
+            const char *s = (const char *)args[ai++];
+            if (s == 0)
+                s = "";
+            while (*s && k < 239) {
+                out[k++] = *s;
+                s++;
+            }
+        } else if (*fmt == 'd' || *fmt == 'i' || *fmt == 'u') {
+            char tmp[16];
+            int neg = 0;
+            int32_t v = (int32_t)args[ai++];
+            if (v < 0 && *fmt != 'u') {
+                neg = 1;
+                v = -v;
+            }
+            wsprint_uint(tmp, (uint32_t)v, 10, 0);
+            if (neg)
+                out[k++] = '-';
+            {   char *t = tmp;
+                while (*t && k < 239)
+                    out[k++] = *t++;
+            }
+        } else if (*fmt == 'x' || *fmt == 'X') {
+            char tmp[16];
+            wsprint_uint(tmp, args[ai++], 16, *fmt == 'X');
+            {   char *t = tmp;
+                while (*t && k < 239)
+                    out[k++] = *t++;
+            }
+        } else if (*fmt == 'c') {
+            out[k++] = (char)(uint8_t)args[ai++];
+        } else {
+            out[k++] = '%';
+        }
+        if (*fmt)
+            fmt++;
+    }
+    out[k] = 0;
+    return (uint32_t)k;
+}
+uint32_t GetSysColor(int idx) { (void)idx; return 0x00FFFFFFu; }
+uint32_t GetSysColorBrush(int idx) { (void)idx; return 0; }
+uint32_t SystemParametersInfoA(uint32_t a, uint32_t b, uint32_t c, uint32_t d)
+{ (void)a; (void)b; (void)c; (void)d; return 0; }
+uint32_t GetDialogBaseUnits(void) { return 0; }
+uint32_t GetDlgItem(uint32_t d, int id) { (void)d; (void)id; return 0; }
+uint32_t GetDlgItemTextA(uint32_t d, int id, uint32_t b, int n)
+{ (void)d; (void)id; (void)b; (void)n; return 0; }
+uint32_t SetDlgItemTextA(uint32_t d, int id, uint32_t b)
+{ (void)d; (void)id; (void)b; return 0; }
+uint32_t DialogBoxParamA(uint32_t i, uint32_t t, uint32_t p, uint32_t f,
+                         uint32_t a)
+{ (void)i; (void)t; (void)p; (void)f; (void)a; return 0; }
+uint32_t CreateDialogParamA(uint32_t i, uint32_t t, uint32_t p, uint32_t f,
+                            uint32_t a)
+{ (void)i; (void)t; (void)p; (void)f; (void)a; return 0; }
+uint32_t EndDialog(uint32_t d, int r) { (void)d; (void)r; return 0; }
+uint32_t CreateMenu(void) { return 0; }
+uint32_t GetMenu(uint32_t hwnd) { (void)hwnd; return 0; }
+uint32_t SetMenu(uint32_t hwnd, uint32_t menu) { (void)hwnd; (void)menu; return 0; }
+uint32_t DrawMenuBar(uint32_t hwnd) { (void)hwnd; return 0; }
+uint32_t DestroyMenu(uint32_t menu) { (void)menu; return 0; }
+uint32_t GetSubMenu(uint32_t menu, int pos) { (void)menu; (void)pos; return 0; }
+uint32_t GetMenuItemCount(uint32_t menu) { (void)menu; return 0; }
+uint32_t GetMenuItemInfoA(uint32_t menu, uint32_t item, uint32_t bypos,
+                          uint32_t info)
+{ (void)menu; (void)item; (void)bypos; (void)info; return 0; }
+uint32_t SetMenuItemInfoA(uint32_t menu, uint32_t item, uint32_t bypos,
+                          uint32_t info)
+{ (void)menu; (void)item; (void)bypos; (void)info; return 0; }
+uint32_t InsertMenuItemA(uint32_t menu, uint32_t item, uint32_t bypos,
+                         uint32_t info)
+{ (void)menu; (void)item; (void)bypos; (void)info; return 0; }
+uint32_t DeleteMenu(uint32_t menu, uint32_t item, uint32_t bypos)
+{ (void)menu; (void)item; (void)bypos; return 0; }
+uint32_t EnableMenuItem(uint32_t menu, uint32_t item, uint32_t f)
+{ (void)menu; (void)item; (void)f; return 0; }
+uint32_t CheckMenuRadioItem(uint32_t menu, uint32_t a, uint32_t b,
+                            uint32_t c, uint32_t f)
+{ (void)menu; (void)a; (void)b; (void)c; (void)f; return 0; }
+uint32_t TrackPopupMenuEx(uint32_t menu, uint32_t f, int x, int y,
+                          uint32_t h, uint32_t r)
+{ (void)menu; (void)f; (void)x; (void)y; (void)h; (void)r; return 0; }
+uint32_t InvalidateRect(uint32_t hwnd, uint32_t r, uint32_t e)
+{ (void)hwnd; (void)r; (void)e; return 0; }
+uint32_t RedrawWindow(uint32_t hwnd, uint32_t r, uint32_t u, uint32_t f)
+{ (void)hwnd; (void)r; (void)u; (void)f; return 0; }
+uint32_t EnableScrollBar(uint32_t hwnd, uint32_t a, uint32_t b)
+{ (void)hwnd; (void)a; (void)b; return 0; }
+uint32_t GetScrollInfo(uint32_t hwnd, uint32_t a, uint32_t b)
+{ (void)hwnd; (void)a; (void)b; return 0; }
+uint32_t GetClipboardData(uint32_t f) { (void)f; return 0; }
+uint32_t SetClipboardData(uint32_t f, uint32_t h) { (void)f; (void)h; return 0; }
+uint32_t OpenClipboard(uint32_t hwnd) { (void)hwnd; return 0; }
+uint32_t CloseClipboard(void) { return 0; }
+uint32_t EmptyClipboard(void) { return 0; }
+uint32_t IsClipboardFormatAvailable(uint32_t f) { (void)f; return 0; }
+
 /* --- MessageBoxA --- */
 
 /* Botones: 0 = OK. Devuelve IDOK (1) al hacer clic en OK o pulsar Enter. */
@@ -282,9 +1847,96 @@ typedef struct {
 
 win32_export_t __exports[] __attribute__((section(".exports"))) = {
     { "MessageBoxA", (uint32_t)&MessageBoxA },
-    { "MyOS_PollEvent", (uint32_t)sys_event },
-    { "MyOS_DrawButton", (uint32_t)user32_draw_button },
-    { "MyOS_WidgetHit", (uint32_t)point_in_rect },
-    { "MyOS_ButtonFeed", (uint32_t)user32_button_feed },
+    { "LoadMenuA", (uint32_t)&LoadMenuA },
+    { "CharLowerA", (uint32_t)&CharLowerA },
+    { "CharLowerBuffA", (uint32_t)&CharLowerBuffA },
+    { "CharUpperBuffA", (uint32_t)&CharUpperBuffA },
+    { "CharToOemBuffA", (uint32_t)&CharToOemBuffA },
+    { "OemToCharBuffA", (uint32_t)&OemToCharBuffA },
+    { "IsCharAlphaA", (uint32_t)&IsCharAlphaA },
+    { "IsCharAlphaNumericA", (uint32_t)&IsCharAlphaNumericA },
+    { "IsCharLowerA", (uint32_t)&IsCharLowerA },
+    { "IsCharUpperA", (uint32_t)&IsCharUpperA },
+    { "RegisterClassA", (uint32_t)&RegisterClassA },
+    { "CreateWindowExA", (uint32_t)&CreateWindowExA },
+    { "ShowWindow", (uint32_t)&ShowWindow },
+    { "UpdateWindow", (uint32_t)&UpdateWindow },
+    { "DestroyWindow", (uint32_t)&DestroyWindow },
+    { "IsWindow", (uint32_t)&IsWindow },
+    { "GetMessageA", (uint32_t)&GetMessageA },
+    { "PeekMessageA", (uint32_t)&PeekMessageA },
+    { "TranslateMessage", (uint32_t)&TranslateMessage },
+    { "DispatchMessageA", (uint32_t)&DispatchMessageA },
+    { "PostMessageA", (uint32_t)&PostMessageA },
+    { "PostQuitMessage", (uint32_t)&PostQuitMessage },
+    { "SendMessageA", (uint32_t)&SendMessageA },
+    { "SendDlgItemMessageA", (uint32_t)&SendDlgItemMessageA },
+    { "DefWindowProcA", (uint32_t)&DefWindowProcA },
+    { "CallWindowProcA", (uint32_t)&CallWindowProcA },
+    { "GetDC", (uint32_t)&GetDC },
+    { "ReleaseDC", (uint32_t)&ReleaseDC },
+    { "FillRect", (uint32_t)&FillRect },
+    { "BeginPaint", (uint32_t)&BeginPaint },
+    { "EndPaint", (uint32_t)&EndPaint },
+    { "SetFocus", (uint32_t)&SetFocus },
+    { "SetWindowTextA", (uint32_t)&SetWindowTextA },
+    { "GetWindowTextA", (uint32_t)&GetWindowTextA },
+    { "GetWindowTextLengthA", (uint32_t)&GetWindowTextLengthA },
+    { "GetWindowLongA", (uint32_t)&GetWindowLongA },
+    { "SetWindowLongA", (uint32_t)&SetWindowLongA },
+    { "SetClassLongA", (uint32_t)&SetClassLongA },
+    { "SetWindowPos", (uint32_t)&SetWindowPos },
+    { "GetWindowRect", (uint32_t)&GetWindowRect },
+    { "GetClientRect", (uint32_t)&GetClientRect },
+    { "GetWindowPlacement", (uint32_t)&GetWindowPlacement },
+    { "GetCursorPos", (uint32_t)&GetCursorPos },
+    { "SetCursor", (uint32_t)&SetCursor },
+    { "GetParent", (uint32_t)&GetParent },
+    { "EnableWindow", (uint32_t)&EnableWindow },
+    { "GetKeyboardState", (uint32_t)&GetKeyboardState },
+    { "SetKeyboardState", (uint32_t)&SetKeyboardState },
+    { "IsDialogMessageA", (uint32_t)&IsDialogMessageA },
+    { "RegisterWindowMessageA", (uint32_t)&RegisterWindowMessageA },
+    { "MessageBeep", (uint32_t)&MessageBeep },
+    { "LoadIconA", (uint32_t)&LoadIconA },
+    { "LoadCursorA", (uint32_t)&LoadCursorA },
+    { "LoadStringA", (uint32_t)&LoadStringA },
+    { "wsprintfA", (uint32_t)&wsprintfA },
+    { "GetSysColor", (uint32_t)&GetSysColor },
+    { "GetSysColorBrush", (uint32_t)&GetSysColorBrush },
+    { "SystemParametersInfoA", (uint32_t)&SystemParametersInfoA },
+    { "GetDialogBaseUnits", (uint32_t)&GetDialogBaseUnits },
+    { "GetDlgItem", (uint32_t)&GetDlgItem },
+    { "GetDlgItemTextA", (uint32_t)&GetDlgItemTextA },
+    { "SetDlgItemTextA", (uint32_t)&SetDlgItemTextA },
+    { "DialogBoxParamA", (uint32_t)&DialogBoxParamA },
+    { "CreateDialogParamA", (uint32_t)&CreateDialogParamA },
+    { "EndDialog", (uint32_t)&EndDialog },
+    { "TranslateAcceleratorA", (uint32_t)&TranslateAcceleratorA },
+    { "LoadAcceleratorsA", (uint32_t)&LoadAcceleratorsA },
+    { "CreateMenu", (uint32_t)&CreateMenu },
+    { "GetMenu", (uint32_t)&GetMenu },
+    { "SetMenu", (uint32_t)&SetMenu },
+    { "DrawMenuBar", (uint32_t)&DrawMenuBar },
+    { "DestroyMenu", (uint32_t)&DestroyMenu },
+    { "GetSubMenu", (uint32_t)&GetSubMenu },
+    { "GetMenuItemCount", (uint32_t)&GetMenuItemCount },
+    { "GetMenuItemInfoA", (uint32_t)&GetMenuItemInfoA },
+    { "SetMenuItemInfoA", (uint32_t)&SetMenuItemInfoA },
+    { "InsertMenuItemA", (uint32_t)&InsertMenuItemA },
+    { "DeleteMenu", (uint32_t)&DeleteMenu },
+    { "EnableMenuItem", (uint32_t)&EnableMenuItem },
+    { "CheckMenuRadioItem", (uint32_t)&CheckMenuRadioItem },
+    { "TrackPopupMenuEx", (uint32_t)&TrackPopupMenuEx },
+    { "InvalidateRect", (uint32_t)&InvalidateRect },
+    { "RedrawWindow", (uint32_t)&RedrawWindow },
+    { "EnableScrollBar", (uint32_t)&EnableScrollBar },
+    { "GetScrollInfo", (uint32_t)&GetScrollInfo },
+    { "GetClipboardData", (uint32_t)&GetClipboardData },
+    { "SetClipboardData", (uint32_t)&SetClipboardData },
+    { "OpenClipboard", (uint32_t)&OpenClipboard },
+    { "CloseClipboard", (uint32_t)&CloseClipboard },
+    { "EmptyClipboard", (uint32_t)&EmptyClipboard },
+    { "IsClipboardFormatAvailable", (uint32_t)&IsClipboardFormatAvailable },
     { "", 0 },
 };

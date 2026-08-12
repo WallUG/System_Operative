@@ -115,7 +115,7 @@ static void exit_current(registers_t *regs)
 static void sys_exec(const char *name, registers_t *regs)
 {
     void *buf;
-    uint32_t size, entry;
+    uint32_t size, entry, base = 0;
     int is_pe, r;
 
     size = (uint32_t)mefs_size(name);
@@ -135,7 +135,7 @@ static void sys_exec(const char *name, registers_t *regs)
     }
     is_pe = (size >= 2 && ((uint8_t *)buf)[0] == 'M'
              && ((uint8_t *)buf)[1] == 'Z');
-    r = is_pe ? pe_load_into(sched_current_cr3(), buf, size, &entry)
+    r = is_pe ? pe_load_into(sched_current_cr3(), buf, size, &entry, &base)
               : elf_load_into(sched_current_cr3(), buf, size, &entry);
     if (r != 0) {
         /* El ELF es invalido y el espacio de usuario anterior ya se
@@ -146,6 +146,7 @@ static void sys_exec(const char *name, registers_t *regs)
     }
     kfree(buf);
     sched_set_exe_name(name);   /* GetModuleFileNameA usa este nombre */
+    sched_set_exe_base(base);
 
     /* Remapear los modulos Win32 fijos y la pila de usuario
      * (elf_load_into libero el espacio) y reiniciar esp: el programa
@@ -492,6 +493,19 @@ void syscall_handler(registers_t *regs)
         regs->eax = 0;
         break;
     }
+    case SYS_WINTITLE: { /* ebx=id, ecx=title* (validado por PD) */
+        char title[24];
+        if (user_strcpy(title, sizeof(title), (const char *)regs->ecx,
+                        pd) != 0) {
+            regs->eax = -1;
+            break;
+        }
+        regs->eax = wm_set_title((int)regs->ebx, title);
+        break;
+    }
+    case SYS_EXEBASE:
+        regs->eax = sched_current_exe_base();
+        break;
     default:
         break;
     }

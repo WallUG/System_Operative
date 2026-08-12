@@ -56,9 +56,15 @@ static const struct dll_desc dll_descs[] = {
     { "user32.elf",   "user32.dll",   WIN32_REGION_BASE + DLL_BASE_STEP * 1 },
     { "ntdll.elf",    "ntdll.dll",    WIN32_REGION_BASE + DLL_BASE_STEP * 2 },
     { "msvcrt.elf",   "msvcrt.dll",   WIN32_REGION_BASE + DLL_BASE_STEP * 3 },
+    { "gdi32.elf",    "gdi32.dll",    WIN32_REGION_BASE + DLL_BASE_STEP * 4 },
+    { "comctl32.elf", "comctl32.dll", WIN32_REGION_BASE + DLL_BASE_STEP * 5 },
+    { "comdlg32.elf", "comdlg32.dll", WIN32_REGION_BASE + DLL_BASE_STEP * 6 },
+    { "advapi32.elf", "advapi32.dll", WIN32_REGION_BASE + DLL_BASE_STEP * 7 },
+    { "shell32.elf",  "shell32.dll",  WIN32_REGION_BASE + DLL_BASE_STEP * 8 },
 };
 
-/* Extrae la tabla .exports del binario ELF (copiada a mods). */
+/* Extrae la tabla .exports del binario ELF (no copia: guarda offset y
+ * numero de entradas; win32_resolve escanea sobre la marcha). */
 static int parse_exports(win32_module_t *m, const uint8_t *bin)
 {
     const elf32_ehdr_t *h = (const elf32_ehdr_t *)bin;
@@ -76,15 +82,28 @@ static int parse_exports(win32_module_t *m, const uint8_t *bin)
     for (i = 0; i < h->e_shnum; i++) {
         if (strcmp(shstr + sh[i].sh_name, ".exports") != 0)
             continue;
-        uint32_t n = sh[i].sh_size / sizeof(win32_export_t);
-        if (n > WIN32_EXPORT_MAX)
-            n = WIN32_EXPORT_MAX;
-        m->n_exports = n;
-        memcpy(m->exports, bin + sh[i].sh_offset,
-               n * sizeof(win32_export_t));
+        m->exports_off = sh[i].sh_offset;
+        m->n_exports = sh[i].sh_size / sizeof(win32_export_t);
         return 0;
     }
     return -1;
+}
+
+/* Busca el export `fn` dentro del binario del modulo (m->bin, en RAM
+ * del kernel): devuelve la VA de la funcion o 0. */
+static uint32_t module_find_export(win32_module_t *m, const char *fn)
+{
+    const win32_export_t *ex;
+    uint32_t j;
+
+    if (m->n_exports == 0)
+        return 0;
+    ex = (const win32_export_t *)(m->bin + m->exports_off);
+    for (j = 0; j < m->n_exports; j++) {
+        if (strcmp(ex[j].name, fn) == 0)
+            return ex[j].fn;    /* VA fija del modulo en el PD */
+    }
+    return 0;
 }
 
 /* El linkage script tools/dll.ld ancla la seccion .exports en la pagina
@@ -293,18 +312,11 @@ static int find_module(const char *dname)
 
 uint32_t win32_resolve(const char *dll, const char *fn)
 {
-    win32_module_t *m;
-    uint32_t j;
     int idx = find_module(dll);
 
     if (idx < 0)
         return 0;
-    m = &mods[idx];
-    for (j = 0; j < m->n_exports; j++) {
-        if (strcmp(m->exports[j].name, fn) == 0)
-            return m->exports[j].fn;   /* VA fija en el PD */
-    }
-    return 0;
+    return module_find_export(&mods[idx], fn);
 }
 
 int win32_count(void)

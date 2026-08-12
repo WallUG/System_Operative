@@ -45,6 +45,13 @@
 
 #define IMAGE_SCN_CNT_UNINITIALIZED_DATA 0x80
 
+/* .exe reales como metapad vienen con ImageBase en memoria baja
+ * (0x00400000): MyOS solo mapea usuario en 0x80000000-0xC0000000.
+ * Se reubica la imagen con la tabla .reloc a esta base fija. */
+#define PE_REBASE_BASE      0x81000000u
+#define IMAGE_DIR_ENTRY_BASERELOC 5
+#define IMAGE_REL_BASED_HIGHLOW  3
+
 /* Convierte una RVA (de seccion) a offset en el archivo mirando la
  * tabla de secciones (solo RVA relativos a secciones, no absolutos). */
 static uint32_t pe_rva_to_off(const uint8_t *buf, uint32_t rva)
@@ -100,14 +107,15 @@ static int check_header(const uint8_t *buf, uint32_t size)
     return 0;
 }
 
-/* Mapea las secciones del PE en pd. 0 = OK, -1 error (deshace en error). */
-static int load_sections(uint32_t pd, const uint8_t *buf, uint32_t size)
+/* Mapea las secciones del PE en pd. 0 = OK, -1 error (deshace en error).
+ * image_base = base FINAL (tras posible reubicacion). */
+static int load_sections(uint32_t pd, const uint8_t *buf, uint32_t size,
+                         uint32_t image_base)
 {
     uint32_t pe_off = *(uint32_t *)(void *)&buf[0x3C];
     uint32_t opt = pe_off + 24;
     uint32_t opt_size = *(uint16_t *)(void *)&buf[pe_off + 20];
     uint32_t nsec = *(uint16_t *)(void *)&buf[pe_off + 6];
-    uint32_t image_base = *(uint32_t *)(void *)&buf[opt + 28];
     uint32_t sec = opt + opt_size;
     uint32_t i;
 
@@ -177,13 +185,90 @@ static int load_sections(uint32_t pd, const uint8_t *buf, uint32_t size)
     return 0;
 }
 
-static uint32_t pe_entry(const uint8_t *buf)
+static uint32_t pe_entry(const uint8_t *buf, uint32_t image_base)
 {
     uint32_t pe_off = *(uint32_t *)(void *)&buf[0x3C];
     uint32_t opt = pe_off + 24;
-    uint32_t image_base = *(uint32_t *)(void *)&buf[opt + 28];
     uint32_t entry_rva = *(uint32_t *)(void *)&buf[opt + 16];
     return image_base + entry_rva;
+}
+
+static uint32_t pe_image_base(const uint8_t *buf)
+{
+    uint32_t pe_off = *(uint32_t *)(void *)&buf[0x3C];
+    return *(uint32_t *)(void *)&buf[pe_off + 24 + 28];
+}
+
+/* Aplica la tabla .reloc del .exe (data directory 5) reasentando la
+ * imagen de old_base a new_base: cada bloque relocaliza una pagina
+ * (PageRVA + entradas de 16 bits type/offset); tipo 3 = HIGH/LOW (dword
+ * += delta). Escribe por el frame fisico (identity map) del PD. */
+static void pe_apply_relocs(uint32_t pd, const uint8_t *buf, uint32_t size,
+                            uint32_t old_base, uint32_t new_base)
+{
+    uint32_t pe_off = *(uint32_t *)(void *)&buf[0x3C];
+    uint32_t opt = pe_off + 24;
+    uint32_t dir_rva, dir_size, off, end, delta;
+
+    if (old_base == new_base)
+        return;
+    dir_rva = *(uint32_t *)(void *)&buf[opt + 96 + IMAGE_DIR_ENTRY_BASERELOC * 8];
+    dir_size = *(uint32_t *)(void *)&buf[opt + 96 + IMAGE_DIR_ENTRY_BASERELOC * 8 + 4];
+    if (dir_rva == 0 || dir_size == 0)
+        return;                 /* sin tabla: asumo imagen loadable en la base */
+    off = pe_rva_to_off(buf, dir_rva);
+    end = off + dir_size;
+    if (end > size)
+        end = size;
+    delta = new_base - old_base;
+
+    while (off + 8 <= end) {
+        uint32_t page_rva = *(uint32_t *)(void *)&buf[off];
+        uint32_t block_size = *(uint32_t *)(void *)&buf[off + 4];
+        uint32_t nword, j;
+
+        if (page_rva == 0 || block_size < 8)
+            break;
+        if (off + block_size > end)
+            break;
+        nword = (block_size - 8) / 2;
+        for (j = 0; j < nword; j++) {
+            uint16_t w = *(uint16_t *)(void *)&buf[off + 8 + j * 2];
+            uint32_t type = w >> 12;
+            uint32_t rel = w & 0xFFFu;
+            if (type == IMAGE_REL_BASED_HIGHLOW) {
+                uint32_t va = new_base + page_rva + rel;
+                uint32_t frame = paging_user_frame(pd, va & ~0xFFFu);
+                if (frame != 0)
+                    *(uint32_t *)(void *)(frame + (va & 0xFFF)) += delta;
+            }
+            /* type 0 (ABSOLUTE) y otros: ignorar */
+        }
+        off += block_size;
+    }
+}
+
+/* Convierte un ordinal a nombre de export "ord#N": comctl32.dll exporta
+ * InitCommonControls como ordinal 8 e InitCommonControlsEx como 17, y
+ * algunos .exe reales los importan por ordinal (metapad.exe). */
+static void pe_ordinal_name(uint32_t ord, char *out)
+{
+    char tmp[12];
+    uint32_t t = 0, i;
+
+    out[0] = 'o'; out[1] = 'r'; out[2] = 'd'; out[3] = '#';
+    if (ord == 0) {
+        out[4] = '0';
+        out[5] = 0;
+        return;
+    }
+    while (ord) {
+        tmp[t++] = (char)('0' + ord % 10);
+        ord /= 10;
+    }
+    for (i = 0; i < t; i++)
+        out[4 + i] = tmp[t - 1 - i];
+    out[4 + t] = 0;
 }
 
 /* Rellena la tabla de imports del .exe (.idata en WIN32_IDATA_VA) con
@@ -225,16 +310,23 @@ static int dll_name_eq(const char *a, const char *b)
     }
 }
 
+/* Escribe 0 en un slot de la IAT de un .exe cargado (frame USER). */
+static void pe_iat_zero(uint32_t pd, uint32_t va)
+{
+    uint32_t frame = paging_user_frame(pd, va & ~0xFFFu);
+    if (frame != 0)
+        *(uint32_t *)(void *)(frame + (va & 0xFFF)) = 0;
+}
+
 /* Resuelve la tabla de imports ESTANDAR de Windows del .exe en buf y
  * rellena la IAT (FirstThunk) escribiendo por el frame de la pagina
  * USER en pd. Devuelve el numero de imports resueltos (-1 si no hay
  * tabla de imports o error de formato). */
 static int pe_resolve_imports_std(uint32_t pd, const uint8_t *buf,
-                                  uint32_t size)
+                                  uint32_t size, uint32_t image_base)
 {
     uint32_t pe_off = *(uint32_t *)(void *)&buf[0x3C];
     uint32_t opt = pe_off + 24;
-    uint32_t image_base = *(uint32_t *)(void *)&buf[opt + 28];
     uint32_t dir_rva = *(uint32_t *)(void *)&buf[opt + 96 + 8];
     uint32_t desc_off, n = 0;
     uint32_t i;
@@ -273,9 +365,19 @@ static int pe_resolve_imports_std(uint32_t pd, const uint8_t *buf,
                 if (th == 0)
                     break;
                 if (th & 0x80000000) {
-                    kprint("pe: import ordinal de ");
-                    kprint(dll);
-                    kprint(" no soportado\n");
+                    char oname[24];
+                    pe_ordinal_name(th & 0xFFFF, oname);
+                    addr = win32_resolve(dll, oname);
+                    if (addr == 0) {
+                        kprint("pe: ordinal no resuelto: ");
+                        kprint(dll);
+                        kprint("!");
+                        kprint(oname);
+                        kprint("\n");
+                        pe_iat_zero(pd, image_base + ft + j * 4);
+                    } else {
+                        goto iat_store;
+                    }
                     continue;
                 }
                 fn_rva = th;
@@ -290,9 +392,14 @@ static int pe_resolve_imports_std(uint32_t pd, const uint8_t *buf,
                     kprint("!");
                     kprint(fname);
                     kprint("\n");
-                    /* si un import no se resuelve, lo dejamos a 0:
-                     * llamarlo seria un crash controlado del mood. */
-                } else {
+                    /* import sin resolver: el slot queda a 0 -> el exe
+                     * falle con un call a 0 (crash controlado), no
+                     * saltando al RVA del INT que dejaba el archivo. */
+                    pe_iat_zero(pd, image_base + ft + j * 4);
+                    continue;
+                }
+            iat_store:
+                {
                     uint32_t va = image_base + ft + j * 4;
                     uint32_t frame =
                         paging_user_frame(pd, va & ~0xFFFu);
@@ -310,7 +417,7 @@ static int pe_resolve_imports_std(uint32_t pd, const uint8_t *buf,
 }
 
 int pe_load(const void *buf, uint32_t size, uint32_t *pd_out,
-            uint32_t *entry_out)
+            uint32_t *entry_out, uint32_t *base_out)
 {
     uint32_t pd;
 
@@ -336,29 +443,47 @@ int pe_load(const void *buf, uint32_t size, uint32_t *pd_out,
         }
         return 2;
     }
-    if (load_sections(pd, buf, size) != 0) {
-        kprint("pe:C\n");
-        paging_free_user_space(pd);
-        paging_free_pd(pd);
-        return 3;
+    /* .exe reales (metapad) usan ImageBase baja (0x00400000): reubicar
+     * la imagen a la region de usuario y parchear .reloc. */
+    {
+        uint32_t old_base = pe_image_base(buf);
+        uint32_t image_base = old_base;
+        if (image_base < USER_VADDR_BASE || image_base >= USER_VADDR_END)
+            image_base = PE_REBASE_BASE;
+        if (load_sections(pd, buf, size, image_base) != 0) {
+            kprint("pe:C\n");
+            paging_free_user_space(pd);
+            paging_free_pd(pd);
+            return 3;
+        }
+        pe_apply_relocs(pd, buf, size, old_base, image_base);
+        if (pe_resolve_imports_std(pd, buf, size, image_base) <= 0)
+            pe_resolve_imports_myos(pd);    /* formato MyOS (makepe.py) */
+        *pd_out = pd;
+        *entry_out = pe_entry(buf, image_base);
+        *base_out = image_base;
+        return 0;
     }
-    if (pe_resolve_imports_std(pd, buf, size) <= 0)
-        pe_resolve_imports_myos(pd);    /* formato MyOS (makepe.py) */
-    *pd_out = pd;
-    *entry_out = pe_entry(buf);
-    return 0;
 }
 
 int pe_load_into(uint32_t pd, const void *buf, uint32_t size,
-                 uint32_t *entry_out)
+                 uint32_t *entry_out, uint32_t *base_out)
 {
     if (check_header(buf, size) != 0)
         return -1;
     paging_free_user_space(pd);
-    if (load_sections(pd, buf, size) != 0)
-        return -1;
-    if (pe_resolve_imports_std(pd, buf, size) <= 0)
-        pe_resolve_imports_myos(pd);
-    *entry_out = pe_entry(buf);
-    return 0;
+    {
+        uint32_t old_base = pe_image_base(buf);
+        uint32_t image_base = old_base;
+        if (image_base < USER_VADDR_BASE || image_base >= USER_VADDR_END)
+            image_base = PE_REBASE_BASE;
+        if (load_sections(pd, buf, size, image_base) != 0)
+            return -1;
+        pe_apply_relocs(pd, buf, size, old_base, image_base);
+        if (pe_resolve_imports_std(pd, buf, size, image_base) <= 0)
+            pe_resolve_imports_myos(pd);
+        *entry_out = pe_entry(buf, image_base);
+        *base_out = image_base;
+        return 0;
+    }
 }

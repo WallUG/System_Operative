@@ -30,6 +30,19 @@
 #define C_X_BG      0x00CC3333u
 #define C_X_TX      0x00FFFFFFu
 
+/* Los colores se definen en formato logico 0x00RRGGBB, pero el LFB
+ * (VBE 32bpp) espera el byte bajo = R (BGRx8888 en memoria). El
+ * swap R<->B se aplica SOLO al escribir el LFB: las constantes
+ * conservan su semantica logica. Verificado contra QEMU 10.2.2:
+ * 0x00000088 escrito directo se muestra (136,0,0); con el swap
+ * 0x00880000 -> (0,0,136) azul correcto. */
+static inline uint32_t px_disp(uint32_t c)
+{
+    return ((c & 0x0000FFFFu) << 8) |
+           ((c >> 16) & 0x000000FFu) |
+           (c & 0xFF000000u);
+}
+
 typedef struct {
     int      id;
     char     title[24];
@@ -215,22 +228,22 @@ static void wm_draw_one(const win_t *w)
             for (k = w->x; k < w->x + w->w; k++) {
                 if (k >= 0 && k < VBE_SCREEN_W && w->y + j >= 0 &&
                     w->y + j < VBE_SCREEN_H)
-                    lfb[(w->y + j) * VBE_SCREEN_W + k] = C_FRAME;
+                    lfb[(w->y + j) * VBE_SCREEN_W + k] = px_disp(C_FRAME);
                 if (k >= 0 && k < VBE_SCREEN_W &&
                     w->y + w->h - 1 - j >= 0 &&
                     w->y + w->h - 1 - j < VBE_SCREEN_H)
                     lfb[(w->y + w->h - 1 - j) * VBE_SCREEN_W + k] =
-                        C_FRAME;
+                        px_disp(C_FRAME);
             }
             for (k = w->y; k < w->y + w->h; k++) {
                 if (k >= 0 && k < VBE_SCREEN_H && w->x + j >= 0 &&
                     w->x + j < VBE_SCREEN_W)
-                    lfb[k * VBE_SCREEN_W + w->x + j] = C_FRAME;
+                    lfb[k * VBE_SCREEN_W + w->x + j] = px_disp(C_FRAME);
                 if (k >= 0 && k < VBE_SCREEN_H &&
                     w->x + w->w - 1 - j >= 0 &&
                     w->x + w->w - 1 - j < VBE_SCREEN_W)
                     lfb[k * VBE_SCREEN_W + w->x + w->w - 1 - j] =
-                        C_FRAME;
+                        px_disp(C_FRAME);
             }
         }
         /* titulo */
@@ -239,7 +252,8 @@ static void wm_draw_one(const win_t *w)
             for (k = w->x + WM_FRAME; k < w->x + w->w - WM_FRAME; k++) {
                 if (k >= 0 && k < VBE_SCREEN_W &&
                     w->y + j >= 0 && w->y + j < VBE_SCREEN_H)
-                    lfb[(w->y + j) * VBE_SCREEN_W + k] = C_TITLE;
+                    lfb[(w->y + j) * VBE_SCREEN_W + k] =
+                        px_disp(C_TITLE);
             }
         }
         /* boton X (16x16, arriba a la derecha) */
@@ -251,7 +265,7 @@ static void wm_draw_one(const win_t *w)
                     int xx = bx0 + k, yy = w->y + WM_FRAME + j;
                     if (xx >= 0 && xx < VBE_SCREEN_W && yy >= 0 &&
                         yy < VBE_SCREEN_H)
-                        lfb[yy * VBE_SCREEN_W + xx] = C_X_BG;
+                        lfb[yy * VBE_SCREEN_W + xx] = px_disp(C_X_BG);
                 }
             }
         }
@@ -437,6 +451,21 @@ int wm_update(int id)
     win_t *w = wm_find(id);
     if (!w)
         return -1;
+    wm_compose();
+    return 0;
+}
+
+/* Cambia el titulo de la barra (SetWindowTextA de top-levels). */
+int wm_set_title(int id, const char *title)
+{
+    win_t *w = wm_find(id);
+    int i;
+
+    if (!w)
+        return -1;
+    for (i = 0; title && title[i] && i < (int)sizeof(w->title) - 1; i++)
+        w->title[i] = title[i];
+    w->title[i] = 0;
     wm_compose();
     return 0;
 }

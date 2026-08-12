@@ -24,13 +24,14 @@
 /* Crea un PD nuevo, mapea las secciones del PE32 en buf (memoria del
  * kernel) y devuelve PD y direccion de entrada (ImageBase + entry RVA).
  * 0 = OK, -1 = PE invalido o sin memoria. */
-int pe_load(const void *buf, uint32_t size, uint32_t *pd, uint32_t *entry);
+int pe_load(const void *buf, uint32_t size, uint32_t *pd, uint32_t *entry,
+            uint32_t *base);
 
 /* Igual pero sobre un PD existente (exec de un .exe): libera el espacio
  * de usuario previo y carga el nuevo. En error el espacio de usuario
  * queda liberado: el llamador debe matar la tarea. */
 int pe_load_into(uint32_t pd, const void *buf, uint32_t size,
-                 uint32_t *entry);
+                 uint32_t *entry, uint32_t *base);
 
 /* Tabla de modulos Win32 fijos (ver kernel/win32.c). Cada modulo es una
  * imagen (ELF32) cargada a una direccion virtual fija de usuario con su

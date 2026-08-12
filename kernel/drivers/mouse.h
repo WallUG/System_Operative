@@ -18,8 +18,8 @@
 typedef struct {
     int type;
     int x, y;           /* posicion del raton (EV_KEY: sin usar)   */
-    int buttons;        /* estado de botones (EV_KEY: sin usar)    */
-    int key;            /* caracter (solo EV_KEY)                  */
+    int buttons;        /* botones del raton; en EV_KEY: mods (1=ctrl,2=alt,4=shift) */
+    int key;            /* caracter (solo EV_KEY); 0x100+ para teclas especiales */
 } mouse_event_t;
 
 void mouse_init(void);
@@ -28,6 +28,7 @@ void mouse_draw_cursor(void);
 void mouse_cursor_invalidate(void);
 int  mouse_read(int *x, int *y, int *buttons);
 void mouse_event_push_key(int key);
+void mouse_event_push_key_ext(int key, int mods);  /* mods: 1=ctrl 2=alt 4=shift */
 int  mouse_event_dequeue(mouse_event_t *ev);
 
 #endif

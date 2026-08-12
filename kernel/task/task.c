@@ -143,7 +143,7 @@ int task_create(const char *name, void (*entry)(void))
 }
 
 int task_create_user(const char *name, const char *exe, const char *cmdline,
-                     uint32_t pd, uint32_t entry)
+                     uint32_t pd, uint32_t entry, uint32_t exe_base)
 {
     uint32_t stack_frame;
     uint32_t *sp;
@@ -203,6 +203,7 @@ int task_create_user(const char *name, const char *exe, const char *cmdline,
     t->esp0 = stack_frame + 0x1000;
     t->cr3 = pd;
     t->heap_cur = USER_HEAP_BASE;
+    t->exe_base = exe_base;
 
     return task_init(t, name);
 }
@@ -371,6 +372,17 @@ void sched_set_exe_name(const char *name)
     for (i = 0; name[i] && i < TASK_EXE_LEN - 1; i++)
         current->exe_name[i] = name[i];
     current->exe_name[i] = 0;
+}
+
+uint32_t sched_current_exe_base(void)
+{
+    return current ? current->exe_base : 0;
+}
+
+void sched_set_exe_base(uint32_t base)
+{
+    if (current)
+        current->exe_base = base;
 }
 
 void sched_user_heap_set(uint32_t p)

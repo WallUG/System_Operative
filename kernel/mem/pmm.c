@@ -79,8 +79,8 @@ void pmm_init(void)
      * (PD/PT del kernel, pilas de las tareas de arranque) para que el
      * asignador nunca entregue dos veces una misma pagina de esa zona.
      * Cubre tambien la imagen MEFS en RAM (modo CD): 0x140000 +
-     * FS_SECTORS*512 (560 sectores = 286 KB) termina en 0x186000. */
-    pmm_reserve_range(0x100000, 0x86000);
+     * FS_SECTORS*512 (1100 sectores = 550 KB) termina en 0x1C9800. */
+    pmm_reserve_range(0x100000, 0xC9800);
 }
 
 uint32_t pmm_free_count(void)

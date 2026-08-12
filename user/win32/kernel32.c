@@ -69,6 +69,11 @@ static void sys_exit(uint32_t code)
     for (;;) ;
 }
 
+static void trace(const char *s)
+{
+    sys_write(s, strlen_u(s));
+}
+
 static void *win_malloc(uint32_t size)
 {
     void *p;
@@ -100,7 +105,7 @@ uint32_t WriteFile(uint32_t h, const void *buf, uint32_t n,
     return (uint32_t)(r > 0 ? 1 : 0);
 }
 
-void ExitProcess(uint32_t code)     { sys_exit(code); }
+void ExitProcess(uint32_t code)     { trace("[k32] ExitProcess\n"); sys_exit(code); }
 void TerminateProcess(uint32_t h, uint32_t code) { (void)h; sys_exit(code); }
 uint32_t GetCurrentProcess(void)    { return (uint32_t)-1; }
 
@@ -123,18 +128,28 @@ static uint32_t sys_selfname(char *buf, uint32_t max)
 }
 
 /* Devuelve el nombre del ejecutable actual (como lo lanzo la shell).
- * hmodule = NULL significa "el proceso actual". */
+ * hmodule = NULL significa "el proceso actual". Como el lanzador no
+ * da ruta, se sintetiza "C:\MyOS\<nombre>" para que los .exe que
+ * hacen strrchr(...,'\\') encuentren una barra y puedan derivar su
+ * directorio de trabajo. */
 uint32_t GetModuleFileNameA(uint32_t hmodule, char *buf, uint32_t max)
 {
-    uint32_t n;
+    const char prefix[] = "C:\\MyOS\\";
+    uint32_t n, i, plen = sizeof(prefix) - 1;
 
     (void)hmodule;
     if (buf == 0 || max == 0)
         return 0;
-    n = sys_selfname(buf, max);
+    for (i = 0; i < plen && i < max - 1; i++)
+        buf[i] = prefix[i];
+    if (i == max - 1) {
+        buf[i] = 0;
+        return i;
+    }
+    n = sys_selfname(buf + plen, max - plen);
     if (n == (uint32_t)-1)
         return 0;
-    return n;
+    return plen + n;
 }
 
 /* Linea de comandos real del proceso: el kernel la copia al TIB de la
@@ -145,6 +160,7 @@ uint32_t GetModuleFileNameA(uint32_t hmodule, char *buf, uint32_t max)
 
 char *GetCommandLineA(void)
 {
+    trace("[k32] GetCommandLineA\n");
     uint32_t tib = 0;
     __asm__ volatile("mov %%fs:0x18, %0" : "=r"(tib));
     return (char *)(tib + WIN32_TIB_CMDLINE_OFF);
@@ -191,6 +207,10 @@ void LeaveCriticalSection(void *lp)
 
 void DeleteCriticalSection(void *lp) { (void)lp; }
 
+/* IsDBCSLeadByte: 0 con codepage de un byte (CP1252, el unico que
+ * soportamos); el CRT mingw lo usa en mbstowcs. */
+int IsDBCSLeadByte(int b) { (void)b; return 0; }
+
 /* --- TLS --- */
 
 static uint32_t tls_slots[64];
@@ -209,20 +229,46 @@ typedef struct {
 
 extern win32_export_t __exports[];
 
+/* Bases fijas de los modulos ring 3 (kernel/win32.h, WIN32_REGION_BASE
+ * 0xB0000000 + i*0x100000). RICHED20 no tiene modulo propio: el handle
+ * es virtual (nunca se desreferencia; basta con que LoadLibraryA lo
+ * acepte para que metapad.exe siga con su arranque). */
+typedef struct {
+    const char *name;
+    uint32_t    base;
+} mod_desc_t;
+
+static const mod_desc_t mod_descs[] = {
+    { "kernel32.dll",  0xB0000000u },
+    { "user32.dll",    0xB1000000u },
+    { "ntdll.dll",     0xB2000000u },
+    { "msvcrt.dll",    0xB3000000u },
+    { "gdi32.dll",     0xB4000000u },
+    { "comctl32.dll",  0xB5000000u },
+    { "comdlg32.dll",  0xB6000000u },
+    { "advapi32.dll",  0xB7000000u },
+    { "shell32.dll",   0xB8000000u },
+    { "riched20.dll",  0xB9000000u },
+    { 0, 0 },
+};
+
 uint32_t GetModuleHandleA(const char *name)
 {
+    const mod_desc_t *m;
+    uint32_t i;
+    trace("[k32] GetModuleHandleA\n");
     if (name == 0)
         return KERNEL_BASE;
-    if (ci_eq(name, "kernel32") || ci_eq(name, "kernel32.dll")
-        || ci_eq(name, "msvcrt") || ci_eq(name, "msvcrt.dll")
-        || ci_eq(name, "ntdll") || ci_eq(name, "ntdll.dll")
-        || ci_eq(name, "user32") || ci_eq(name, "user32.dll"))
-        return KERNEL_BASE;
+    for (m = mod_descs; m->name; m++)
+        for (i = 0; m->name[i]; i++)
+            if (ci_eq(name, m->name))
+                return m->base;
     return 0;
 }
 
 uint32_t GetProcAddress(uint32_t hmod, const char *name)
 {
+    trace("[k32] GetProcAddress\n");
     uint32_t i;
     if (hmod == 0)
         hmod = KERNEL_BASE;
@@ -236,9 +282,12 @@ uint32_t GetProcAddress(uint32_t hmod, const char *name)
 
 uint32_t LoadLibraryA(const char *name)
 {
+    uint32_t h;
+    trace("[k32] LoadLibraryA\n");
     if (name == 0)
         return 0;
-    return GetModuleHandleA(name) != 0 ? KERNEL_BASE : 0;
+    h = GetModuleHandleA(name);
+    return h != 0 ? h : 0;
 }
 
 uint32_t FreeLibrary(uint32_t h) { (void)h; return 1; }
@@ -428,6 +477,7 @@ uint32_t HeapSize(uint32_t heap, uint32_t flags, const void *p)
 
 void GetStartupInfo(void *si)
 {
+    trace("[k32] GetStartupInfo\n");
     if (si) {
         for (uint32_t i = 0; i < 16; i++)
             ((uint32_t *)si)[i] = 0;
@@ -666,6 +716,631 @@ void GetCurrentDirectoryW(uint32_t n, uint16_t *buf)
 void SetCurrentDirectoryA(const char *d) { (void)d; }
 void SetCurrentDirectoryW(const uint16_t *d) { (void)d; }
 
+/* --- Global*: memoria global = el heap del proceso (no movible) --- */
+
+void *GlobalAlloc(uint32_t flags, uint32_t size)
+{
+    (void)flags;
+    if (size == 0)
+        return 0;
+    return win_malloc(size);
+}
+
+void *GlobalLock(void *h)
+{
+    return h;                   /* GMEM_FIXED: el handle ES el puntero */
+}
+
+uint32_t GlobalUnlock(void *h)
+{
+    (void)h;
+    return 1;
+}
+
+void *GlobalFree(void *h)
+{
+    win_free(h);
+    return 0;                   /* NULL = exito */
+}
+
+/* LocalFree/LocalAlloc: el heap del proceso. */
+void *LocalFree(void *h)
+{
+    win_free(h);
+    return 0;
+}
+
+/* --- lstr*: strings ANSI --- */
+
+uint32_t lstrlenA(const char *s)
+{
+    return strlen_u(s);
+}
+
+char *lstrcpyA(char *dst, const char *src)
+{
+    uint32_t i = 0;
+    do { dst[i] = src[i]; } while (src[i++]);
+    return dst;
+}
+
+char *lstrcpynA(char *dst, const char *src, uint32_t n)
+{
+    uint32_t i;
+    if (n == 0)
+        return dst;
+    for (i = 0; i < n - 1 && src[i]; i++)
+        dst[i] = src[i];
+    dst[i] = 0;
+    return dst;
+}
+
+char *lstrcatA(char *dst, const char *src)
+{
+    uint32_t d = 0, i = 0;
+    while (dst[d]) d++;
+    while (src[i]) dst[d++] = src[i++];
+    dst[d] = 0;
+    return dst;
+}
+
+int32_t lstrcmpA(const char *a, const char *b)
+{
+    while (*a && *b && *a == *b) { a++; b++; }
+    return (int32_t)(uint8_t)*a - (int32_t)(uint8_t)*b;
+}
+
+int32_t lstrcmpiA(const char *a, const char *b)
+{
+    for (;;) {
+        char ca = *a, cb = *b;
+        if (ca >= 'A' && ca <= 'Z') ca += 32;
+        if (cb >= 'A' && cb <= 'Z') cb += 32;
+        if (ca != cb)
+            return (int32_t)(uint8_t)ca - (int32_t)(uint8_t)cb;
+        if (ca == 0)
+            return 0;
+        a++; b++;
+    }
+}
+
+/* --- archivo: atributos / puntero / fin --- */
+
+#define FILE_ATTRIBUTE_NORMAL 0x80
+#define FILE_BEGIN 0
+#define FILE_CURRENT 1
+#define FILE_END 2
+
+uint32_t GetFileAttributesA(const char *name)
+{
+    if (name == 0)
+        return 0xFFFFFFFFu;
+    if (sys_fsize(name) < 0)
+        return 0xFFFFFFFFu;
+    return FILE_ATTRIBUTE_NORMAL;
+}
+
+uint32_t SetFileAttributesA(const char *name, uint32_t attrs)
+{
+    (void)name; (void)attrs;
+    return 1;
+}
+
+uint32_t SetFilePointer(void *h, int32_t dist_low, int32_t *dist_high,
+                        uint32_t method)
+{
+    int i = (uint32_t)h - 0x100;
+    uint32_t base = 0;
+    int32_t d = dist_low;
+    (void)dist_high;
+    if (i < 0 || i >= 16 || open_files[i].name[0] == 0)
+        return 0xFFFFFFFFu;
+    switch (method) {
+    case FILE_BEGIN:    base = 0; break;
+    case FILE_CURRENT:  base = open_files[i].pos; break;
+    case FILE_END:      base = open_files[i].size; break;
+    default: return 0xFFFFFFFFu;
+    }
+    if (d < 0 && base < (uint32_t)(-d))
+        d = 0;
+    open_files[i].pos = base + (uint32_t)d;
+    if (open_files[i].pos > open_files[i].size)
+        open_files[i].pos = open_files[i].size;
+    return open_files[i].pos;
+}
+
+uint32_t SetEndOfFile(void *h)
+{
+    int i = (uint32_t)h - 0x100;
+    (void)i;
+    return 1;                   /* FS readonly: fija el tam actual */
+}
+
+uint32_t GetFullPathNameA(const char *name, uint32_t n, char *buf,
+                          char **filepart)
+{
+    uint32_t len = 0, last = 0, i;
+    if (name == 0 || buf == 0 || n == 0)
+        return 0;
+    for (i = 0; name[i]; i++) {
+        buf[i] = name[i];
+        if (name[i] == '\\' || name[i] == '/')
+            last = i + 1;
+    }
+    len = i;
+    if (len >= n)
+        return 0;
+    buf[len] = 0;
+    if (filepart)
+        *filepart = buf + last;
+    return len;
+}
+
+/* --- hilos: stub. Metapad crea el "file watcher" con CreateThread y
+ * sigue sin el si no existe; aqui devolvemos un handle valido y no
+ * ejecutamos nada (sin WaitForSingleObject en sus imports, no hay
+ * efectos colaterales). --- */
+
+void *CreateThread(uint32_t attrs, uint32_t stack_size, void *start,
+                   void *param, uint32_t flags, uint32_t *tid)
+{
+    (void)attrs; (void)stack_size; (void)start; (void)param; (void)flags;
+    if (tid)
+        *tid = 0;
+    return (void *)1;
+}
+
+/* --- procesos: Metapad abre "una segunda copia" con CreateProcessA;
+ * sin multitarea Win32 devolvemos FALSE y el llamador muestra error o
+ * no hace nada. --- */
+
+uint32_t CreateProcessA(const char *app, char *cmd, uint32_t p1,
+                        uint32_t p2, uint32_t inherit, uint32_t flags,
+                        void *env, const char *cwd, const void *si,
+                        void *pi)
+{
+    (void)app; (void)cmd; (void)p1; (void)p2; (void)inherit; (void)flags;
+    (void)env; (void)cwd; (void)si; (void)pi;
+    return 0;
+}
+
+/* --- aritmetica: MulDiv sin int64 (los modulos no ligan libgcc).
+ * Valores tipicos (puntos por linea de impresion): |a*b| << 2^31. --- */
+
+int32_t MulDiv(int32_t a, int32_t b, int32_t c)
+{
+    int32_t p, rem, r;
+    if (c == 0)
+        return -1;
+    if (b == 0 || a == 0)
+        return 0;
+    if (a > 0x7FFFFFFF / b || a < -0x7FFFFFFF / b)
+        return -1;              /* |a*b| desborda */
+    p = a * b;
+    if (c < 0) {
+        c = -c;
+        p = -p;
+    }
+    r = p / c;
+    rem = p % c;
+    if (rem * 2 >= c)           /* redondeo al entero mas cercano */
+        r++;
+    return r;
+}
+
+/* --- config INI (GetPrivateProfileStringA sobre MEFS readonly).
+ * Busca [seccion] key=valor en el archivo; si no existe el archivo, la
+ * seccion o la key, copia el default (def). --- */
+
+static void ini_read_file(const char *file, char **buf, uint32_t *len)
+{
+    int32_t sz = sys_fsize(file);
+    if (sz <= 0) {
+        *buf = 0;
+        *len = 0;
+        return;
+    }
+    *buf = (char *)win_malloc((uint32_t)sz + 1);
+    if (*buf == 0) {
+        *len = 0;
+        return;
+    }
+    if (sys_dread(file, *buf, 0, (uint32_t)sz) != sz) {
+        win_free(*buf);
+        *buf = 0;
+        *len = 0;
+        return;
+    }
+    (*buf)[sz] = 0;
+    *len = (uint32_t)sz;
+}
+
+static int ini_ci_eq(const char *a, const char *b)
+{
+    for (;;) {
+        char ca = *a, cb = *b;
+        if (ca >= 'A' && ca <= 'Z') ca += 32;
+        if (cb >= 'A' && cb <= 'Z') cb += 32;
+        if (ca != cb)
+            return 0;
+        if (ca == 0)
+            return 1;
+        a++; b++;
+    }
+}
+
+static int ini_ci_eq_len(const char *a, const char *b, uint32_t bl)
+{
+    uint32_t i = 0;
+    for (;;) {
+        char ca = *a, cb;
+        if (i >= bl)
+            cb = 0;
+        else
+            cb = b[i];
+        if (ca >= 'A' && ca <= 'Z') ca += 32;
+        if (cb >= 'A' && cb <= 'Z') cb += 32;
+        if (ca != cb)
+            return 0;
+        if (ca == 0)
+            return 1;
+        a++; i++;
+    }
+}
+
+static uint32_t ini_find_value(const char *data, const char *sec,
+                               const char *key, char *out, uint32_t size)
+{
+    const char *p = data;
+    int in_sec = 0;
+
+    while (*p) {
+        const char *eol = p;
+        while (*eol && *eol != '\n')
+            eol++;
+        if (*p == '[') {
+            const char *s = p + 1, *end = eol;
+            while (end > s && (end[-1] == ']' || end[-1] == '\r'
+                   || end[-1] == ' ' || end[-1] == '\t'))
+                end--;
+            {
+                char secbuf[64];
+                uint32_t i = 0;
+                while (s < end && i < 63)
+                    secbuf[i++] = *s++;
+                secbuf[i] = 0;
+                in_sec = ini_ci_eq(secbuf, sec);
+            }
+        } else if (in_sec && *p != ';' && *p != '#' && *p != '\r') {
+            const char *eq = p;
+            while (eq < eol && *eq != '=')
+                eq++;
+            if (eq < eol) {
+                uint32_t kl = (uint32_t)(eq - p);
+                if (ini_ci_eq_len(key, p, kl)) {
+                    const char *v = eq + 1;
+                    const char *vend = eol;
+                    uint32_t n = 0;
+                    while (vend > v && (vend[-1] == '\r'
+                           || vend[-1] == ' ' || vend[-1] == '\t'))
+                        vend--;
+                    while (v < vend && n < size - 1)
+                        out[n++] = *v++;
+                    out[n] = 0;
+                    return n;
+                }
+            }
+        }
+        p = (*eol) ? eol + 1 : eol;
+    }
+    return 0;
+}
+
+static void str_cpy_default(const char *def, char *out, uint32_t size)
+{
+    uint32_t i = 0;
+    if (def == 0)
+        def = "";
+    while (def[i] && i < size - 1) {
+        out[i] = def[i];
+        i++;
+    }
+    out[i] = 0;
+}
+
+uint32_t GetPrivateProfileStringA(const char *sec, const char *key,
+                                  const char *def, char *out,
+                                  uint32_t size, const char *file)
+{
+    char *data;
+    uint32_t len;
+    if (out == 0 || size == 0 || file == 0)
+        return 0;
+    if (sec == 0 || key == 0) {
+        str_cpy_default(def, out, size);
+        return strlen_u(out);
+    }
+    ini_read_file(file, &data, &len);
+    if (data == 0) {
+        str_cpy_default(def, out, size);
+        return strlen_u(out);
+    }
+    if (!ini_find_value(data, sec, key, out, size))
+        str_cpy_default(def, out, size);
+    win_free(data);
+    return strlen_u(out);
+}
+
+/* WritePrivateProfileStringA: FS readonly, finge guardar. */
+uint32_t WritePrivateProfileStringA(const char *sec, const char *key,
+                                    const char *value, const char *file)
+{
+    (void)sec; (void)key; (void)value; (void)file;
+    return 1;
+}
+
+/* --- fecha/hora: MyOS no tiene reloj; fechas fijas estables.
+ * GetDateFormatA/GetTimeFormatA formatean "sabado, enero 01, 2000" /
+ * "9:00 AM" segun el patron (tokens Win32). --- */
+
+static const char *g_months_long[] =
+    { "January", "February", "March", "April", "May", "June", "July",
+      "August", "September", "October", "November", "December" };
+static const char *g_days_long[] =
+    { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+      "Saturday" };
+static const char *g_months_abbr[] =
+    { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep",
+      "Oct", "Nov", "Dec" };
+static const char *g_days_abbr[] =
+    { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+
+/* Fecha fija: sabado 1 de enero de 2000, 9:00. */
+#define FIXED_YEAR  2000
+#define FIXED_MONTH 1
+#define FIXED_DAY   1
+#define FIXED_WDAY  6           /* sabado */
+#define FIXED_HOUR  9
+#define FIXED_MIN   0
+#define FIXED_SEC   0
+
+static void fmt_num(char *out, uint32_t *i, int n)
+{
+    char tmp[8];
+    int t = 0;
+    while (n) { tmp[t++] = (char)('0' + n % 10); n /= 10; }
+    if (t == 0) tmp[t++] = '0';
+    while (t) out[(*i)++] = tmp[--t];
+}
+
+static uint32_t fmt_tokens(const char *fmt, char *out, uint32_t size,
+                           int date)
+{
+    uint32_t o = 0;
+    const char *p = fmt;
+
+    while (*p && o < size - 1) {
+        char c = *p;
+        uint32_t run = 1;
+        while (p[run] == c)
+            run++;
+        if (date) {
+            if (c == 'y') {
+                if (run >= 3) {
+                    fmt_num(out, &o, FIXED_YEAR);
+                } else {
+                    out[o++] = '0'; out[o++] = '0';
+                }
+                p += run;
+                continue;
+            }
+            if (c == 'M') {
+                if (run >= 4) {
+                    const char *s = g_months_long[FIXED_MONTH - 1];
+                    while (*s && o < size - 1) out[o++] = *s++;
+                } else if (run == 3) {
+                    const char *s = g_months_abbr[FIXED_MONTH - 1];
+                    while (*s && o < size - 1) out[o++] = *s++;
+                } else {
+                    fmt_num(out, &o, FIXED_MONTH);
+                }
+                p += run;
+                continue;
+            }
+            if (c == 'd') {
+                if (run >= 4) {
+                    const char *s = g_days_long[FIXED_WDAY];
+                    while (*s && o < size - 1) out[o++] = *s++;
+                } else if (run == 3) {
+                    const char *s = g_days_abbr[FIXED_WDAY];
+                    while (*s && o < size - 1) out[o++] = *s++;
+                } else {
+                    fmt_num(out, &o, FIXED_DAY);
+                }
+                p += run;
+                continue;
+            }
+        } else {
+            if (c == 'h' || c == 'H') {
+                int h = FIXED_HOUR;
+                if (run == 1) {
+                    if (h > 12) h -= 12;
+                    if (h == 0) h = 12;
+                } else if (run == 2) {
+                    if (h > 12) h -= 12;
+                    if (h == 0) h = 12;
+                }
+                if (run >= 2 && h < 10)
+                    out[o++] = '0';
+                fmt_num(out, &o, h);
+                p += run;
+                continue;
+            }
+            if (c == 'm' || c == 's') {
+                int v = (c == 'm') ? FIXED_MIN : FIXED_SEC;
+                if (run >= 2 && v < 10)
+                    out[o++] = '0';
+                fmt_num(out, &o, v);
+                p += run;
+                continue;
+            }
+            if (c == 't' || c == 'T') {
+                const char *ampm = "AM";
+                const char *ampm2 = "am";
+                if (FIXED_HOUR >= 12) { ampm = "PM"; ampm2 = "pm"; }
+                if (run >= 2) {
+                    const char *s = ampm;
+                    while (*s && o < size - 1) out[o++] = *s++;
+                } else {
+                    out[o++] = ampm2[0];
+                }
+                p += run;
+                continue;
+            }
+        }
+        out[o++] = c;
+        p++;
+    }
+    out[o] = 0;
+    return o;
+}
+
+uint32_t GetDateFormatA(uint32_t locale, uint32_t flags, const void *st,
+                        const char *fmt, char *buf, uint32_t size)
+{
+    const char *def = "M/d/yyyy";
+    (void)locale; (void)flags; (void)st;
+    if (buf == 0 || size == 0)
+        return 0;
+    return fmt_tokens(fmt ? fmt : def, buf, size, 1);
+}
+
+uint32_t GetTimeFormatA(uint32_t locale, uint32_t flags, const void *st,
+                        const char *fmt, char *buf, uint32_t size)
+{
+    const char *def = "h:mm tt";
+    (void)locale; (void)flags; (void)st;
+    if (buf == 0 || size == 0)
+        return 0;
+    return fmt_tokens(fmt ? fmt : def, buf, size, 0);
+}
+
+/* GetLocaleInfoA: valores de ingles (EE. UU.), idioma 9 (en-US). */
+uint32_t GetLocaleInfoA(uint32_t locale, uint32_t type, char *buf,
+                        uint32_t size)
+{
+    const char *v = "";
+    (void)locale;
+    switch (type) {
+    case 0x01: v = "9"; break;                      /* ILANGUAGE */
+    case 0x02: v = "English (United States)"; break; /* SLANGUAGE */
+    case 0x06: v = "United States"; break;          /* SCOUNTRY */
+    case 0x0E: v = "."; break;                      /* SDECIMAL */
+    case 0x1D: v = "/"; break;                      /* SDATE */
+    case 0x1E: v = ":"; break;                      /* STIME */
+    case 0x1F: v = "M/d/yyyy"; break;               /* SSHORTDATE */
+    case 0x20: v = "dddd, MMMM dd, yyyy"; break;    /* SLONGDATE */
+    case 0x23: v = "0"; break;                      /* ITIME (12 h) */
+    case 0x24: v = "0"; break;                      /* ITLZERO */
+    case 0x25: v = "1"; break;                      /* ICENTURY */
+    case 0x1001: v = "English"; break;              /* SENGLANGUAGE */
+    case 0x1003: v = "h:mm:ss tt"; break;           /* STIMEFORMAT */
+    case 0x1004: v = "1252"; break;                 /* IANSI codepage */
+    default:
+        if (type >= 0x30 && type <= 0x36) {         /* SDAYNAME1..7 */
+            v = g_days_long[type - 0x30];
+        } else if (type >= 0x38 && type <= 0x43) {  /* SMONTHNAME1..12 */
+            v = g_months_long[type - 0x38];
+        } else if (type >= 0x47 && type <= 0x4D) {  /* SABBREVDAYNAME1..7 */
+            v = g_days_abbr[type - 0x47];
+        } else if (type >= 0x4F && type <= 0x5A) {  /* SABBREVMONTHNAME1..12 */
+            v = g_months_abbr[type - 0x4F];
+        }
+        break;
+    }
+    if (buf == 0 || size == 0)
+        return 0;
+    {
+        uint32_t i = 0;
+        while (v[i] && i < size - 1) {
+            buf[i] = v[i];
+            i++;
+        }
+        buf[i] = 0;
+        return i;
+    }
+}
+
+/* FormatMessageA: solo FROM_STRING (0x400) y FROM_SYSTEM (0x1000) con
+ * una tabla de mensajes fija. Sustituye %1..%9 por args[]. */
+uint32_t FormatMessageA(uint32_t flags, const void *src, uint32_t msgid,
+                        uint32_t lang, char *buf, uint32_t size,
+                        uint32_t *args)
+{
+    static const char *sys_msgs[] = {
+        "No such file or directory",
+        "Access is denied",
+        "Not enough memory resources are available to process this command",
+        "Data error (cyclic redundancy check)",
+        "The process cannot access the file because it is being used by another process",
+        "The file exists",
+        "The parameter is incorrect",
+        "The filename, directory name, or volume label syntax is incorrect",
+        "Cannot create a file when that file already exists",
+    };
+    const char *fmt = 0;
+    uint32_t o = 0, argi = 0;
+    (void)lang;
+    if (buf == 0 || size == 0)
+        return 0;
+    if (flags & 0x400) {                    /* FROM_STRING */
+        fmt = (const char *)src;
+    } else if (flags & 0x1000) {            /* FROM_SYSTEM */
+        switch (msgid) {
+        case 2:   fmt = sys_msgs[0]; break;
+        case 5:   fmt = sys_msgs[1]; break;
+        case 8:   fmt = sys_msgs[2]; break;
+        case 13:  fmt = sys_msgs[3]; break;
+        case 32:  fmt = sys_msgs[4]; break;
+        case 80:  fmt = sys_msgs[5]; break;
+        case 87:  fmt = sys_msgs[6]; break;
+        case 123: fmt = sys_msgs[7]; break;
+        case 183: fmt = sys_msgs[8]; break;
+        default:  return 0;
+        }
+    } else {
+        return 0;
+    }
+    while (fmt && fmt[argi] && o < size - 1) {
+        char c = fmt[argi];
+        if (c == '%') {
+            char n = fmt[argi + 1];
+            if (n == '%') {
+                buf[o++] = '%';
+                argi += 2;
+                continue;
+            }
+            if (n >= '0' && n <= '9') {
+                uint32_t idx = (uint32_t)(n - '0');
+                const char *v = (args && idx > 0)
+                                ? (const char *)args[idx - 1] : "";
+                if (idx == 0)
+                    v = (const char *)args[0];
+                while (*v && o < size - 1)
+                    buf[o++] = *v++;
+                argi += 2;
+                continue;
+            }
+            if (n == 0)
+                break;
+        }
+        buf[o++] = c;
+        argi++;
+    }
+    buf[o] = 0;
+    return o;
+}
+
 /* --- tabla de exports --- */
 
 win32_export_t __exports[] __attribute__((section(".exports"))) = {
@@ -701,6 +1376,7 @@ win32_export_t __exports[] __attribute__((section(".exports"))) = {
     { "UnhandledExceptionFilter",    (uint32_t)&UnhandledExceptionFilter },
     { "IsDebuggerPresent",     (uint32_t)&IsDebuggerPresent },
     { "Sleep",                 (uint32_t)&Sleep },
+    { "IsDBCSLeadByte",        (uint32_t)&IsDBCSLeadByte },
     { "GetTickCount",          (uint32_t)&GetTickCount },
     { "GetSystemTimeAsFileTime", (uint32_t)&GetSystemTimeAsFileTime },
     { "QueryPerformanceFrequency", (uint32_t)&QueryPerformanceFrequency },
@@ -725,5 +1401,30 @@ win32_export_t __exports[] __attribute__((section(".exports"))) = {
     { "GetCurrentDirectoryW",  (uint32_t)&GetCurrentDirectoryW },
     { "SetCurrentDirectoryA",  (uint32_t)&SetCurrentDirectoryA },
     { "SetCurrentDirectoryW",  (uint32_t)&SetCurrentDirectoryW },
+    { "GlobalAlloc",           (uint32_t)&GlobalAlloc },
+    { "GlobalLock",            (uint32_t)&GlobalLock },
+    { "GlobalUnlock",          (uint32_t)&GlobalUnlock },
+    { "GlobalFree",            (uint32_t)&GlobalFree },
+    { "LocalFree",             (uint32_t)&LocalFree },
+    { "lstrlenA",              (uint32_t)&lstrlenA },
+    { "lstrcpyA",              (uint32_t)&lstrcpyA },
+    { "lstrcpynA",             (uint32_t)&lstrcpynA },
+    { "lstrcatA",              (uint32_t)&lstrcatA },
+    { "lstrcmpA",              (uint32_t)&lstrcmpA },
+    { "lstrcmpiA",             (uint32_t)&lstrcmpiA },
+    { "GetFileAttributesA",    (uint32_t)&GetFileAttributesA },
+    { "SetFileAttributesA",    (uint32_t)&SetFileAttributesA },
+    { "SetFilePointer",        (uint32_t)&SetFilePointer },
+    { "SetEndOfFile",          (uint32_t)&SetEndOfFile },
+    { "GetFullPathNameA",      (uint32_t)&GetFullPathNameA },
+    { "CreateThread",          (uint32_t)&CreateThread },
+    { "CreateProcessA",        (uint32_t)&CreateProcessA },
+    { "MulDiv",                (uint32_t)&MulDiv },
+    { "GetPrivateProfileStringA", (uint32_t)&GetPrivateProfileStringA },
+    { "WritePrivateProfileStringA", (uint32_t)&WritePrivateProfileStringA },
+    { "GetDateFormatA",        (uint32_t)&GetDateFormatA },
+    { "GetTimeFormatA",        (uint32_t)&GetTimeFormatA },
+    { "GetLocaleInfoA",        (uint32_t)&GetLocaleInfoA },
+    { "FormatMessageA",        (uint32_t)&FormatMessageA },
     { "", 0 },
 };

@@ -14,6 +14,7 @@
 #include "task/task.h"
 #include "syscall.h"
 #include "kprint.h"
+#include "mem/paging.h"
 
 /* Bucle de muerte de tareas (sti;hlt) en kernel/task/switch.asm. */
 extern void task_stub_exit(void);
@@ -64,29 +65,82 @@ void isr_handler(registers_t *regs)
                 kprint_hex32(pde);
                 kprint(" pte=");
                 if (pde & 1) {
-                    uint32_t *pt = (uint32_t *)(pde & 0xFFFFF000u);
-                    pte = pt[(regs->eip >> 12) & 0x3FF];
-                    kprint_hex32(pte);
+                    uint32_t ptva = pde & 0xFFFFF000u;
+                    if (ptva >= 0x10000000u) {  /* frame fuera de rango */
+                        kprint("?(pde)");
+                    } else {
+                        uint32_t *pt = (uint32_t *)ptva;
+                        pte = pt[(regs->eip >> 12) & 0x3FF];
+                        kprint_hex32(pte);
+                    }
                 } else kprint_hex32(pte);
                 kprint(" pg0=");
                 kprint_hex32(pd[0]);
                 kprint("\n  frm+eip=");
                 if (pte & 1) {
-                    volatile uint8_t *f =
-                        (volatile uint8_t *)((pte & 0xFFFFF000u) +
-                                             (regs->eip & 0xFFF));
-                    int i;
-                    for (i = 0; i < 16; i++)
-                        kprint_hex32((uint32_t)f[i] << 24);
+                    uint32_t fva = pte & 0xFFFFF000u;
+                    if (fva < 0x10000000u && regs->eip >= 0x10000000u) {
+                        volatile uint8_t *f =
+                            (volatile uint8_t *)(fva + (regs->eip & 0xFFF));
+                        int i;
+                        for (i = 0; i < 16; i++)
+                            kprint_hex32((uint32_t)f[i] << 24);
+                    } else {
+                        kprint("(no-mapped)");
+                    }
                 }
                 kprint("\n");
             }
             kprint("  [eip]=");
             {
-                volatile uint8_t *p = (volatile uint8_t *)((uint32_t)regs->eip & ~3u);
+                uint32_t base = regs->eip & ~3u;
                 int i;
                 for (i = 0; i < 16; i++) {
-                    kprint_hex32((uint32_t)p[i] << 24);
+                    uint8_t v = 0xEE;
+                    if (base < 0x10000000u) {
+                        volatile uint8_t *p = (volatile uint8_t *)base;
+                        v = p[i];
+                    } else {
+                        uint32_t frame = paging_user_frame(cr3, base & ~0xFFFu);
+                        if (frame != 0)
+                            v = *(volatile uint8_t *)(frame + (base & 0xFFF) + i);
+                        else
+                            break;
+                    }
+                    kprint_hex32((uint32_t)v << 24);
+                    kprint(" ");
+                }
+            }
+            kprint("\n");
+            {
+                /* Stack de usuario: 12 dwords con walk manual de paginas */
+                uint32_t sp = regs->user_esp;
+                uint32_t *pd2 = (uint32_t *)cr3;
+                int i;
+                kprint("  [stack]");
+                for (i = 0; i < 12; i++) {
+                    uint32_t va = sp + (uint32_t)i * 4;
+                    uint32_t pde2 = pd2[(va >> 22) & 0x3FF];
+                    uint32_t val = 0xDEAD0000u + (uint32_t)i;
+                    if (pde2 & 1) {
+                        uint32_t ptva2 = pde2 & 0xFFFFF000u;
+                        if (ptva2 < 0x10000000u) {
+                            uint32_t *pt = (uint32_t *)ptva2;
+                            uint32_t pte2 = pt[(va >> 12) & 0x3FF];
+                            if (pte2 & 1) {
+                                uint32_t fva2 = pte2 & 0xFFFFF000u;
+                                if (fva2 < 0x10000000u) {
+                                    uint8_t *f = (uint8_t *)
+                                        (fva2 + (va & 0xFFF));
+                                    val = (uint32_t)f[0] |
+                                          ((uint32_t)f[1] << 8) |
+                                          ((uint32_t)f[2] << 16) |
+                                          ((uint32_t)f[3] << 24);
+                                }
+                            }
+                        }
+                    }
+                    kprint_hex32(val);
                     kprint(" ");
                 }
             }

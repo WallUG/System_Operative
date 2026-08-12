@@ -19,12 +19,18 @@
 
 #include <stdint.h>
 
-/* Region fija de los modulos: 0xB0000000 (4 x 1 MiB, uno por DLL). */
+/* Region fija de los modulos: 0xB0000000 (9 x 1 MiB, uno por DLL). */
 #define WIN32_REGION_BASE   0xB0000000u
 #define WIN32_DLL_KERNEL32  0   /* base + 0        kernel32.dll */
 #define WIN32_DLL_USER32    1   /* base + 0x100000  user32.dll */
 #define WIN32_DLL_NTDLL     2   /* base + 0x200000  ntdll.dll */
-#define WIN32_MAX_DLLS      4
+#define WIN32_DLL_MSVCRT    3   /* base + 0x300000  msvcrt.dll */
+#define WIN32_DLL_GDI32     4   /* base + 0x400000  gdi32.dll */
+#define WIN32_DLL_COMCTL32  5   /* base + 0x500000  comctl32.dll */
+#define WIN32_DLL_COMDLG32  6   /* base + 0x600000  comdlg32.dll */
+#define WIN32_DLL_ADVAPI32  7   /* base + 0x700000  advapi32.dll */
+#define WIN32_DLL_SHELL32   8   /* base + 0x800000  shell32.dll */
+#define WIN32_MAX_DLLS      9
 
 /* VA del descriptor de imports de los .exe (pe.h): el programa lo
  * declara como seccion .idata; el kernel lo rellena con las VA de las
@@ -44,7 +50,6 @@
 #define WIN32_TIB_CMDLINE_LEN 128u
 
 /* Export single: name, funcion VA dentro del modulo. */
-#define WIN32_EXPORT_MAX    64          /* por DLL */
 #define WIN32_EXPORT_NAME   32          /* nombre de export, hasta "SetUnhandledExceptionFilter" */
 
 typedef struct {
@@ -52,13 +57,17 @@ typedef struct {
     uint32_t fn;
 } win32_export_t;
 
-/* Un DLL cargado: nombre base "kernel32", base VA, size, exports. */
+/* Un DLL cargado: nombre base "kernel32", base VA, size, exports. La
+ * tabla .exports NO se copia: se guarda el offset y el numero de
+ * entradas dentro del binario ELF (bin), que el kernel ya mantiene en
+ * RAM para mapear; win32_resolve escanea sobre la marcha. Asi el .bss
+ * del kernel no depende del numero de exports por DLL. */
 typedef struct {
     uint32_t base;
     uint32_t size;
     uint32_t file_size;
+    uint32_t exports_off;       /* offset de la tabla .exports en bin */
     uint32_t n_exports;
-    win32_export_t exports[WIN32_EXPORT_MAX];
     const uint8_t *bin;         /* binario ELF en RAM del kernel */
 } win32_module_t;
 

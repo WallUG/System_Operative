@@ -30,7 +30,7 @@
 KERNEL_LOAD_SEG  equ 0x1000        ; segmento:0x1000 -> fisica 0x10000
 KERNEL_OFFSET    equ 0x0000
 KERNEL_SECTORS   equ 128           ; 128 sectores = 64 KB (kernel pad)
-FS_SECTORS       equ 560           ; fs.bin rellenado a 560 sectores (Makefile)
+FS_SECTORS       equ 1100          ; fs.bin rellenado a 1100 sectores (Makefile)
 CODE_SEG         equ gdt_code - gdt_start
 DATA_SEG         equ gdt_data - gdt_start
 MMAP_ADDR        equ 0x7E00        ; buffer E820: dword contador + entradas de 20 B
@@ -98,9 +98,9 @@ halt:
     hlt
     jmp halt
 
-; ------------------------------------------------------------------
-; Carga el kernel usando int 0x13 extensiones LBA (funcion 0x42).
-; DS debe ser 0; el DAP es una estructura de 16 bytes (ver abajo).
+; Carga el kernel usando int 0x13 extensiones LBA (funcion 0x42) en
+; bloques de a lo sumo 127 sectores: la especificacion limita count a
+; 127 por llamada y el kernel actual ocupa 160. DS debe ser 0.
 ; ------------------------------------------------------------------
 load_kernel:
     mov si, dap

@@ -1,8 +1,14 @@
 /* MyOS - kernel/drivers/keyboard.c
- * Teclado PS/2 (IRQ1), scancode set 1. El IRQ1 handler lee 0x60 y mete el
- * caracter en un buffer circular (el resto del kernel lo consulta con
- * keyboard_read). Teclas especiales (shift/alt/arrows) se ignoran por
- * ahora: solo keydown, tecla base US. */
+ * Teclado PS/2 (IRQ1), scancode set 1. El IRQ1 handler decodifica la
+ * tecla y empuja un EV_KEY a la cola grafica (mouse_event_push_key):
+ *  - teclas imprimibles: key = caracter ASCII (mayusculas con shift o
+ *    caps, simbolos con shift).
+ *  - teclas especiales: key = 0x100 + indice (VK_*_SPECIAL abajo).
+ *  - el campo `buttons` del evento lleva los modificadores pulsados:
+ *    bit0=ctrl, bit1=alt, bit2=shift (para que el WM/EDIT distinga
+ *    Ctrl+A de 'a'). El teclado de consola (keyboard_read) sigue
+ *    recibiendo los caracteres imprimibles.
+ * La tabla de scancodes del set 1 es la estandar US. */
 
 #include <stdint.h>
 #include "keyboard.h"
@@ -16,12 +22,34 @@ static volatile char kbd_buffer[KBD_BUF];
 static volatile int kbd_head = 0;   /* posicion de escritura */
 static volatile int kbd_tail = 0;   /* posicion de lectura */
 static volatile int kbd_shift = 0;  /* Shift izq/der pulsado */
+static volatile int kbd_ctrl = 0;   /* Ctrl pulsado */
+static volatile int kbd_alt = 0;    /* Alt pulsado */
+static volatile int kbd_caps = 0;   /* bloqueo de mayusculas */
 
-/* Scancodes set 1 de las teclas Shift (make/break). */
+/* Scancodes set 1 de make/break de los modificadores. */
 #define KBD_SC_LSHIFT_DOWN 0x2A
 #define KBD_SC_LSHIFT_UP   0xAA
 #define KBD_SC_RSHIFT_DOWN 0x36
 #define KBD_SC_RSHIFT_UP   0xB6
+#define KBD_SC_LCTRL_DOWN  0x1D
+#define KBD_SC_LCTRL_UP    0x9D
+#define KBD_SC_LALT_DOWN   0x38
+#define KBD_SC_LALT_UP     0xB8
+#define KBD_SC_CAPS_DOWN   0x3A
+#define KBD_SC_CAPS_UP     0xBA
+
+/* Codigos de teclas especiales entregados en EV_KEY (key = 0x100 + n).
+ * Coinciden con los VK de Windows salvo el offset. */
+#define VK_SPECIAL_LEFT   0x100
+#define VK_SPECIAL_RIGHT  0x101
+#define VK_SPECIAL_UP     0x102
+#define VK_SPECIAL_DOWN   0x103
+#define VK_SPECIAL_HOME   0x104
+#define VK_SPECIAL_END    0x105
+#define VK_SPECIAL_PGUP   0x106
+#define VK_SPECIAL_PGDN   0x107
+#define VK_SPECIAL_DEL    0x108
+#define VK_SPECIAL_INS    0x109
 
 /* Scancode set 1 (US QWERTY), tecla base sin shift. 0 = sin caracter. */
 static const char scancode_table[128] = {
@@ -36,7 +64,7 @@ static const char scancode_table[128] = {
     'c', 'v',
     /* 0x30-0x3F */
     'b', 'n', 'm', ',', '.', '/', 0, '*', 0, ' ', 0, 0, 0, 0, 0, 0,
-    /* 0x40-0x4F (F6-F10, keypad 7..1) */
+    /* 0x40-0x4F (F1-F10, keypad 7..1; F1-F5 no tienen caracter) */
     0, 0, 0, 0, 0, 0, 0, '7', '8', '9', '-', '4', '5', '6', '+', '1',
     /* 0x50-0x5F (keypad 2,3,0,., F11, F12) */
     '2', '3', '0', '.', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -44,6 +72,39 @@ static const char scancode_table[128] = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
+
+/* Caracteres con shift para digitos/simbolos (misma posicion que la
+ * tabla base: '1'->'!', '-',->'_', etc.). */
+static char shifted_char(char c)
+{
+    switch (c) {
+    case '1': return '!';
+    case '2': return '@';
+    case '3': return '#';
+    case '4': return '$';
+    case '5': return '%';
+    case '6': return '^';
+    case '7': return '&';
+    case '8': return '*';
+    case '9': return '(';
+    case '0': return ')';
+    case '-': return '_';
+    case '=': return '+';
+    case '[': return '{';
+    case ']': return '}';
+    case '\\': return '|';
+    case ';': return ':';
+    case '\'': return '"';
+    case '`': return '~';
+    case ',': return '<';
+    case '.': return '>';
+    case '/': return '?';
+    default:
+        if (c >= 'a' && c <= 'z')
+            return c - 'a' + 'A';
+        return c;
+    }
+}
 
 void keyboard_init(void)
 {
@@ -84,24 +145,98 @@ void keyboard_irq(void)
 {
     uint8_t scancode = inb(KBD_DATA);
 
-    if (scancode == KBD_SC_LSHIFT_DOWN || scancode == KBD_SC_RSHIFT_DOWN) {
+    /* Scancodes extendidos (prefijo 0xE0): teclas de edicion, enter del
+     * teclado numerico, etc. Se ignoran (la tecla base coincide). */
+    static int ext = 0;
+    if (scancode == 0xE0) {
+        ext = 1;
+        return;
+    }
+
+    switch (scancode) {
+    case KBD_SC_LSHIFT_DOWN:
+    case KBD_SC_RSHIFT_DOWN:
         kbd_shift = 1;
+        ext = 0;
         return;
-    }
-    if (scancode == KBD_SC_LSHIFT_UP || scancode == KBD_SC_RSHIFT_UP) {
+    case KBD_SC_LSHIFT_UP:
+    case KBD_SC_RSHIFT_UP:
         kbd_shift = 0;
+        ext = 0;
+        return;
+    case KBD_SC_LCTRL_DOWN:
+        kbd_ctrl = 1;
+        ext = 0;
+        return;
+    case KBD_SC_LCTRL_UP:
+        kbd_ctrl = 0;
+        ext = 0;
+        return;
+    case KBD_SC_LALT_DOWN:
+        kbd_alt = 1;
+        ext = 0;
+        return;
+    case KBD_SC_LALT_UP:
+        kbd_alt = 0;
+        ext = 0;
+        return;
+    case KBD_SC_CAPS_DOWN:
+        if (!ext)
+            kbd_caps = !kbd_caps;
+        ext = 0;
+        return;
+    case KBD_SC_CAPS_UP:
+        ext = 0;
+        return;
+    default:
+        break;
+    }
+    /* bit 7 = key release: solo refrescar estado */
+    if (scancode & 0x80) {
+        ext = 0;
         return;
     }
-    /* bit 7 = key release: ignorar (solo keydown) */
-    if (scancode & 0x80)
-        return;
+
+    /* Teclas especiales (sin caracter): flechas y edicion. El scancode
+     * es el del set 1 (0x47..0x53, igual en el keypad y extendidas). */
+    {
+        int special = -1;
+        switch (scancode) {
+        case 0x4B: special = VK_SPECIAL_LEFT; break;
+        case 0x4D: special = VK_SPECIAL_RIGHT; break;
+        case 0x48: special = VK_SPECIAL_UP; break;
+        case 0x50: special = VK_SPECIAL_DOWN; break;
+        case 0x47: special = VK_SPECIAL_HOME; break;
+        case 0x4F: special = VK_SPECIAL_END; break;
+        case 0x49: special = VK_SPECIAL_PGUP; break;
+        case 0x51: special = VK_SPECIAL_PGDN; break;
+        case 0x53: special = VK_SPECIAL_DEL; break;
+        case 0x52: special = VK_SPECIAL_INS; break;
+        default: break;
+        }
+        if (special >= 0) {
+            int mods = (kbd_ctrl ? 1 : 0) | (kbd_alt ? 2 : 0) |
+                       (kbd_shift ? 4 : 0);
+            mouse_event_push_key_ext(special, mods);
+            ext = 0;
+            return;
+        }
+    }
 
     char c = scancode_table[scancode & 0x7F];
+    ext = 0;
     if (c == 0)
         return;
-    if (c == '-' && kbd_shift)
-        c = '_';
-    mouse_event_push_key(c);        /* Fase 14: eventos graficos */
+    if (kbd_shift) {
+        c = shifted_char(c);
+    } else if (kbd_caps && c >= 'a' && c <= 'z') {
+        c -= 'a' - 'A';
+    }
+    {
+        int mods = (kbd_ctrl ? 1 : 0) | (kbd_alt ? 2 : 0) |
+                   (kbd_shift ? 4 : 0);
+        mouse_event_push_key_ext(c, mods);
+    }
 
     int next = (kbd_head + 1) % KBD_BUF;
     if (next != kbd_tail) {         /* buffer lleno: descartar */

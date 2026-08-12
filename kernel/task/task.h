@@ -45,6 +45,7 @@ typedef struct task {
     uint32_t esp0;              /* tope de la pila de kernel (TSS), user */
     uint32_t cr3;               /* PD (kernel_pd para tareas ring 0) */
     uint32_t heap_cur;          /* puntero del heap de usuario (bump) */
+    uint32_t exe_base;          /* ImageBase final del PE cargado (0 si ELF) */
     char     exe_name[TASK_EXE_LEN]; /* nombre del ejecutable (para Win32) */
     char     name[TASK_NAME_LEN];
     struct task *next;          /* lista circular (round-robin) */
@@ -61,7 +62,8 @@ int  task_create(const char *name, void (*entry)(void));
  * Asigna y mapea una pila de usuario nueva en USER_ESP0_TOP-PAGE_SIZE.
  * El entry debe terminar con SYS_EXIT (si retorna, task_stub_exit). */
 int  task_create_user(const char *name, const char *exe,
-                      const char *cmdline, uint32_t pd, uint32_t entry);
+                      const char *cmdline, uint32_t pd, uint32_t entry,
+                      uint32_t exe_base);
 /* Fork: copia el espacio de usuario (paginacion) del padre y el marco
  * registers_t (hijo reanuda tras int 0x80 con eax=0). Devuelve el pid
  * del hijo, -1 si falla. Solo valido desde una tarea de usuario. */
@@ -77,6 +79,9 @@ int  sched_user_busy(void);
 void sched_get_exe_name(char *dst, uint32_t max);
 /* Fija el nombre del ejecutable de la tarea actual. */
 void sched_set_exe_name(const char *name);
+/* ImageBase del PE actual (0 para ELF nativos). */
+uint32_t sched_current_exe_base(void);
+void sched_set_exe_base(uint32_t base);
 /* Nombre/pid/cr3 de la tarea actual. */
 uint32_t sched_current_pid(void);
 const char *sched_current_name(void);

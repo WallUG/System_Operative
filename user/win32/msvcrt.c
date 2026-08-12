@@ -115,6 +115,16 @@ static FILE _iob[3] = {
 /* __p__iob: devuelve puntero al array _iob (FILE*[3] del CRT) */
 FILE **__p__iob(void) { return (FILE **)&_iob[0]; }
 
+/* __p__acmdln: el CRT de mingw hace *__p__acmdln() para obtener la
+ * linea de comandos del proceso al construir __argv/__argc. */
+static const char *cmdline_from_tib(void);
+static char *s_acmdln = 0;
+char ***__p__acmdln(void)
+{
+    s_acmdln = (char *)cmdline_from_tib();
+    return (char ***)&s_acmdln;
+}
+
 /* entradas "de ambiente" que pide el CRT en el arranque */
 static int   s_commode    = 0;
 static int   s_fmode      = 0;
@@ -263,6 +273,74 @@ char *strerror(int e)
 {
     (void)e;
     return (char *)"Unknown error";
+}
+
+/* --- cadenas/memoria que importa metapad.exe directamente del CRT --- */
+
+static const char *u_strchr(const char *s, int c)
+{
+    while (*s) {
+        if ((unsigned char)*s == (unsigned char)c)
+            return s;
+        s++;
+    }
+    return ((unsigned char)c == 0) ? s : 0;
+}
+
+static const char *u_strrchr(const char *s, int c)
+{
+    const char *last = 0;
+    do {
+        if ((unsigned char)*s == (unsigned char)c)
+            last = s;
+    } while (*s++);
+    return last;
+}
+
+static void *u_memchr(const void *p, int c, unsigned int n)
+{
+    const unsigned char *b = (const unsigned char *)p;
+    while (n--) {
+        if (*b == (unsigned char)c)
+            return (void *)b;
+        b++;
+    }
+    return 0;
+}
+
+int  isdigit(int c)  { return c >= '0' && c <= '9'; }
+int  isprint(int c)  { return c >= 32 && c <= 126; }
+int  isalnum(int c)  { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z')
+                            || (c >= 'A' && c <= 'Z'); }
+int  isspace(int c)  { return c == ' ' || c == '\t' || c == '\n'
+                            || c == '\r' || c == '\v' || c == '\f'; }
+static void trace(const char *s) { sys_write(s, (uint32_t)u_strlen(s)); }
+
+int  atoi(const char *s) { trace("[msv] atoi\n"); int v = 0, neg = 0; while (*s == ' ') s++;
+                            if (*s == '-') { neg = 1; s++; }
+                            while (*s >= '0' && *s <= '9') { v = v * 10 + (*s - '0'); s++; }
+                            return neg ? -v : v; }
+long atol(const char *s) { trace("[msv] atol\n"); return (long)atoi(s); }
+char *strchr(const char *s, int c)  { trace("[msv] strchr\n"); return (char *)u_strchr(s, c); }
+char *strrchr(const char *s, int c) { trace("[msv] strrchr\n"); return (char *)u_strrchr(s, c); }
+void *memchr(const void *p, int c, unsigned int n) { trace("[msv] memchr\n"); return u_memchr(p, c, n); }
+
+char *strncpy(char *d, const char *s, unsigned int n)
+{
+    unsigned int i;
+    for (i = 0; i < n && s[i]; i++)
+        d[i] = s[i];
+    for (; i < n; i++)
+        d[i] = 0;
+    return d;
+}
+
+void *memset(void *d, int c, unsigned int n)
+{
+    unsigned char *b = (unsigned char *)d;
+    while (n--)
+        *b++ = (unsigned char)c;
+    return d;
 }
 
 char *strerror_r(int e)          { (void)e; return (char *)"Unknown error"; }
@@ -580,6 +658,7 @@ typedef struct {
 
 win32_export_t __exports[] __attribute__((section(".exports"))) = {
     { "__p__iob",           (uint32_t)__p__iob },
+    { "__p__acmdln",        (uint32_t)__p__acmdln },
     { "__lc_codepage",      LC_CODEPAGE_ADDR },
     { "__p___initenv",      (uint32_t)__p___initenv },
     { "__p___mb_cur_max",   (uint32_t)__p___mb_cur_max },
@@ -616,6 +695,17 @@ win32_export_t __exports[] __attribute__((section(".exports"))) = {
     { "strerror",           (uint32_t)strerror },
     { "strlen",             (uint32_t)strlen },
     { "strncmp",            (uint32_t)strncmp },
+    { "memset",             (uint32_t)memset },
+    { "memchr",             (uint32_t)memchr },
+    { "strchr",             (uint32_t)strchr },
+    { "strrchr",            (uint32_t)strrchr },
+    { "strncpy",            (uint32_t)strncpy },
+    { "atoi",               (uint32_t)atoi },
+    { "atol",               (uint32_t)atol },
+    { "isdigit",            (uint32_t)isdigit },
+    { "isprint",            (uint32_t)isprint },
+    { "isalnum",            (uint32_t)isalnum },
+    { "isspace",            (uint32_t)isspace },
     { "vfprintf",           (uint32_t)vfprintf },
     { "__getmainargs",      (uint32_t)__getmainargs },
     { "wcslen",             (uint32_t)wcslen },

@@ -224,6 +224,12 @@ void mouse_event_push_key(int key)
     event_push(EV_KEY, 0, 0, 0, key);
 }
 
+/* Variante con modificadores (ctrl/alt/shift) en el campo buttons. */
+void mouse_event_push_key_ext(int key, int mods)
+{
+    event_push(EV_KEY, 0, 0, mods, key);
+}
+
 int mouse_event_dequeue(mouse_event_t *ev)
 {
     if (ev_head == ev_tail)

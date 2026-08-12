@@ -175,10 +175,10 @@ void shell_loop(void)
                 kfree(buf);
                 continue;
             }
-            uint32_t pd, entry;
+            uint32_t pd, entry, base = 0;
             int is_pe = (size >= 2 && ((uint8_t *)buf)[0] == 'M'
                          && ((uint8_t *)buf)[1] == 'Z');
-            int r = is_pe ? pe_load(buf, size, &pd, &entry)
+            int r = is_pe ? pe_load(buf, size, &pd, &entry, &base)
                           : elf_load(buf, size, &pd, &entry);
             if (r != 0) {
                 kprint(is_pe ? "PE invalido\n" : "ELF invalido\n");
@@ -189,7 +189,8 @@ void shell_loop(void)
             kprint_uint((uint32_t)mapr);
             kprint("(map) ");
             kfree(buf);
-            if (task_create_user("user", exe_nm, cmdline, pd, entry) < 0) {
+            if (task_create_user("user", exe_nm, cmdline, pd, entry,
+                                 base) < 0) {
                 paging_free_pd(pd);
                 kprint("no se pudo crear la tarea\n");
                 continue;

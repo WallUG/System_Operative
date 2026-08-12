@@ -170,14 +170,23 @@ static inline uint32_t wl_dec(char *out, uint32_t v)
     return n;
 }
 
-/* --- dibujo sobre el LFB (32 bpp 0x00RRGGBB, pitch = ancho en px) --- */
+/* --- dibujo sobre el LFB (32 bpp 0x00RRGGBB, pitch = ancho en px) ---
+ * El LFB (VBE 32bpp) espera el byte bajo = R (BGRx8888 en memoria);
+ * los colores logicos 0x00RRGGBB se swapean al escribir. */
+
+static inline uint32_t wl_px_disp(uint32_t c)
+{
+    return ((c & 0x0000FFFFu) << 8) |
+           ((c >> 16) & 0x000000FFu) |
+           (c & 0xFF000000u);
+}
 
 static inline void wl_putpixel(uint32_t *fb, int pw, int ph,
                                int x, int y, uint32_t c)
 {
     if (x < 0 || y < 0 || x >= pw || y >= ph)
         return;
-    fb[y * pw + x] = c;
+    fb[y * pw + x] = wl_px_disp(c);
 }
 
 static inline void wl_fillrect(uint32_t *fb, int pw, int ph,

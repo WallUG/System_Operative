@@ -7,7 +7,7 @@ LD        = ld
 OBJCOPY   = objcopy
 QEMU      = qemu-system-i386
 KERNEL_SECTORS = 128            # tamano de kernel en sectores (1 = 512 bytes)
-FS_SECTORS     = 560            # fs.bin rellenado a 560 sectores (FS real ~538, boot.asm usa el mismo valor)
+FS_SECTORS     = 1100           # fs.bin rellenado a 1100 sectores (FS real ~989 con metapad.exe; boot.asm usa el mismo valor)
 
 BUILD     = build
 CFLAGS    = -m32 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
@@ -107,7 +107,8 @@ FS_USER_EXES = $(filter %quick.exe %winapi.exe %fork.exe %exec.exe %console.exe,
 
 WIN32_REGION = 0xB0000000
 DLL_SRCS  = user/win32/kernel32.c user/win32/user32.c user/win32/ntdll.c \
-            user/win32/msvcrt.c
+            user/win32/msvcrt.c user/win32/gdi32.c user/win32/comctl32.c \
+            user/win32/comdlg32.c user/win32/advapi32.c user/win32/shell32.c
 DLL_ELFS  = $(patsubst user/win32/%.c,$(BUILD)/user/win32/%.elf,$(DLL_SRCS))
 
 # Fase 9/11/12: .exe compilado con la toolchain REAL de Windows (CRT de
@@ -117,6 +118,10 @@ WIN_APPS  = $(BUILD)/user/win32/hello_win.exe $(BUILD)/user/win32/dir.exe \
             $(BUILD)/user/win32/proc.exe
 # messagebox.exe ademas importa USER32.dll (MessageBoxA), Fase 12.
 WIN_APPS  += $(BUILD)/user/win32/messagebox.exe
+# gdi_demo.exe importa USER32+GDI32 (dibujo), Fase 18 / Hito B slice 2.
+# El binario se llama gdidemo.exe (sin '_': el driver PS/2 de MyOS no
+# mapea shift+'-' a '_').
+WIN_APPS  += $(BUILD)/user/win32/gdidemo.exe
 
 $(BUILD)/user/win32/%.exe: user/win32/%.c
 	@mkdir -p $(dir $@)
@@ -127,6 +132,11 @@ $(BUILD)/user/win32/messagebox.exe: user/win32/messagebox.c
 	@mkdir -p $(dir $@)
 	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
 	           -Wl,--subsystem,console -s -o $@ $< -luser32
+
+$(BUILD)/user/win32/gdidemo.exe: user/win32/gdi_demo.c
+	@mkdir -p $(dir $@)
+	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
+	           -Wl,--subsystem,windows -s -o $@ $< -luser32 -lgdi32
 
 win_hello: $(WIN_APPS)
 	@echo "OK: $(WIN_APPS) (imports reales de Windows)"
@@ -151,13 +161,19 @@ $(BUILD)/user/%.elf: user/%.c tools/user.ld
 $(BUILD)/user/win32/%.elf: user/win32/%.c tools/dll32.ld
 	@mkdir -p $(dir $@)
 	$(CC) -m32 -ffreestanding -fno-pic -fno-stack-protector -fno-builtin \
-	      -fno-asynchronous-unwind-tables -Wall -Wextra -O2 -c $< -o $(BUILD)/user/win32/$*.o
+	      -fno-asynchronous-unwind-tables -Wall -Wextra -O2 \
+	      $(if $(filter msvcrt,$*),,-mrtd) -c $< -o $(BUILD)/user/win32/$*.o
 	$(LD) -m elf_i386 -nostdlib -T tools/dll32.ld \
 	      -defsym=DLL_BASE=$$(case $* in \
 	        kernel32) echo $(WIN32_REGION) ;; \
 	        user32)   echo $$(( $(WIN32_REGION) + 0x100000 )) ;; \
 	        ntdll)    echo $$(( $(WIN32_REGION) + 0x200000 )) ;; \
 	        msvcrt)   echo $$(( $(WIN32_REGION) + 0x300000 )) ;; \
+	        gdi32)    echo $$(( $(WIN32_REGION) + 0x400000 )) ;; \
+	        comctl32) echo $$(( $(WIN32_REGION) + 0x500000 )) ;; \
+	        comdlg32) echo $$(( $(WIN32_REGION) + 0x600000 )) ;; \
+	        advapi32) echo $$(( $(WIN32_REGION) + 0x700000 )) ;; \
+	        shell32)  echo $$(( $(WIN32_REGION) + 0x800000 )) ;; \
 	        *) echo $(WIN32_REGION) ;; esac) \
 	      -o $@ $(BUILD)/user/win32/$*.o
 
@@ -168,10 +184,10 @@ $(BUILD)/user/%.exe: $(BUILD)/user/%.elf tools/makepe.py
 # Se rellena a FS_SECTORS para que boot.asm pueda copiarlo entero a RAM
 # en el arranque por CD (la imagen os-image.bin lo lleva en LBA 129..).
 $(BUILD)/fs.bin: $(FS_USER_ELFS) $(FS_USER_EXES) $(DLL_ELFS) $(WIN_APPS) \
-                 user/win32/readme.txt
+                 user/win32/readme.txt tests/metapad.exe
 	@mkdir -p $(dir $@)
 	python3 tools/makefs.py $(FS_USER_ELFS) $(FS_USER_EXES) $(DLL_ELFS) $(WIN_APPS) \
-	                        user/win32/readme.txt -o $@
+	                        user/win32/readme.txt tests/metapad.exe -o $@
 	@truncate -s $$(( $(FS_SECTORS) * 512 )) $@
 
 kernel.elf: $(OBJS)
