@@ -280,7 +280,14 @@ Todos los detalles, decisiones y bugs encontrados están en `DESIGN.md`.
   kernel dibuja la barra de herramientas bajo el menú, igual que
   `SYS_MENUBAR`). Validado: **3/3 PASS** (`tools/test_fase20b.py`) +
   screendump de la toolbar + regresión metapad (abrir/editar/guardar).
-- **Fase 20 (C)** pendiente: relocaciones PE para DLLs en dirección variable.
+- **Fase 20 (C) concluida**: **relocaciones para DLLs en direcciones
+  variables**. Las DLLs se enlazan con `ld -q` (conservan `.rel.text`/
+  `.rel.data`/`.rel.rodata`/`.rel.exports`) y el kernel aplica los R_386_32
+  al cargar; `WIN32_RELOC_DELTA` las reubica fuera de su base fija (p.ej.
+  kernel32 en 0xB0200000). `SYS_DLLBASE`/`SYS_GETPROC` (31/32) + kernel32
+  resuelven por la base real (GetModuleHandleA/GetProcAddress). Validado:
+  **7/7 PASS** (`tools/test_fase20c.py`) con todos los binarios
+  (metapad abrir/editar/guardar, dir.exe FindFirstFileA, messagebox.exe).
 - **Fase 20 (D)** pendiente: métricas de texto / fuentes reales.
 - Roadmap tentativo: long mode (64 bits), **apps Windows GUI reales** (ver
   `docs/10-win32-gui-eval.md`: primero nuestro notepad mingw, luego un

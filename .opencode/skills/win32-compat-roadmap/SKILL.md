@@ -111,7 +111,14 @@ host emulation.
       syscall SYS_TOOLBAR (30) que dibuja la barra de herramientas en el
       kernel bajo el menu; `tools/test_fase20b.py` 3/3 PASS + screendump
       toolbar)
-- [ ] Phase C — PE relocations
+- [x] Phase C — PE relocations (DLLs de MyOS enlazadas con `ld -q`
+      conservan `.rel.text/.rel.data/.rel.rodata/.rel.exports`; el kernel
+      las parsea y aplica R_386_32 al binario RAM (VA->file offset via
+      PT_LOAD); `WIN32_RELOC_DELTA` (0x200000) reubica las DLLs fuera de
+      su base fija (kernel32 en 0xB0200000+); `SYS_DLLBASE` (31) y
+      `SYS_GETPROC` (32) + GetModuleHandleA/GetProcAddress resuelven por
+      base real; `find_module` usa dll_idx (no deriva de la base);
+      `tools/test_fase20c.py` 7/7 PASS)
 - [ ] Phase D — font metrics / text measurement
 
 ## Validation notes

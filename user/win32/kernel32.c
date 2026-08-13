@@ -284,55 +284,75 @@ typedef struct {
 
 extern win32_export_t __exports[];
 
-/* Bases fijas de los modulos ring 3 (kernel/win32.h, WIN32_REGION_BASE
- * 0xB0000000 + i*0x100000). RICHED20 no tiene modulo propio: el handle
- * es virtual (nunca se desreferencia; basta con que LoadLibraryA lo
- * acepte para que metapad.exe siga con su arranque). */
+/* Modulos Win32: la base REAL de carga la pregunta el kernel (syscall
+ * SYS_DLLBASE, Fase 20-C: las DLLs pueden cargar en direcciones
+ * variables). RICHED20 no tiene modulo propio en el kernel: su base es
+ * virtual (0xB9000000) y se usa como fallback. */
 typedef struct {
     const char *name;
-    uint32_t    base;
+    uint32_t    vbase;      /* base virtual si el kernel no la carga */
 } mod_desc_t;
 
 static const mod_desc_t mod_descs[] = {
     { "kernel32.dll",  0xB0000000u },
-    { "user32.dll",    0xB1000000u },
-    { "ntdll.dll",     0xB2000000u },
-    { "msvcrt.dll",    0xB3000000u },
-    { "gdi32.dll",     0xB4000000u },
-    { "comctl32.dll",  0xB5000000u },
-    { "comdlg32.dll",  0xB6000000u },
-    { "advapi32.dll",  0xB7000000u },
-    { "shell32.dll",   0xB8000000u },
+    { "user32.dll",    0xB0100000u },
+    { "ntdll.dll",     0xB0200000u },
+    { "msvcrt.dll",    0xB0300000u },
+    { "gdi32.dll",     0xB0400000u },
+    { "comctl32.dll",  0xB0500000u },
+    { "comdlg32.dll",  0xB0600000u },
+    { "advapi32.dll",  0xB0700000u },
+    { "shell32.dll",   0xB0800000u },
     { "riched20.dll",  0xB9000000u },
     { 0, 0 },
 };
 
+#define SYS_DLLBASE 31
+
+static uint32_t sys_dllbase(const char *name)
+{
+    uint32_t r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_DLLBASE), "b"(name)
+                     : "memory");
+    return r;
+}
+
 uint32_t GetModuleHandleA(const char *name)
 {
     const mod_desc_t *m;
-    uint32_t i;
+    uint32_t i, base;
     trace("[k32] GetModuleHandleA\n");
     if (name == 0)
         return KERNEL_BASE;
     for (m = mod_descs; m->name; m++)
         for (i = 0; m->name[i]; i++)
-            if (ci_eq(name, m->name))
-                return m->base;
+            if (ci_eq(name, m->name)) {
+                base = sys_dllbase(m->name);
+                return base != 0 ? base : m->vbase;
+            }
     return 0;
 }
+
+#define SYS_GETPROC 32
 
 uint32_t GetProcAddress(uint32_t hmod, const char *name)
 {
     trace("[k32] GetProcAddress\n");
-    uint32_t i;
+    uint32_t i, r;
     if (hmod == 0)
         hmod = KERNEL_BASE;
-    if (hmod != KERNEL_BASE)
+    if (hmod == KERNEL_BASE) {
+        for (i = 0; __exports[i].name[0]; i++)
+            if (ci_eq(__exports[i].name, name))
+                return __exports[i].fn;
         return 0;
-    for (i = 0; __exports[i].name[0]; i++)
-        if (ci_eq(__exports[i].name, name))
-            return __exports[i].fn;
-    return 0;
+    }
+    /* Otra DLL: el kernel resuelve el export por la base real */
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_GETPROC), "b"(hmod), "c"(name)
+                     : "memory");
+    return r;
 }
 
 uint32_t LoadLibraryA(const char *name)

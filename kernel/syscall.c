@@ -577,6 +577,26 @@ void syscall_handler(registers_t *regs)
         }
         break;
     }
+    case SYS_DLLBASE: { /* ebx=nombre_dll -> base real de carga */
+        char name[32];
+        if (user_strcpy(name, sizeof(name), (const char *)regs->ebx,
+                        pd) != 0) {
+            regs->eax = 0;
+            break;
+        }
+        regs->eax = win32_module_base(name);
+        break;
+    }
+    case SYS_GETPROC: { /* ebx=base_dll, ecx=nombre -> VA export */
+        char name[64];
+        if (user_strcpy(name, sizeof(name), (const char *)regs->ecx,
+                        pd) != 0) {
+            regs->eax = 0;
+            break;
+        }
+        regs->eax = win32_resolve_base(regs->ebx, name);
+        break;
+    }
     default:
         break;
     }

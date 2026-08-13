@@ -166,6 +166,7 @@ $(BUILD)/user/win32/%.elf: user/win32/%.c tools/dll32.ld
 	      -fno-asynchronous-unwind-tables -Wall -Wextra -O2 \
 	      $(if $(filter msvcrt,$*),,-mrtd) -c $< -o $(BUILD)/user/win32/$*.o
 	$(LD) -m elf_i386 -nostdlib -T tools/dll32.ld \
+	      -q \
 	      -defsym=DLL_BASE=$$(case $* in \
 	        kernel32) echo $(WIN32_REGION) ;; \
 	        user32)   echo $$(( $(WIN32_REGION) + 0x100000 )) ;; \

@@ -63,8 +63,11 @@ static const struct dll_desc dll_descs[] = {
     { "shell32.elf",  "shell32.dll",  WIN32_REGION_BASE + DLL_BASE_STEP * 8 },
 };
 
-/* Extrae la tabla .exports del binario ELF (no copia: guarda offset y
- * numero de entradas; win32_resolve escanea sobre la marcha). */
+/* Extrae la tabla .exports y las secciones de relocaciones del binario
+ * ELF (no copia: guarda offsets; win32_resolve escanea sobre la marcha).
+ * Los modulos se enlazan con --emit-relocs (Makefile: ld -q), asi que
+ * el binario lleva .rel.text/.rel.data con las direcciones absolutas
+ * (R_386_32) que hay que parchear si se carga en otra base (Fase 20-C). */
 static int parse_exports(win32_module_t *m, const uint8_t *bin)
 {
     const elf32_ehdr_t *h = (const elf32_ehdr_t *)bin;
@@ -79,14 +82,118 @@ static int parse_exports(win32_module_t *m, const uint8_t *bin)
     sh = (const elf32_shdr_t *)(bin + h->e_shoff);
     shstr = (const char *)(bin + sh[h->e_shstrndx].sh_offset);
 
+    m->rel_off = 0;
+    m->rel_size = 0;
+    m->rel_text_off = 0;
+    m->rel_text_size = 0;
+    m->rel_data_off = 0;
+    m->rel_data_size = 0;
+    m->rel_rodata_off = 0;
+    m->rel_rodata_size = 0;
     for (i = 0; i < h->e_shnum; i++) {
-        if (strcmp(shstr + sh[i].sh_name, ".exports") != 0)
-            continue;
-        m->exports_off = sh[i].sh_offset;
-        m->n_exports = sh[i].sh_size / sizeof(win32_export_t);
-        return 0;
+        const char *nm = shstr + sh[i].sh_name;
+        if (strcmp(nm, ".exports") == 0) {
+            m->exports_off = sh[i].sh_offset;
+            m->n_exports = sh[i].sh_size / sizeof(win32_export_t);
+        } else if (strcmp(nm, ".rel.text") == 0) {
+            m->rel_text_off = sh[i].sh_offset;
+            m->rel_text_size = sh[i].sh_size;
+        } else if (strcmp(nm, ".rel.data") == 0 ||
+                   strcmp(nm, ".rel.exports") == 0) {
+            m->rel_data_off = sh[i].sh_offset;
+            m->rel_data_size = sh[i].sh_size;
+        } else if (strcmp(nm, ".rel.rodata") == 0) {
+            m->rel_rodata_off = sh[i].sh_offset;
+            m->rel_rodata_size = sh[i].sh_size;
+        }
     }
-    return -1;
+    if (m->n_exports == 0)
+        return -1;
+    m->rel_off = m->rel_text_off ? m->rel_text_off : m->rel_data_off;
+    m->rel_size = m->rel_text_size + m->rel_data_size +
+                  m->rel_rodata_size;
+    return 0;
+}
+
+/* R_386_32 = 1, R_386_PC32 = 2 (ELF32 i386). Con --emit-relocs el tipo
+ * original se conserva en r_info (alto byte del ELF little-endian: la
+ * info es (sym<<8)|type). Las relocs .rel (no .rela) tienen "addend"
+ * implicito = valor en el destino. */
+#define R_386_32 1
+
+/* Convierte una VA del modulo (r_offset de las relocs, relativa a la
+ * base de enlazado) a offset dentro del archivo ELF, usando el primer
+ * PT_LOAD (los datos empiezan en file offset 0x1000, no en 0). */
+static uint32_t reloc_va_to_off(const win32_module_t *m, uint32_t va)
+{
+    const elf32_ehdr_t *h = (const elf32_ehdr_t *)m->bin;
+    uint32_t i;
+    for (i = 0; i < h->e_phnum; i++) {
+        const elf32_phdr_t *ph =
+            (const elf32_phdr_t *)(m->bin + h->e_phoff) + i;
+        if (ph->p_type == 1) {
+            uint32_t end = ph->p_vaddr + ph->p_filesz;
+            if (va >= ph->p_vaddr && va + 4 <= end)
+                return ph->p_offset + (va - ph->p_vaddr);
+        }
+    }
+    return (uint32_t)-1;
+}
+
+/* Aplica las relocaciones R_386_32 del modulo al binario en RAM del
+ * kernel (una sola vez, en load_one): cada word absoluto apunta a la
+ * base vieja (la del enlazado); le sumamos delta = new_base - old_base
+ * para que apunte a la base de carga. Asi el binario queda con las
+ * direcciones correctas para la base elegida y win32_map solo copia. */
+static int apply_relocs(win32_module_t *m, uint32_t old_base,
+                        uint32_t new_base)
+{
+    const uint8_t *bin = m->bin;
+    uint32_t delta = new_base - old_base;
+    uint32_t i;
+
+    if (delta == 0)
+        return 0;
+    for (i = 0; i < m->rel_text_size; i += 8) {
+        uint32_t off = m->rel_text_off + i;
+        uint32_t r_offset = *(uint32_t *)(void *)(bin + off);
+        uint32_t info = *(uint32_t *)(void *)(bin + off + 4);
+        uint32_t type = info & 0xFFu;
+        uint32_t fo;
+        if (type != R_386_32)
+            continue;
+        fo = reloc_va_to_off(m, r_offset);
+        if (fo == (uint32_t)-1 || fo + 4 > m->file_size)
+            continue;
+        *(uint32_t *)(void *)(bin + fo) += delta;
+    }
+    for (i = 0; i < m->rel_data_size; i += 8) {
+        uint32_t off = m->rel_data_off + i;
+        uint32_t r_offset = *(uint32_t *)(void *)(bin + off);
+        uint32_t info = *(uint32_t *)(void *)(bin + off + 4);
+        uint32_t type = info & 0xFFu;
+        uint32_t fo;
+        if (type != R_386_32)
+            continue;
+        fo = reloc_va_to_off(m, r_offset);
+        if (fo == (uint32_t)-1 || fo + 4 > m->file_size)
+            continue;
+        *(uint32_t *)(void *)(bin + fo) += delta;
+    }
+    for (i = 0; i < m->rel_rodata_size; i += 8) {
+        uint32_t off = m->rel_rodata_off + i;
+        uint32_t r_offset = *(uint32_t *)(void *)(bin + off);
+        uint32_t info = *(uint32_t *)(void *)(bin + off + 4);
+        uint32_t type = info & 0xFFu;
+        uint32_t fo;
+        if (type != R_386_32)
+            continue;
+        fo = reloc_va_to_off(m, r_offset);
+        if (fo == (uint32_t)-1 || fo + 4 > m->file_size)
+            continue;
+        *(uint32_t *)(void *)(bin + fo) += delta;
+    }
+    return 0;
 }
 
 /* Busca el export `fn` dentro del binario del modulo (m->bin, en RAM
@@ -101,7 +208,7 @@ static uint32_t module_find_export(win32_module_t *m, const char *fn)
     ex = (const win32_export_t *)(m->bin + m->exports_off);
     for (j = 0; j < m->n_exports; j++) {
         if (strcmp(ex[j].name, fn) == 0)
-            return ex[j].fn;    /* VA fija del modulo en el PD */
+            return ex[j].fn;    /* VA del modulo en el PD */
     }
     return 0;
 }
@@ -111,7 +218,8 @@ static uint32_t module_find_export(win32_module_t *m, const char *fn)
  * export guarda fn = VA-absoluta del modulo (el ELF esta enlazado a la
  * base fija, asi que fn ya es la direccion correcta en el PD). */
 
-static int load_one(const struct dll_desc *d, win32_module_t *m)
+static int load_one(const struct dll_desc *d, uint32_t idx,
+                    win32_module_t *m)
 {
     int sz = (int)mefs_size(d->fs_name);
     uint8_t *buf;
@@ -137,7 +245,15 @@ static int load_one(const struct dll_desc *d, win32_module_t *m)
     /* guardar binario para win32_map (mantener en RAM del kernel) */
     m->bin = buf;
     m->file_size = (uint32_t)sz;
-    m->base = d->base;
+    m->base = d->base + WIN32_RELOC_DELTA;
+    m->dll_idx = idx;
+    /* Fase 20-C: parchear las referencias absolutas del binario a la
+     * base de carga (relocs .rel.text/.rel.data, enlazadas con -q). */
+    if (apply_relocs(m, d->base, m->base) != 0) {
+        kfree(buf);
+        m->bin = 0;
+        return -1;
+    }
     return 0;
 }
 
@@ -147,7 +263,7 @@ int win32_init(void)
     int n = 0;
 
     for (i = 0; i < sizeof(dll_descs) / sizeof(dll_descs[0]); i++) {
-        if (load_one(&dll_descs[i], &mods[n]) != 0) {
+        if (load_one(&dll_descs[i], i, &mods[n]) != 0) {
             kprint("win32: no cargo ");
             kprint(dll_descs[i].fs_name);
             kprint("\n");
@@ -169,6 +285,20 @@ static int map_module(uint32_t pd, int idx)
     win32_module_t *m = &mods[idx];
     const elf32_ehdr_t *h = (const elf32_ehdr_t *)m->bin;
     uint32_t i;
+    uint32_t old_base = 0, delta = 0;
+
+    /* Fase 20-C: el binario se enlazo a su base fija (primer PT_LOAD);
+     * lo mapeamos en m->base (que puede ser distinta si WIN32_RELOC_DELTA
+     * es != 0). delta desplaza las VAs de los segmentos. */
+    for (i = 0; i < h->e_phnum; i++) {
+        const elf32_phdr_t *ph =
+            (const elf32_phdr_t *)(m->bin + h->e_phoff) + i;
+        if (ph->p_type == 1 && ph->p_vaddr != 0) {
+            old_base = ph->p_vaddr & ~0xFFFu;
+            break;
+        }
+    }
+    delta = m->base - old_base;
 
     for (i = 0; i < h->e_phnum; i++) {
         const elf32_phdr_t *ph =
@@ -177,7 +307,7 @@ static int map_module(uint32_t pd, int idx)
 
         if (ph->p_type != 1)    /* PT_LOAD */
             continue;
-        va = ph->p_vaddr;
+        va = ph->p_vaddr + delta;
         off = ph->p_offset;
         total = ph->p_memsz;
         while (total > 0) {
@@ -302,9 +432,8 @@ static int find_module(const char *dname)
     int i;
 
     for (i = 0; i < mod_count; i++) {
-        uint32_t bi = (mods[i].base - WIN32_REGION_BASE) / DLL_BASE_STEP;
-        if (bi < sizeof(dll_descs) / sizeof(dll_descs[0])
-            && name_ci_eq(dll_descs[bi].dll_name, dname))
+        if (mods[i].dll_idx < sizeof(dll_descs) / sizeof(dll_descs[0])
+            && name_ci_eq(dll_descs[mods[i].dll_idx].dll_name, dname))
             return i;
     }
     return -1;
@@ -317,6 +446,24 @@ uint32_t win32_resolve(const char *dll, const char *fn)
     if (idx < 0)
         return 0;
     return module_find_export(&mods[idx], fn);
+}
+
+uint32_t win32_module_base(const char *dll)
+{
+    int idx = find_module(dll);
+
+    if (idx < 0)
+        return 0;
+    return mods[idx].base;
+}
+
+uint32_t win32_resolve_base(uint32_t base, const char *fn)
+{
+    int i;
+    for (i = 0; i < mod_count; i++)
+        if (mods[i].base == base)
+            return module_find_export(&mods[i], fn);
+    return 0;
 }
 
 int win32_count(void)

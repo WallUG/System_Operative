@@ -535,8 +535,58 @@ validación) en la skill `.opencode/skills/win32-compat-roadmap/`.
 Progreso:
 - [x] Fase 20 (A) — MEFS bitmap + format + subdirectorios
 - [x] Fase 20 (B) — comctl32 real + GetSaveFileNameA confirmación
-- [ ] Fase 20 (C) — relocaciones PE
+- [x] Fase 20 (C) — relocaciones PE
 - [ ] Fase 20 (D) — métricas de texto reales
+
+## Bitácora de la Fase 20 (C): relocaciones para DLLs en direcciones variables
+
+### Objetivo
+
+Las DLLs Win32 de MyOS estaban enlazadas a **bases fijas** (`0xB0000000` +
+i·1 MiB) y solo podían vivir en esa dirección. Esta fase añade relocaciones
+para cargarlas en **cualquier dirección libre**, parcheando sus referencias
+absolutas internas — requisito para añadir más DLLs sin colisionar, cargar
+EXEs cuyo ImageBase caiga en la región fija, y soportar módulos variables.
+
+### Cambios
+
+- **`Makefile`** — las DLLs se enlazan con `ld -q` (`--emit-relocs`): el ELF
+  final conserva `.rel.text`, `.rel.data`, `.rel.rodata` y `.rel.exports`
+  con las relocaciones R_386_32 (r_offset = VA).
+- **`kernel/win32.c/h`** — `parse_exports` también localiza las secciones
+  `.rel.*`; `apply_relocs(m, old_base, new_base)` suma `delta` a cada word
+  absoluto, traduciendo la VA del r_offset a offset de archivo con
+  `reloc_va_to_off` (vía los PT_LOAD, porque los datos empiezan en file
+  offset 0x1000). `WIN32_RELOC_DELTA` (0x200000) desplaza la base de carga;
+  `win32_map` mapea en `m->base` (no en la VA de enlazado). `find_module`
+  usa `m->dll_idx` (la base ya no identifica el módulo). Nuevas
+  `win32_module_base` y `win32_resolve_base`.
+- **`kernel/syscall.c/h`** — `SYS_DLLBASE` (31): base real de una DLL por
+  nombre; `SYS_GETPROC` (32): export por base real (GetProcAddress de otra
+  DLL).
+- **`user/win32/kernel32.c`** — `GetModuleHandleA` pregunta la base real al
+  kernel (fallback a base virtual para RICHED20, que no tiene módulo);
+  `GetProcAddress` resuelve otras DLLs vía `SYS_GETPROC`.
+
+### Bugs corregidos
+
+- El tipo de reloc se leía del byte alto de `r_info`; es el **byte bajo**
+  (`info & 0xFF`).
+- `apply_relocs` trataba `r_offset` (VA) como offset de archivo; hay que
+  traducir con los PT_LOAD (los datos del segmento empiezan en file offset
+  0x1000, no en 0).
+- `find_module` derivaba el índice de la base (`(base - region)/step`), que
+  deja de ser válido al reubicar; ahora guarda `dll_idx`.
+- `GetModuleHandleA("riched20.dll")` devolvía 0 (la DLL virtual no tiene
+  módulo en el kernel); se añade fallback a su base virtual.
+
+### Validación
+
+- QEMU headless (`tools/test_fase20c.py`, `WIN32_RELOC_DELTA=0x200000`):
+  kernel32 carga en 0xB0200000 (verificado en el boot) y todos los binarios
+  funcionan con las DLLs reubicadas: metapad (arranca, Ctrl+O abre, edita,
+  Save As guarda), dir.exe (FindFirstFileA), messagebox.exe. **7/7 PASS**.
+- Con `WIN32_RELOC_DELTA=0` el comportamiento es el clásico (regresión).
 
 ## Bitácora de la Fase 20 (B): comctl32 real + confirmación de sobrescritura
 

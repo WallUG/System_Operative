@@ -32,6 +32,13 @@
 #define WIN32_DLL_SHELL32   8   /* base + 0x800000  shell32.dll */
 #define WIN32_MAX_DLLS      9
 
+/* Fase 20-C: desplazamiento de la base de carga de las DLLs respecto a
+ * la base de enlazado (WIN32_REGION_BASE + i*1MiB). 0 = comportamiento
+ * clasico (sin relocs); != 0 = las DLLs se cargan en otra direccion y
+ * las relocs .rel.text/.rel.data las parchean. El valor 0x200000 saca
+ * los modulos de la region fija (demuestra direcciones variables). */
+#define WIN32_RELOC_DELTA   0x200000u
+
 /* VA del descriptor de imports de los .exe (pe.h): el programa lo
  * declara como seccion .idata; el kernel lo rellena con las VA de las
  * funciones resueltas. */
@@ -64,10 +71,17 @@ typedef struct {
  * del kernel no depende del numero de exports por DLL. */
 typedef struct {
     uint32_t base;
+    uint32_t dll_idx;           /* indice en dll_descs (Fase 20-C: la
+                                   base ya no indica el modulo) */
     uint32_t size;
     uint32_t file_size;
     uint32_t exports_off;       /* offset de la tabla .exports en bin */
     uint32_t n_exports;
+    uint32_t rel_off;           /* primera seccion de relocs (.rel.text) */
+    uint32_t rel_size;
+    uint32_t rel_text_off, rel_text_size;   /* .rel.text (codigo) */
+    uint32_t rel_data_off, rel_data_size;   /* .rel.data/.rel.exports */
+    uint32_t rel_rodata_off, rel_rodata_size; /* .rel.rodata (tablas) */
     const uint8_t *bin;         /* binario ELF en RAM del kernel */
 } win32_module_t;
 
@@ -93,6 +107,11 @@ int  win32_crt_ret_init(uint32_t pd);
 /* Resuelve "dll.func" -> direccion virtual de la funcion (0 si no
  * existe). dll_fname = "kernel32.dll" (o base/binario del archivo). */
 uint32_t win32_resolve(const char *dll, const char *fn);
+/* Base real de carga de una DLL (por nombre "kernel32.dll"); 0 si no
+ * existe. Fase 20-C: ya no es la base fija de enlazado. */
+uint32_t win32_module_base(const char *dll);
+/* Resuelve un export por la base real del modulo (GetProcAddress). */
+uint32_t win32_resolve_base(uint32_t base, const char *fn);
 /* Numero de modulos cargados. */
 int  win32_count(void);
 

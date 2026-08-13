@@ -37,6 +37,9 @@
 #define SYS_FLUSH  29   /* persiste superbloque+directorio al disco     */
 #define SYS_TOOLBAR 30  /* ebx=id, ecx=on, edx=flat*: barra herramientas */
                         /* (Fase 20-B; igual que SYS_MENUBAR)           */
+#define SYS_DLLBASE 31  /* ebx=nombre_dll -> base real de carga (Fase C)
+                           (0 si no existe)                             */
+#define SYS_GETPROC 32  /* ebx=base_dll, ecx=nombre -> VA export (0 si no) */
 
 void syscall_init(void);            /* registra el gate 0x80 (DPL=3) */
 void syscall_handler(registers_t *regs);
