@@ -209,6 +209,18 @@ Todos los detalles, decisiones y bugs encontrados están en `DESIGN.md`.
   `hola<enter>mundo<backspace><enter>xyz` dibuja el texto (blanco/negro)
   en el cliente y el caret/edición funcionan (screendumps + diff de
   píxeles + verificación interactiva).
+- Fase B concluida: **abrir archivo por línea de comandos** — `run
+  metapad.exe readme.txt` carga y muestra el archivo en el editor sin
+  interacción: el entry pasa lpCmdLine a WinMain, que copia el nombre a su
+  buffer global, `GetFullPathNameA`/`FindFirstFileA` derivan el directorio,
+  y `CreateThread` (ahora ejecuta el cuerpo síncrono, antes era stub)
+  lanza el worker de apertura: `CreateFileA`+`GetFileAttributesA`+`ReadFile`
+  y `SetWindowTextA` al RichEdit. `MessageBoxA` implementa `MB_YESNO`
+  (Si/No, y/n, IDYES=6/IDNO=7) y `SendMessageA` acepta
+  `EM_SETPARAFORMAT`/`EM_SETTEXTEX` al hijo (evita el MessageBox "Couldn't
+  set para format."). Validado en QEMU: serial muestra el flujo completo y
+  el screendump deja ver las 4 líneas de readme.txt en el cliente blanco;
+  regresión Fase A OK y escalera 14/14 en disco y CD.
 - Roadmap tentativo: long mode (64 bits), ATA con escritura de archivos
   (CreateFileA con GENERIC_WRITE), **apps Windows GUI reales** (ver
   `docs/10-win32-gui-eval.md`: primero nuestro notepad mingw, luego un

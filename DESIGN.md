@@ -288,7 +288,60 @@ Para poder escribir texto (Fase A siguiente) `kernel/drivers/keyboard.c` deja de
 
 ### Pendientes (fases siguientes)
 
-- **B** — abrir archivo por línea de comandos (`run metapad.exe file.txt`, `argv` ya viaja por el TIB).
 - **C** — diálogo Abrir real (`GetOpenFileNameA` sobre lista MEFS con `FindFirstFileA/FindNextFileA`).
 - **D** — menús/WM_COMMAND + `TrackPopupMenuEx` visible.
 - **E** — FS de escritura (MEFS read-only hoy) para Guardar de verdad.
+
+## Bitácora de la Fase B (abrir archivo por línea de comandos)
+
+### Objetivo y alcance
+
+`run metapad.exe readme.txt` debe cargar el archivo en el editor y mostrarlo
+sin interacción del usuario. Metapad 3.6 resuelve su archivo **fuera de
+WinMain**: el entry `0x401212` hace `GetCommandLineA` (el TIB de la tarea
+lleva `"metapad.exe readme.txt"` copiado por `win32_tib_set_cmdline`), salta
+el nombre del exe y pasa `lpCmdLine = "readme.txt"` a WinMain. Al final de
+WinMain (`0x40ce11+`), si lpCmdLine no empieza por `/`, se trata como nombre
+de archivo: se copia a `0x4108a0`, `GetFullPathNameA` + `0x4030d1`
+(derivación de directorio vía `FindFirstFileA`), `SetWindowTextA` del título
+y `CreateThread(0x40c64e)` que ejecuta `0x405a2e`: `CreateFileA(GENERIC_READ,
+OPEN_EXISTING)`, `GetFileAttributesA`, `0x405817` (tamaño, `GlobalAlloc`,
+BOM de 3 bytes) y `ReadFile`; el contenido llega al RichEdit por
+`SetWindowTextA(hwnd, buffer)` (en `0x405d0a`).
+
+### Fallos encontrados y correcciones (kernel32/user32)
+
+1. **`CreateThread` era un stub** que no ejecutaba el cuerpo del hilo. Sin
+   planificador Win32, ahora **ejecuta `start(param)` de forma síncrona**
+   en la pila actual (válido para el worker one-shot de metapad, que
+   termina con `ret` sin bucles).
+2. **`MessageBoxA` siempre devolvía IDOK (1) y bloqueaba**: implementado
+   `MB_YESNO` (botones Si/No, teclas y/n, Enter=Si, Esc=No) devolviendo
+   IDYES (6)/IDNO (7), que es lo que metapad comprueba (`cmp eax,6`) para
+   continuar una carga.
+3. **`SendMessageA` no reconocía `EM_SETPARAFORMAT` (0x444)/`EM_SETTEXTEX`
+   (0x447)`** al RichEdit hijo: devolvía 0 y metapad mostraba el MessageBox
+   "Couldn't set para format." (string 44) bloqueante. El wndproc builtin
+   ahora acepta los mensajes de formato (0x444/0x447/0x43d/0x437/0x434/
+   0x480/0x481/0x482) devolviendo 1, sin aplicar el formato.
+4. Traces de depuración añadidos en `kernel32.c` (`CreateFileA`,
+   `lstrlenA`, `GetFileAttributesA`, `GetCurrentDirectoryA`,
+   `SetCurrentDirectoryA`, `GetFullPathNameA`, `CreateThread`) que
+   permiten seguir el flujo de apertura por serial.
+
+### Validación
+
+- QEMU headless `run metapad.exe readme.txt`: `GetCommandLineA` →
+  `GetFullPathNameA 'readme.txt'` → `CreateThread start=0x8100c64e` →
+  `CreateFileA 'readme.txt'` → `GetFileAttributesA` → 4× `lstrlenA` con el
+  contenido completo (`"MyOS v0.9 - prueba de filesystem desde Windows API
+  real.\nEste archivo vive en el FS MEFS del ISO (solo lectura).\ndir.exe lo
+  ha leido con CreateFileA + ReadFile (kernel32.dll).\nSi ves esto: la capa
+  Win32 y el FS funcionan a la vez!"`) → **sin diálogos**.
+- Screendump: las **4 líneas de readme.txt visibles** en el cliente blanco
+  (líneas de texto densas en y126-183, ~3835 px de texto), sin ninguna
+  caja modal; el título de la ventana se actualiza vía `SetWindowTextA`.
+- **Regresión Fase A**: `run metapad.exe` + teclear `hola<enter>mundo...
+  <enter>xyz`, HOME y flechas siguen funcionando (1320 px de texto, caret
+  se mueve: diff edit1→edit2 de 30 px).
+- **Escalera 14/14 PASS** en disco y CD (sin regresión).

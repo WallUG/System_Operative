@@ -74,6 +74,18 @@ static void trace(const char *s)
     sys_write(s, strlen_u(s));
 }
 
+static void trace_hex(uint32_t v)
+{
+    static const char hx[] = "0123456789abcdef";
+    char tmp[10];
+    int i;
+    tmp[0] = '0';
+    tmp[1] = 'x';
+    for (i = 0; i < 8; i++)
+        tmp[2 + i] = hx[(v >> (28 - i * 4)) & 0xF];
+    sys_write(tmp, 10);
+}
+
 static void *win_malloc(uint32_t size)
 {
     void *p;
@@ -536,6 +548,9 @@ void *CreateFileA(const char *name, uint32_t access, uint32_t share,
     (void)flags; (void)tmpl;
     if (name == 0)
         return (void *)INVALID_HANDLE_VALUE;
+    trace("[k32] CreateFileA '");
+    trace(name);
+    trace("'\n");
     sz = sys_fsize(name);
     if (sz < 0)
         return (void *)INVALID_HANDLE_VALUE;
@@ -701,6 +716,9 @@ uint32_t FindClose(void *h)
 
 void GetCurrentDirectoryA(uint32_t n, char *buf)
 {
+    trace("[k32] GetCurrentDirectoryA n=");
+    trace_hex(n);
+    trace("\n");
     (void)n;
     if (buf)
         buf[0] = 0;
@@ -713,7 +731,14 @@ void GetCurrentDirectoryW(uint32_t n, uint16_t *buf)
         buf[0] = 0;
 }
 
-void SetCurrentDirectoryA(const char *d) { (void)d; }
+void SetCurrentDirectoryA(const char *d)
+{
+    trace("[k32] SetCurrentDirectoryA '");
+    if (d)
+        trace(d);
+    trace("'\n");
+}
+
 void SetCurrentDirectoryW(const uint16_t *d) { (void)d; }
 
 /* --- Global*: memoria global = el heap del proceso (no movible) --- */
@@ -754,6 +779,9 @@ void *LocalFree(void *h)
 
 uint32_t lstrlenA(const char *s)
 {
+    trace("[k32] lstrlenA '");
+    if (s) trace(s);
+    trace("'\n");
     return strlen_u(s);
 }
 
@@ -815,6 +843,16 @@ uint32_t GetFileAttributesA(const char *name)
 {
     if (name == 0)
         return 0xFFFFFFFFu;
+    {
+        long sz = sys_fsize(name);
+        trace("[k32] GetFileAttributesA '");
+        trace(name);
+        trace("' fsize=");
+        if (sz < 0)
+            trace("<none>\n");
+        else
+            trace("<ok>\n");
+    }
     if (sys_fsize(name) < 0)
         return 0xFFFFFFFFu;
     return FILE_ATTRIBUTE_NORMAL;
@@ -860,6 +898,12 @@ uint32_t GetFullPathNameA(const char *name, uint32_t n, char *buf,
                           char **filepart)
 {
     uint32_t len = 0, last = 0, i;
+    trace("[k32] GetFullPathNameA '");
+    if (name)
+        trace(name);
+    trace("' n=");
+    trace_hex(n);
+    trace("\n");
     if (name == 0 || buf == 0 || n == 0)
         return 0;
     for (i = 0; name[i]; i++) {
@@ -876,17 +920,25 @@ uint32_t GetFullPathNameA(const char *name, uint32_t n, char *buf,
     return len;
 }
 
-/* --- hilos: stub. Metapad crea el "file watcher" con CreateThread y
- * sigue sin el si no existe; aqui devolvemos un handle valido y no
- * ejecutamos nada (sin WaitForSingleObject en sus imports, no hay
- * efectos colaterales). --- */
+/* --- hilos: no hay planificador Win32; se ejecuta el cuerpo del hilo
+ * de forma sincrona en la pila actual (valido para hilos de un solo
+ * uso, p.ej. el worker de apertura de archivos de metapad 0x40c64e,
+ * que termina con ret sin bucles). --- */
+
+typedef void (*thread_fn)(void *);
 
 void *CreateThread(uint32_t attrs, uint32_t stack_size, void *start,
                    void *param, uint32_t flags, uint32_t *tid)
 {
-    (void)attrs; (void)stack_size; (void)start; (void)param; (void)flags;
+    thread_fn fn = (thread_fn)start;
+    (void)attrs; (void)stack_size; (void)flags;
+    trace("[k32] CreateThread start=");
+    trace_hex((uint32_t)start);
+    trace("\n");
+    if (fn != 0)
+        fn(param);
     if (tid)
-        *tid = 0;
+        *tid = 1;
     return (void *)1;
 }
 

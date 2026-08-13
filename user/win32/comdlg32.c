@@ -6,9 +6,40 @@
 
 #include <stdint.h>
 
+static int dlg_write(const char *s, uint32_t len)
+{
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r) : "a"(1), "b"(s), "c"(len));
+    return r;
+}
+
+static void dlg_str(const char *s)
+{
+    uint32_t n = 0;
+    if (!s) { dlg_write("(null)", 6); return; }
+    while (s[n]) n++;
+    dlg_write(s, n);
+}
+
 uint32_t GetOpenFileNameA(const void *ofn)
 {
-    (void)ofn;
+    const char *f = ofn ? *(const char **)((const char *)ofn + 0x1C) : 0;
+    const char *id = ofn ? *(const char **)((const char *)ofn + 0x2C) : 0;
+    const char *ti = ofn ? *(const char **)((const char *)ofn + 0x30) : 0;
+    uint32_t fl = ofn ? *(uint32_t *)((const char *)ofn + 0x34) : 0;
+    dlg_write("[cdlg] GetOpenFileNameA\n", 23);
+    dlg_write("  lpstrFile='", 13); dlg_str(f); dlg_write("'\n", 2);
+    dlg_write("  initialDir='", 15); dlg_str(id); dlg_write("'\n", 2);
+    dlg_write("  title='", 10); dlg_str(ti); dlg_write("' flags=", 8);
+    {
+        uint32_t x = fl, d = 1000000000, started = 0;
+        char tmp[16]; int k = 0;
+        if (x == 0) tmp[k++] = '0';
+        while (x) { if (x / d || started) { tmp[k++] = '0' + x / d; started = 1; x %= d; } d /= 10; }
+        tmp[k] = 0;
+        dlg_write(tmp, k);
+    }
+    dlg_write("\n", 1);
     return 0;
 }
 

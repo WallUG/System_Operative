@@ -1694,6 +1694,13 @@ uint32_t builtin_wndproc(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
         child_parent[hwnd - CHILD_BASE] = 0;
         return 0;
     }
+    /* Mensajes RichEdit que metapad envia al hijo; el formato se acepta
+     * pero no se aplica (evita el MessageBox 'Couldn't set para format.').
+     * 0x444 = EM_SETPARAFORMAT, 0x447 = EM_SETTEXTEX, 0x43d = EM_EXSETSEL,
+     * 0x437 = EM_GETSEL, 0x434 = EM_GETTEXTLENGTHEX */
+    if (m == 0x444 || m == 0x447 || m == 0x43d || m == 0x437 ||
+        m == 0x434 || m == 0x480 || m == 0x481 || m == 0x482)
+        return 1;
     return DefWindowProcA(hwnd, m, a, 0);
 }
 
@@ -1985,21 +1992,24 @@ uint32_t IsClipboardFormatAvailable(uint32_t f) { (void)f; return 0; }
 
 /* --- MessageBoxA --- */
 
-/* Botones: 0 = OK. Devuelve IDOK (1) al hacer clic en OK o pulsar Enter. */
+/* Botones: 0 = OK. Devuelve IDOK (1) al hacer clic en OK o pulsar Enter.
+ * MB_YESNO (0x4): botones "Si"/"No" -> IDYES (6) / IDNO (7); teclas
+ * y/Y=Si, n/N=No, Enter=Si, Esc=No. Metapad comprueba eax==6 (IDYES)
+ * para continuar una carga de archivo. */
 int MessageBoxA(void *h, const char *text, const char *caption, uint32_t type)
 {
     uint32_t info[4];
     uint32_t ev[5];
     int wx, wy, ww, wh;
     int tx, ty;
-    user32_button_t btn;
+    int yesno = (type & 0x4) != 0;
+    user32_button_t btn1, btn2;
 
     (void)h;
-    (void)type;
     if (sys_gfxinfo(info) != 0) {
         /* Sin modo grafico: fallback a consola. */
         console_print("[user32] sin framebuffer\n");
-        return 1;
+        return yesno ? 6 : 1;
     }
     lfb = (uint32_t *)info[0];
     scr_w = info[1];
@@ -2024,20 +2034,29 @@ int MessageBoxA(void *h, const char *text, const char *caption, uint32_t type)
     ty = wy + 34;
     drawtext(tx, ty, text, COLOR_TEXT);
     ty += 20;
-    drawtext(tx, ty, "Haz clic en OK o pulsa Enter para cerrar", COLOR_TEXT);
+    if (yesno)
+        drawtext(tx, ty, "Pulsa y/N o haz clic en un boton", COLOR_TEXT);
+    else
+        drawtext(tx, ty, "Haz clic en OK o pulsa Enter para cerrar", COLOR_TEXT);
 
-    btn.x = wx + ww / 2 - 30;
-    btn.y = wy + wh - 42;
-    btn.w = 60;
-    btn.h = 22;
-    btn.label = "OK";
-    btn.fg = COLOR_BTN_TX;
-    btn.bg = COLOR_BTN;
-    btn.fg_p = COLOR_BTN;
-    btn.bg_p = COLOR_TEXT;
-    btn.hovered = 0;
-    btn.pressed = 0;
-    user32_draw_button(&btn);
+    btn1.x = wx + ww / 2 - (yesno ? 75 : 30);
+    btn1.y = wy + wh - 42;
+    btn1.w = 60;
+    btn1.h = 22;
+    btn1.label = yesno ? "Si" : "OK";
+    btn1.fg = COLOR_BTN_TX;
+    btn1.bg = COLOR_BTN;
+    btn1.fg_p = COLOR_BTN;
+    btn1.bg_p = COLOR_TEXT;
+    btn1.hovered = 0;
+    btn1.pressed = 0;
+    user32_draw_button(&btn1);
+    if (yesno) {
+        btn2 = btn1;
+        btn2.x += 75;
+        btn2.label = "No";
+        user32_draw_button(&btn2);
+    }
 
     /* Bucle de eventos (no bloqueante): clic sobre OK o Enter (EV_KEY)
      * cierran el dialogo. El scheduler desaloja el bucle ocupado por
@@ -2045,10 +2064,20 @@ int MessageBoxA(void *h, const char *text, const char *caption, uint32_t type)
     for (;;) {
         if (sys_event(ev) != 0)
             continue;
-        if (user32_button_feed(&btn, ev))
-            return 1;
+        if (user32_button_feed(&btn1, ev))
+            return yesno ? 6 : 1;
+        if (yesno && user32_button_feed(&btn2, ev))
+            return 7;
         if (ev[0] == EV_KEY && ev[4] == '\n')
-            return 1;
+            return yesno ? 6 : 1;
+        if (ev[0] == EV_KEY && yesno) {
+            if (ev[4] == 'y' || ev[4] == 'Y')
+                return 6;
+            if (ev[4] == 'n' || ev[4] == 'N')
+                return 7;
+            if (ev[4] == 27)
+                return 7;
+        }
     }
 }
 
