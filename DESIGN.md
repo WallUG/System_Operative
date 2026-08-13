@@ -533,7 +533,58 @@ validación) en la skill `.opencode/skills/win32-compat-roadmap/`.
   `GetTextExtentPoint32`) y **blit por regiones**.
 
 Progreso:
-- [ ] Fase 20 (A) — MEFS bitmap + format + subdirectorios
+- [x] Fase 20 (A) — MEFS bitmap + format + subdirectorios
 - [ ] Fase 20 (B) — comctl32 real + GetSaveFileNameA confirmación
 - [ ] Fase 20 (C) — relocaciones PE
 - [ ] Fase 20 (D) — métricas de texto reales
+
+## Bitácora de la Fase 20 (A): MEFS v2 (bitmap + format + subdirectorios)
+
+### Objetivo
+
+Migrar el MEFS del allocator "bump" (`next_free_lba`) a un **bitmap de
+bloques libres**, añadir un **comando `format`** (formatear un disco para
+uso propio desde MyOS) y **subdirectorios** (base para un explorador de
+archivos real).
+
+### Cambios
+
+- **`kernel/fs/mefs.h/c`** — formato v2: superbloque con
+  `bitmap_lba`/`bitmap_sectors`/`data_start`/`fs_capacity` (offsets 20-32);
+  entrada de directorio ampliada a `name[16], size, lba, flags, parent`
+  (flags bit0=IS_DIR, parent=MEFS_ROOT). `mefs_write` libera los bloques
+  viejos (`bm_free`) y asigna un run contiguo vía `bm_alloc`; `mefs_delete`
+  libera bloques. Nuevas funciones `mefs_format(capacity)`, `mefs_ls`,
+  `mefs_mkdir`, `mefs_lookup`, `mefs_parent`, `mefs_name`. `mefs_list`/
+  `mefs_file_count`/`mefs_dir_get` siguen listando **solo archivos de la
+  raíz** para compat con metapad/SYS_DLIST.
+- **`tools/makefs.py`** — genera superbloque v2 + bitmap (marca usados los
+  bloques de cada archivo) + directorio con `parent=raíz`. Nueva opción `-c`
+  para `fs_capacity`.
+- **`Makefile`** — `makefs.py` recibe `-c $(FS_SECTORS)`.
+- **`kernel/shell.c`** — comandos `format`, `mkdir`, `cd`, `pwd`, y `ls`
+  con subdirectorios (marca los dirs con `/`). `cwd` de la shell
+  (`shell_cwd`, índice de entrada dir).
+
+### Bug corregido
+
+- `mefs_format` reseteaba `file_count=0` pero **no limpiaba `entries[]`** en
+  RAM: tras formatear, los nombres viejos seguían ocupando slots y
+  `find_free_slot` devolvía un índice alto → el `flush` persistía los
+  archivos viejos (nf=33 tras format). Fix: `memset(entries, 0, ...)` en
+  `mefs_format`.
+- `shell_print_path` (pwd) imprimía la entrada 0 del padre (hello.elf) en
+  vez del nombre del dir actual. Fix: nueva `mefs_name(idx)`.
+
+### Validación
+
+- QEMU headless (`tools/test_fase20a.py`, disco `build/os-persist.bin`):
+  1. `write a.txt` + `write b.txt` + `rm b.txt` + `write c.txt` → el bitmap
+     reutiliza el bloque de b.txt.
+  2. `mkdir docs` → `cd docs` → `pwd` → `/docs`; persiste tras reinicio.
+  3. `format` → `ls` → 0 entradas; `write post.txt` → persiste (nf=1).
+  4. `cat` de los archivos creados tras reinicio.
+  **8/8 PASS**.
+- Regresión metapad: `run metapad.exe` sin crash; `Ctrl+O` abre el diálogo
+  Abrir (SYS_DLIST sobre la raíz) listando los archivos. `FS_SECTORS` se
+  mantiene en 1400; el `format` de la shell usa esa capacidad.

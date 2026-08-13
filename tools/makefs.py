@@ -1,57 +1,89 @@
 #!/usr/bin/env python3
-"""Genera el filesystem MEFS (MyOS Easy FS) como imagen de 512 B/sector.
+"""Genera el filesystem MEFS v2 (MyOS Easy FS) como imagen de 512 B/sector.
 
-Formato (relativo al inicio del FS):
-  sector 0 : superbloque: 8 B magic 'MEFS01\\n', uint32 num_files,
-             uint32 dir_lba (absoluto), uint32 dir_size (bytes)
-  sector 1 : directorio: entradas de 32 B: name[16], size, lba, unused
-  siguientes: datos de cada archivo en sectores contiguos (lba absoluto)
+Formato (relativo al inicio del FS, LBA absoluto MEFS_FS_START):
+  sector 0        : superbloque (512 B)
+  sector 1..+dir  : directorio: MEFS_MAX_FILES entradas de 32 B
+  +bitmap         : bitmap de bloques libres (1 bit por sector de datos)
+  +data           : datos de los archivos (bloques asignados via bitmap)
+
+Superbloque:
+  0  magic "MEFS02\\n\\0"
+  8  uint32 num_files
+  12 uint32 dir_lba
+  16 uint32 dir_size
+  20 uint32 bitmap_lba
+  24 uint32 bitmap_sectors
+  28 uint32 data_start
+  32 uint32 fs_capacity
+
+Entrada de directorio (32 B): name[16], size, lba, flags, parent.
+  flags bit0 = IS_DIR; parent = indice del padre (0xFFFFFFFF = raiz).
 
 Uso: makefs.py <archivos>... -o <fs.bin>
-Cada archivo se incluye con su nombre base. El FS empieza en el sector
-LBA_FS_START del disco final (os-image.bin: boot 1 sector + kernel 63).
+Cada archivo se incluye con su nombre base, en la raiz. Capacidad del FS =
+fs_capacity (por defecto FS_SECTORS si se pasa -c).
 """
 import argparse
 import os
 import struct
 
 LBA_FS_START = 129
-# 8 bytes exactos (incluye el \0 final; el kernel compara 8 bytes).
-MAGIC = b"MEFS01\n\0"
+MAGIC = b"MEFS02\n\0"
 DIR_ENTRY = 32
+MAX_FILES = 64
+MEFS_ROOT = 0xFFFFFFFF
+FLAG_DIR = 1
 
 
-def build(files, out):
-    # 1. superbloque + directorio: el directorio puede ocupar 1+ sectores
-    # (entradas de 32 B); los datos empiezan alineados despues de el.
+def build(files, out, capacity):
+    # layout: superbloque, directorio (fijo MAX_FILES entradas), bitmap, datos
+    dir_size = MAX_FILES * 32
+    dir_sectors = (dir_size + 511) // 512
+    bitmap_sectors = (capacity + 4095) // 4096
+    if bitmap_sectors == 0:
+        bitmap_sectors = 1
+    bitmap_lba = LBA_FS_START + 1 + dir_sectors
+    data_start = bitmap_lba + bitmap_sectors
+
+    # asigna bloques de datos (contiguos, uno por archivo)
     n = len(files)
-    dir_sectors = (n * 32 + 511) // 512
-    entries = []
-    lba = LBA_FS_START + 1 + dir_sectors
+    entries = []          # (name, size, lba, flags, parent)
+    block = 0
     for path in files:
         name = os.path.basename(path).encode()
         if len(name) > 15:
             name = name[:15]
         size = os.path.getsize(path)
-        entries.append((name, size, lba))
-        lba += (size + 511) // 512
+        nb = (size + 511) // 512
+        entries.append((name, size, data_start + block, 0, MEFS_ROOT))
+        block += nb
+
+    # bitmap: marca usados los bloques de los archivos
+    bitmap = bytearray((capacity + 7) // 8)
+    for name, size, lba, flags, parent in entries:
+        nb = (size + 511) // 512
+        base = lba - data_start
+        for i in range(base, base + nb):
+            bitmap[i // 8] |= 1 << (i % 8)
 
     dir_bytes = b"".join(
-        name.ljust(16, b"\0") + struct.pack("<IIII", size, start, 0, 0)
-        for name, size, start in entries
-    )
-    # El directorio puede ocupar mas de un sector (17 archivos = 544 B);
-    # los datos deben empezar alineados a sector.
-    dir_sectors = (len(dir_bytes) + 511) // 512
-    dir_bytes = dir_bytes.ljust(dir_sectors * 512, b"\0")
+        name.ljust(16, b"\0") + struct.pack("<IIII", size, start, fl, par)
+        for name, size, start, fl, par in entries
+    ).ljust(dir_size, b"\0")
 
-    sb = MAGIC + struct.pack(
-        "<III", len(entries), LBA_FS_START + 1, len(dir_bytes)
-    )
-    # Fase E: next_free_lba = primer sector libre tras los datos (offs. 20)
-    next_free = lba            # `lba` ya apunta al primer sector libre
-    sb = sb + struct.pack("<I", next_free)
+    sb = (MAGIC +
+          struct.pack("<IIIIIII",
+                      n,                       # num_files
+                      LBA_FS_START + 1,        # dir_lba
+                      dir_size,                # dir_size
+                      bitmap_lba,              # bitmap_lba
+                      bitmap_sectors,          # bitmap_sectors
+                      data_start,              # data_start
+                      capacity))               # fs_capacity
     sb = sb.ljust(512, b"\0")
+
+    bitmap_bytes = bytes(bitmap).ljust(bitmap_sectors * 512, b"\0")
 
     data = b""
     for path in files:
@@ -62,17 +94,21 @@ def build(files, out):
     with open(out, "wb") as f:
         f.write(sb)
         f.write(dir_bytes)
+        f.write(bitmap_bytes)
         f.write(data)
-    print(f"MEFS: {len(entries)} archivo(s) -> {out} "
-          f"({os.path.getsize(out)} bytes, {lba - LBA_FS_START} sectores)")
+    total = len(sb) + len(dir_bytes) + len(bitmap_bytes) + len(data)
+    print(f"MEFS: {n} archivo(s) -> {out} "
+          f"(fs_capacity={capacity} sectores, data_start={data_start}, "
+          f"bitmap {bitmap_sectors} sectores, {total} bytes)")
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("files", nargs="+")
     ap.add_argument("-o", required=True)
+    ap.add_argument("-c", type=int, default=1400, help="fs_capacity (sectores)")
     args = ap.parse_args()
-    build(args.files, args.o)
+    build(args.files, args.o, args.c)
 
 
 if __name__ == "__main__":

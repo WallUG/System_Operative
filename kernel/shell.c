@@ -21,6 +21,33 @@
 
 static volatile int shell_run = 1;
 
+/* Fase 20-A: directorio actual de la shell (indice de entrada dir,
+ * MEFS_ROOT = raiz). MEFS_FS_SHELL_CAP = capacidad del FS al formatear. */
+static uint32_t shell_cwd = MEFS_ROOT;
+#define MEFS_FS_SHELL_CAP 1400
+
+/* Devuelve el indice del padre de la entrada 'idx' (raiz si es root/dir). */
+static uint32_t shell_cwd_parent(uint32_t idx)
+{
+    return mefs_parent(idx);
+}
+
+/* Imprime la ruta del cwd (nombre del dir actual). */
+static void shell_print_path(uint32_t idx)
+{
+    char name[MEFS_NAME_LEN];
+    if (idx == MEFS_ROOT) {
+        kprint("/");
+        return;
+    }
+    if (mefs_name(idx, name) != 0) {
+        kprint("/?");
+        return;
+    }
+    kprint("/");
+    kprint(name);
+}
+
 static void echo_line(const char *line)
 {
     kprint(line);
@@ -88,7 +115,7 @@ void shell_loop(void)
 
         if (strcmp(line, "help") == 0) {
             kprint("  help       esta ayuda\n");
-            kprint("  ls         lista archivos del FS\n");
+            kprint("  ls [d]     lista archivos del directorio actual\n");
             kprint("  cat <f>    muestra el contenido de <f>\n");
             kprint("  echo <txt> repite el texto\n");
             kprint("  ver <f>    muestra <f> como hex+ascii\n");
@@ -96,21 +123,71 @@ void shell_loop(void)
             kprint("  touch <f>  crea un archivo vacio (Fase E)\n");
             kprint("  write <f>  escribe 'hola desde MyOS!' en <f>\n");
             kprint("  rm <f>     elimina el archivo <f>\n");
+            kprint("  mkdir <d>  crea un subdirectorio (Fase 20-A)\n");
+            kprint("  cd <d>     cambia al subdirectorio (cd .. sube)\n");
+            kprint("  pwd        muestra el directorio actual\n");
+            kprint("  format     formatea el disco (borra todo)\n");
             kprint("  flush      persiste el FS al disco (Fase E)\n");
             kprint("  pf         provoca un #PF intencional\n");
-        } else if (strcmp(line, "ls") == 0) {
-            int n = mefs_file_count();
-            char name[MEFS_NAME_LEN];
-            kprint_uint((uint32_t)n);
-            kprint(" archivo(s):\n");
-            for (int i = 0; i < n; i++) {
-                if (mefs_list((uint32_t)i, name) == 0) {
-                    kprint("  ");
-                    kprint(name);
-                    kprint("  (");
-                    kprint_uint((uint32_t)mefs_size(name));
-                    kprint(" B)\n");
+        } else if (strcmp(line, "ls") == 0 || strncmp(line, "ls ", 3) == 0) {
+            /* ls [dir]: lista el cwd o el subdirectorio dado */
+            uint32_t d = shell_cwd;
+            if (line[2] == ' ') {
+                if (strcmp(line + 3, "..") == 0) {
+                    d = shell_cwd_parent(shell_cwd);
+                } else {
+                    int idx = mefs_lookup(shell_cwd, line + 3);
+                    if (idx < 0) {
+                        kprint("no existe\n");
+                        continue;
+                    }
+                    d = (uint32_t)idx;
                 }
+            }
+            int n = 0;
+            char name[MEFS_NAME_LEN];
+            uint32_t sz, fl;
+            while (mefs_ls(d, (uint32_t)n, name, &sz, &fl) == 0) {
+                kprint("  ");
+                kprint(name);
+                if (fl & MEFS_FLAG_DIR)
+                    kprint("/  ");
+                else
+                    kprint("   ");
+                if (!(fl & MEFS_FLAG_DIR)) {
+                    kprint_uint(sz);
+                    kprint(" B");
+                }
+                kprint("\n");
+                n++;
+            }
+            kprint_uint((uint32_t)n);
+            kprint(" entrada(s)\n");
+        } else if (strncmp(line, "mkdir ", 6) == 0) {
+            if (mefs_mkdir(line + 6, shell_cwd) != 0)
+                kprint("no se pudo crear dir\n");
+            else
+                kprint("dir creado\n");
+        } else if (strncmp(line, "cd ", 3) == 0) {
+            if (strcmp(line + 3, "..") == 0) {
+                shell_cwd = shell_cwd_parent(shell_cwd);
+                continue;
+            }
+            int idx = mefs_lookup(shell_cwd, line + 3);
+            if (idx < 0) {
+                kprint("no existe\n");
+                continue;
+            }
+            shell_cwd = (uint32_t)idx;
+        } else if (strcmp(line, "pwd") == 0) {
+            shell_print_path(shell_cwd);
+            kprint("\n");
+        } else if (strcmp(line, "format") == 0) {
+            if (mefs_format(MEFS_FS_SHELL_CAP) != 0)
+                kprint("no se pudo formatear\n");
+            else {
+                shell_cwd = MEFS_ROOT;
+                kprint("disco formateado\n");
             }
         } else if (strncmp(line, "cat ", 4) == 0) {
             static uint8_t buf[2048];

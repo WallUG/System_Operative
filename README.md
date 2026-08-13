@@ -262,11 +262,21 @@ Todos los detalles, decisiones y bugs encontrados están en `DESIGN.md`.
 - **Fase 19** = las Fases A-E sobre metapad (edición, abrir, diálogo Abrir,
   menús, persistencia) como un conjunto; ver `DESIGN.md`.
 - **Fase 20 (en curso)** = roadmap de compatibilidad Win32 agrupado en 4
-  fases: **(A)** MEFS con bitmap de bloques + comando `format` +
-  subdirectorios; **(B)** comctl32 real (listview/toolbar) +
-  `GetSaveFileNameA` con confirmación; **(C)** relocaciones PE para DLLs en
-  dirección variable; **(D)** métricas de texto / fuentes reales. Detalle en
-  la skill `.opencode/skills/win32-compat-roadmap/`.
+  fases. Detalle en la skill `.opencode/skills/win32-compat-roadmap/`.
+- **Fase 20 (A) concluida**: **MEFS v2** — migración del allocator "bump"
+  a un **bitmap de bloques libres** (los archivos liberan y reutilizan
+  bloques al borrar/reescribir), **comando `format`** (formatea el disco
+  para uso propio desde MyOS: superbloque limpio + bitmap a 0), y
+  **subdirectorios** (`mkdir`, `cd`, `pwd`, `ls` con `/`; entradas con
+  `flags`/`parent`). `mefs_write` libera + reasigna vía bitmap; la API de
+  raíz (`SYS_DLIST`) sigue lista solo archivos root para metapad. Validado:
+  **8/8 PASS** en disco (`tools/test_fase20a.py`): crear/borrar/reutilizar
+  bloques, `mkdir docs`→`cd`→`pwd`→`/docs` persiste, `format` limpia,
+  regresión metapad OK.
+- **Fase 20 (B)** pendiente: comctl32 real (listview/toolbar) +
+  `GetSaveFileNameA` con confirmación.
+- **Fase 20 (C)** pendiente: relocaciones PE para DLLs en dirección variable.
+- **Fase 20 (D)** pendiente: métricas de texto / fuentes reales.
 - Roadmap tentativo: long mode (64 bits), **apps Windows GUI reales** (ver
   `docs/10-win32-gui-eval.md`: primero nuestro notepad mingw, luego un
   exe externo como Metapad), según el interés.

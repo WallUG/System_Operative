@@ -1,15 +1,27 @@
 /* MyOS - kernel/fs/mefs.h
- * MEFS (MyOS Easy FS): filesystem propio de Fase 6, solo lectura.
+ * MEFS (MyOS Easy FS): filesystem propio, v2 (Fase 20-A).
  *
- * Layout en el disco (sectores de 512 B), relativo al inicio del FS:
- *   sector 0 : superbloque: 8 B magic "MEFS01\n", uint32 num_files,
- *              uint32 dir_lba, uint32 dir_size (bytes)
- *   sector 1 : directorio: num_files entradas de 32 B:
- *              char name[16], uint32 size, uint32 lba, uint32 unused
- *   siguientes: datos de cada archivo en sectores contiguos (el lba de
- *              la entrada es el sector absoluto del disco).
- * En la imagen os-image.bin el FS empieza en el sector 64 (LBA 64):
- *   0 boot | 1..63 kernel | 64.. FS. */
+ * Layout en el disco (sectores de 512 B), relativo al inicio del FS
+ * (LBA absoluto MEFS_FS_START):
+ *   sector 0        : superbloque (512 B)
+ *   sector 1..+dir  : directorio: MEFS_MAX_FILES entradas de 32 B
+ *   +bitmap         : bitmap de bloques libres (1 bit por sector de datos)
+ *   +data           : datos de los archivos (bloques asignados via bitmap)
+ *
+ * Superbloque (offsets dentro del sector 0):
+ *   0  magic "MEFS02\n\0" (8 B)
+ *   8  uint32 num_files
+ *   12 uint32 dir_lba        (absoluto)
+ *   16 uint32 dir_size       (bytes)
+ *   20 uint32 bitmap_lba     (absoluto)
+ *   24 uint32 bitmap_sectors
+ *   28 uint32 data_start     (absoluto: primer sector de datos)
+ *   32 uint32 fs_capacity    (sectores totales de la region FS del disco)
+ *
+ * Entrada de directorio (32 B): name[16], size, lba, flags, parent.
+ *   flags bit0 = IS_DIR. parent = indice de la entrada del directorio padre;
+ *   0xFFFFFFFF (MEFS_ROOT) = raiz.
+ */
 
 #ifndef MYOS_MEFS_H
 #define MYOS_MEFS_H
@@ -17,56 +29,66 @@
 #include <stdint.h>
 
 #define MEFS_NAME_LEN   16
-#define MEFS_MAX_FILES  32
-#define MEFS_FS_START   129         /* LBA donde empieza el FS (tras boot + kernel) */
+#define MEFS_MAX_FILES  64          /* root + subdirectorios */
+#define MEFS_FS_START   129         /* LBA donde empieza el FS (boot+kernel) */
 
-/* Desplazamiento dentro del superbloque del campo "next_free_lba" (Fase E:
- * siguiente sector libre para asignar a archivos nuevos/crecidos). */
-#define MEFS_SB_FREE    20
+#define MEFS_FLAG_DIR   1           /* entrada es un directorio */
+#define MEFS_ROOT       0xFFFFFFFFu /* parent de la raiz */
+
+/* offsets del superbloque (v2) */
+#define MEFS_SB_NUMFILES 8
+#define MEFS_SB_DIRLBA   12
+#define MEFS_SB_DIRSIZE  16
+#define MEFS_SB_BITMAP   20
+#define MEFS_SB_BITMAPSZ 24
+#define MEFS_SB_DATA     28
+#define MEFS_SB_CAP      32
 
 typedef struct {
     char     name[MEFS_NAME_LEN];
     uint32_t size;
-    uint32_t lba;                   /* sector absoluto del disco */
-    uint32_t unused;
+    uint32_t lba;                   /* primer sector de datos (0 = vacio/dir) */
+    uint32_t flags;                 /* bit0 = IS_DIR */
+    uint32_t parent;                /* indice de la entrada del padre */
 } mefs_entry_t;
 
-/* Lee el superbloque + directorio a RAM (memoria estatica) desde el
- * disco ATA (modo disco). */
+/* Inicializa desde ATA (modo disco) o imagen RAM (CD). */
 int  mefs_init(void);
-/* Igual pero desde una imagen del FS ya copiada en RAM (arranque CD):
- * sector 0 de la imagen == LBA MEFS_FS_START del disco. */
 int  mefs_init_mem(const uint8_t *image, uint32_t size);
-/* Numero de archivos. */
+
+/* --- lectura (root; metapad/SYS_DLIST) --- */
+/* Numero de archivos (entradas no-directorio de la raiz). */
 int  mefs_file_count(void);
-/* Copia nombre del i-esimo archivo a name (max MEFS_NAME_LEN bytes). */
+/* Copia nombre del i-esimo archivo raiz a name. */
 int  mefs_list(uint32_t i, char *name);
-/* Devuelve el tamano del archivo, -1 si no existe. */
 int  mefs_size(const char *name);
-/* Copia 'max' bytes del archivo a buffer; devuelve bytes leidos o -1. */
 int  mefs_read(const char *name, uint8_t *buffer, uint32_t max);
-/* Igual pero empezando en 'off' (lectura posicional, para ReadFile). */
 int  mefs_read_off(const char *name, uint8_t *buffer, uint32_t off,
                    uint32_t max);
-/* Entrada i-esima del directorio: nombre (hasta 16) + tamano; -1 si no. */
 int  mefs_dir_get(uint32_t i, char *name, uint32_t *size);
 
-/* --- escritura (Fase E) ---
- * El directorio y el superbloque se cachean en RAM; mefs_flush() los
- * vuelca al disco (modo ATA). next_free_lba se persiste en el superbloque. */
-
-/* Crea un archivo nuevo (nombre <= 15, no existe). Devuelve 0 o -1.
- * Aun no reserva sectores; se asignan en la primera mefs_write. */
+/* --- escritura (Fase E, v2) --- */
 int  mefs_create(const char *name);
-/* Escribe 'len' bytes en 'name'. Si el archivo existe lo sobrescribe
- * (reasigna sectores y actualiza size). Devuelve 0 o -1. */
 int  mefs_write(const char *name, const uint8_t *buf, uint32_t len);
-/* Elimina el archivo (libera su nombre). Devuelve 0 o -1. */
 int  mefs_delete(const char *name);
-/* Vuelca superbloque (con next_free_lba) + directorio al disco. En modo
- * CD (imagen RAM) no hace nada. Devuelve 0 o -1. */
 int  mefs_flush(void);
-/* Devuelve 1 si el FS soporta escritura persistente (modo ATA). */
 int  mefs_writable(void);
+
+/* --- subdirectorios / formato (Fase 20-A) --- */
+/* Enumerar un directorio (parent = indice de entrada dir, MEFS_ROOT para
+ * raiz). Devuelve 0 con la entrada idx-esima (name/size/flags), -1 al fin. */
+int  mefs_ls(uint32_t parent, uint32_t idx, char *name, uint32_t *size,
+             uint32_t *flags);
+/* Crea un directorio (parent = indice de la entrada dir padre). */
+int  mefs_mkdir(const char *name, uint32_t parent);
+/* Busca una entrada llamada 'name' bajo 'parent'; devuelve su indice o -1. */
+int  mefs_lookup(uint32_t parent, const char *name);
+/* Parent de la entrada 'idx' (MEFS_ROOT si no existe/raiz). */
+uint32_t mefs_parent(uint32_t idx);
+/* Nombre de la entrada 'idx'. Devuelve 0 o -1 si no existe. */
+int  mefs_name(uint32_t idx, char *name);
+/* Formatea el disco (modo ATA): resetea directorio + bitmap a limpio.
+ * fs_capacity = sectores totales de la region FS. Devuelve 0 o -1. */
+int  mefs_format(uint32_t fs_capacity);
 
 #endif

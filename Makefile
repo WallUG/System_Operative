@@ -189,7 +189,8 @@ $(BUILD)/fs.bin: $(FS_USER_ELFS) $(FS_USER_EXES) $(DLL_ELFS) $(WIN_APPS) \
                  user/win32/readme.txt tests/metapad.exe
 	@mkdir -p $(dir $@)
 	python3 tools/makefs.py $(FS_USER_ELFS) $(FS_USER_EXES) $(DLL_ELFS) $(WIN_APPS) \
-	                        user/win32/readme.txt tests/metapad.exe -o $@
+	                        user/win32/readme.txt tests/metapad.exe \
+	                        -c $(FS_SECTORS) -o $@
 	@truncate -s $$(( $(FS_SECTORS) * 512 )) $@
 
 kernel.elf: $(OBJS)
@@ -223,7 +224,7 @@ persist_disk: os-image.bin
 	@mkdir -p $(dir $(PERSIST_DISK))
 	@cp os-image.bin $(PERSIST_DISK)
 	@truncate -s $$(( $(PERSIST_SECTORS) * 512 )) $(PERSIST_DISK)
-	@echo "OK: disco de persistencia $(PERSIST_DISK) = $(PERSIST_SECTORS) sectores (espacio libre para Guardar)"
+	@echo "OK: disco de persistencia $(PERSIST_DISK) = $(PERSIST_SECTORS) sectores (fs_capacity = FS_SECTORS, escrituras sobreviven al reinicio)"
 
 run_persist: persist_disk
 	$(QEMU) -drive format=raw,file=$(PERSIST_DISK)

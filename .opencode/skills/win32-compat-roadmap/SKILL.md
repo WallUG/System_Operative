@@ -101,7 +101,10 @@ host emulation.
 - Files touched: `user/win32/gdi32.c`, `user/win32/user32.c`, font data.
 
 ## Progress tracking
-- [ ] Phase A — MEFS bitmap + format + subdirectories
+- [x] Phase A — MEFS bitmap + format + subdirectories (v2: superbloque con
+      bitmap_lba/data_start/fs_capacity; entradas con flags+parent;
+      `mefs_format`; comandos shell `format`/`mkdir`/`cd`/`pwd`/`ls`;
+      `tools/test_fase20a.py` 8/8 PASS)
 - [ ] Phase B — real comctl32 + GetSaveFileNameA confirmation
 - [ ] Phase C — PE relocations
 - [ ] Phase D — font metrics / text measurement
