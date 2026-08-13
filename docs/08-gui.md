@@ -49,10 +49,24 @@ Ventanas con **backing buffer en ring 3** (la app pinta su cliente con
 
 Estructura de ventana (`win_t`): id, título, rect total (x/y/w/h),
 cliente (cx/cy/cw/ch), `buf_va/buf_sz`, PD dueño, flags, z, visible,
-drag (dx/dy).
+drag (dx/dy), y barra de menú (Fase D): `has_menu`, `menu_n`, labels
+top-level `menu_tx[8][24]`.
 
 Flags: `WM_FLAG_FIXED` 0x1 (taskbar), `WM_FLAG_NOFRAME` 0x2,
 `WM_FLAG_BG` 0x4 (fondo del escritorio).
+
+### Barra de menú (Fase D)
+
+- `wm_set_menu(id, on, flat)` activa/desactiva la franja de menú: `flat`
+  es una cadena con los labels top-level separados por NUL
+  (`"File\0Edit\0...\0\0"`). `wm_layout` reajusta el área cliente
+  bajándola `WM_MENU_H = 20` px (marco + título + menú).
+- La franja gris `0xD0D0D0` y los labels (fuente 8×16 del kernel, igual
+  que user32) los dibuja el **winmgr** en `wm_draw_one`, así sobreviven a
+  las recomposiciones de z-order/arrastre.
+- En `wm_route`, un clic sobre la franja del menú (entre el título y el
+  cliente) se enruta al PD del dueño en vez de iniciar un drag — la app
+  decide abrir el desplegable.
 
 Límites aceptados (diseño): recomposición completa (fondo + todas las
 ventanas) en cada cambio; sin clipping por ventana (aún).
@@ -82,7 +96,9 @@ ventanas) en cada cambio; sin clipping por ventana (aún).
 
 `SYS_WINCREATE` 18 (`ebx=&{title*,x,y,w,h,buf_va,buf_sz,flags}` → id, con
 `user_memcpy_in`), `SYS_WINCLOSE` 19 (validando dueño), `SYS_WINMOVE` 20,
-`SYS_WINUPDATE` 21, `SYS_WININFO` 22 (x/y/w/h + cliente).
+`SYS_WINUPDATE` 21, `SYS_WININFO` 22 (x/y/w/h + cliente),
+`SYS_WINTITLE` 23 (cambia el título), `SYS_EXEBASE` 24 (base del PE),
+`SYS_MENUBAR` 25 (`ebx=id, ecx=on, edx=flat*`: barra de menú, Fase D).
 
 ### Limpieza al morir una tarea
 

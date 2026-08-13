@@ -49,6 +49,9 @@ Todo puntero de ring 3 se copia por página contra el PD del que llama:
 | 20 | `SYS_WINMOVE` | `ebx=id, ecx=dx, edx=dy` | Mueve ventana |
 | 21 | `SYS_WINUPDATE` | `ebx=id` | Recompone la pantalla |
 | 22 | `SYS_WININFO` | `ebx=id, ecx=&{x,y,w,h,cx,cy,cw,ch}` | Geometría |
+| 23 | `SYS_WINTITLE` | `ebx=id, ecx=title*` | Cambia el título de la barra |
+| 24 | `SYS_EXEBASE` | — | Base `ImageBase` del PE actual (0 si ELF) |
+| 25 | `SYS_MENUBAR` | `ebx=id, ecx=on, edx=flat*` | Activa la barra de menú (Fase D): `flat` = labels top-level NUL-separados |
 
 ## SYS_EVENT y el enrutado por PD (Fases 14-17)
 

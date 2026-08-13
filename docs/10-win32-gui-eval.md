@@ -120,13 +120,20 @@ siendo el "adaptador" entre Windows y MyOS**:
    controlados). Implementar **solo** lo que importe: ~10-15 exports de
    user32 + ~10 de gdi32. Validar en QEMU con QMP (screendump de la
    ventana). → **Escalera GUI 1/1**.
-2. **Hito B — Metapad (exe externo real)**: ampliar user32 (colas por
-   HWND con mensajes, dialog API básica), gdi32 (texto/rects/pinseles),
-   comctl32 (edit, toolbar simple), comdlg32 (open/save con MEFS).
-   Sin registro ni comctl v6. → **Escalera GUI 2/1**.
-3. **Hito C — Notepad2**: añadir RichEdit (contro excl. = un edit
+2. **Hito B — Metapad (exe externo real)**: **CONCLUIDO** (Fases 18/A-D):
+   el `metapad.exe` real (3.6, mingw) carga al 100 % y funciona de forma
+   interactiva: ventana con **barra de menú** (File Edit Favourites Options
+   Help) y **desplegables** (Fase D, `LoadMenuA`/`TrackPopupMenuEx` +
+   `WM_COMMAND`), edición de texto real (Fase A), apertura por línea de
+   comandos (Fase B), diálogo **Abrir** real sobre MEFS (Fase C,
+   `GetOpenFileNameA`) y diálogos de pregunta `MessageBoxA`. La capa
+   user32/gdi32/comctl32/comdlg32 implementa texto/rects/pinseles y menús;
+   queda sin registro ni comctl v6.
+3. **Hito C — Notepad2**: añadir RichEdit (control excl. = un edit
    multilínea propio mapeado a nuestro dibujo) — evaluar costo real.
-4. Horizontes lejanos: GDI+ / D2D, imm32, uxtheme, wininet, C++ CRT.
+4. **Fase E (pendiente)**: FS de escritura (MEFS read-only hoy) para
+   que **Guardar** (`GetSaveFileNameA` + `WriteFile`) funcione de verdad.
+5. Horizontes lejanos: GDI+ / D2D, imm32, uxtheme, wininet, C++ CRT.
 
 ## 6. Riesgos y límites aceptados (decisión de diseño)
 
