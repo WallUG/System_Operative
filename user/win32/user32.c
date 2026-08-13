@@ -20,6 +20,7 @@
 #define SYS_WININFO 22
 #define SYS_WINTITLE 23
 #define SYS_EXEBASE 24
+#define SYS_MENUBAR 25
 
 #define EV_MOVE         1
 #define EV_BUTTON_DOWN  2
@@ -28,6 +29,7 @@
 #define EV_WINCLOSE     5
 
 #define CW_USEDEFAULT   (int)0x80000000u
+#define WM_MENU_H       20   /* barra de menu (Fase D) */
 
 /* WM_* minimo para el bucle de mensajes */
 #define WM_CREATE       0x0001
@@ -141,6 +143,26 @@ static int sys_wintitle(uint32_t id, const char *title)
     __asm__ volatile("int $0x80"
                      : "=a"(r)
                      : "a"(SYS_WINTITLE), "b"(id), "c"(title)
+                     : "memory");
+    return r;
+}
+
+static int sys_menubar(uint32_t id, uint32_t on, const char *flat)
+{
+    int r;
+    __asm__ volatile("int $0x80"
+                     : "=a"(r)
+                     : "a"(SYS_MENUBAR), "b"(id), "c"(on), "d"(flat)
+                     : "memory");
+    return r;
+}
+
+static int sys_wininfo(uint32_t id, uint32_t *out)
+{
+    int r;
+    __asm__ volatile("int $0x80"
+                     : "=a"(r)
+                     : "a"(SYS_WININFO), "b"(id), "c"(out)
                      : "memory");
     return r;
 }
@@ -464,56 +486,43 @@ static int menu_add(uint16_t type, uint16_t depth, uint32_t id,
     return 1;
 }
 
-static void menu_parse(const uint8_t *tpl, uint32_t size)
+/* Parsea un nivel de items. Cada item es [mtOption][mtID][texto] (UTF-16).
+ * MF_POPUP (0x10) es flag del mtOption seguido del titulo del submenu.
+ * MF_END (0x80) es un flag combinado en el mtOption del ULTIMO item del
+ * popup (no un word separado). Devuelve el offset tras el nivel. */
+static uint32_t menu_parse_level(const uint8_t *tpl, uint32_t size,
+                                 uint32_t p, int depth)
 {
-    uint32_t p = 4;      /* wVersion + wOffset */
-    int depth = 0;
-
-    menu_n = 0;
     while (p + 2 <= size) {
-        uint32_t w = rd16u(tpl + p);
+        uint32_t opt = rd16u(tpl + p);
+        uint32_t ends = opt & 0x0080;
 
-        if (w == 0x0080) {                  /* fin de popup */
-            menu_add(MNU_END, (uint16_t)depth, 0, 0, 0);
-            if (depth > 0)
-                depth--;
-            p += 2;
-            continue;
-        }
-        if (w == 0x0010) {                  /* popup: titulo */
+        if (opt & 0x0010) {                 /* popup: titulo */
             int len = utf16_to_ascii(menu_tmp, tpl + p + 2,
                                      (int)sizeof(menu_tmp));
             menu_add(MNU_POP, (uint16_t)depth, 0, 0, menu_tmp);
-            depth++;
-            p += 2 + (uint32_t)len * 2;
-            continue;
-        }
-        if (w < 0x0100) {                   /* (flags, id, texto) */
+            p = menu_parse_level(tpl, size, p + 2 + (uint32_t)len * 2,
+                                 depth + 1);
+        } else {                            /* item o separador */
             uint32_t id = rd16u(tpl + p + 2);
-            if (id >= 0x0800 && p + 4 < size) {
-                int len = utf16_to_ascii(menu_tmp, tpl + p + 4,
-                                         (int)sizeof(menu_tmp));
-                if (len > 1) {              /* comando con flags */
-                    menu_add(MNU_CMD, (uint16_t)depth, id, w, menu_tmp);
-                    p += 4 + (uint32_t)len * 2;
-                    continue;
-                }
-            }
-            menu_add(MNU_SEP, (uint16_t)depth, 0, 0, 0);  /* separador */
-            p += 4;
-            continue;
-        }
-        {                                   /* (id, texto) directo */
-            int len = utf16_to_ascii(menu_tmp, tpl + p + 2,
+            int len = utf16_to_ascii(menu_tmp, tpl + p + 4,
                                      (int)sizeof(menu_tmp));
-            if (len > 1) {
-                menu_add(MNU_CMD, (uint16_t)depth, w, 0, menu_tmp);
-                p += 2 + (uint32_t)len * 2;
-            } else {
-                p += 2;
-            }
+            if (id == 0 && menu_tmp[0] == 0)
+                menu_add(MNU_SEP, (uint16_t)depth, 0, 0, 0);
+            else
+                menu_add(MNU_CMD, (uint16_t)depth, id, opt, menu_tmp);
+            p += 4 + (uint32_t)len * 2;
         }
+        if (ends)
+            return p;                       /* cierra este popup */
     }
+    return p;
+}
+
+static void menu_parse(const uint8_t *tpl, uint32_t size)
+{
+    menu_n = 0;
+    menu_parse_level(tpl, size, 4, 0);   /* salta wVersion + wOffset */
 }
 
 /* Convierte entero a decimal en buf (max 10 digitos). */
@@ -868,6 +877,11 @@ static int msgq_pop(uint32_t *out)
 
 /* Traduce un evento crudo del kernel (SYS_EVENT) a mensajes WM_* y los
  * encola. Un EV_KEY produce WM_KEYDOWN + WM_CHAR (si es imprimible). */
+static uint32_t menu_win_hwnd;      /* fwd: definido en la seccion menu */
+static int menu_bar_top_at(uint32_t hwnd, int x);
+static int menu_bar_top_letter(uint32_t hwnd, char c);
+static uint32_t menu_modal(uint32_t hwnd, int top, int x);
+
 static void event_to_wm(const uint32_t *ev)
 {
     uint32_t hwnd = 1, buttons = ev[3], key = ev[4];
@@ -881,7 +895,21 @@ static void event_to_wm(const uint32_t *ev)
     case EV_MOVE:
         msgq_push(hwnd, WM_MOUSEMOVE, buttons, (ev[2] << 16) | ev[1]);
         break;
-    case EV_BUTTON_DOWN:
+    case EV_BUTTON_DOWN: {
+        /* Fase D: clic en la barra de menu de la ventana principal ->
+         * abre el desplegable (modal); no se encola WM_LBUTTONDOWN. */
+        uint32_t info[8];
+        if (menu_win_hwnd && wnd_proc[1] &&
+            sys_wininfo(menu_win_hwnd, info) == 0 &&
+            (int)ev[2] >= (int)info[1] + WM_TITLE_H + WM_FRAME &&
+            (int)ev[2] < (int)info[1] + WM_TITLE_H + WM_MENU_H +
+                         WM_FRAME) {
+            int t = menu_bar_top_at(menu_win_hwnd, (int)ev[1]);
+            if (t >= 0) {
+                menu_modal(menu_win_hwnd, t, (int)ev[1]);
+                break;
+            }
+        }
         if (buttons & 1)
             msgq_push(hwnd, WM_LBUTTONDOWN, 1, (ev[2] << 16) | ev[1]);
         else if (buttons & 2)
@@ -889,6 +917,7 @@ static void event_to_wm(const uint32_t *ev)
         else
             msgq_push(hwnd, WM_MBUTTONDOWN, 1, (ev[2] << 16) | ev[1]);
         break;
+    }
     case EV_BUTTON_UP:
         if (buttons & 1)
             msgq_push(hwnd, WM_LBUTTONUP, 0, (ev[2] << 16) | ev[1]);
@@ -898,6 +927,15 @@ static void event_to_wm(const uint32_t *ev)
             msgq_push(hwnd, WM_MBUTTONUP, 0, (ev[2] << 16) | ev[1]);
         break;
     case EV_KEY: {
+        /* Fase D: Alt+mnemonico de un top-level abre su desplegable. */
+        if ((ev[3] & 2) && key >= 32 && key <= 126 && wnd_proc[1] &&
+            menu_win_hwnd) {
+            int t = menu_bar_top_letter(menu_win_hwnd, (char)key);
+            if (t >= 0) {
+                menu_modal(menu_win_hwnd, t, 0);
+                break;
+            }
+        }
         /* Las teclas van al control de edicion enfocado (si hay), no al
          * primer wndproc: asi el WM_CHAR llega al RichEdit/EDIT. */
         uint32_t target = hwnd;
@@ -1979,8 +2017,421 @@ uint32_t CreateDialogParamA(uint32_t i, uint32_t t, uint32_t p, uint32_t f,
 uint32_t EndDialog(uint32_t d, int r) { (void)d; (void)r; return 0; }
 uint32_t CreateMenu(void) { return 0; }
 uint32_t GetMenu(uint32_t hwnd) { (void)hwnd; return 0; }
-uint32_t SetMenu(uint32_t hwnd, uint32_t menu) { (void)hwnd; (void)menu; return 0; }
-uint32_t DrawMenuBar(uint32_t hwnd) { (void)hwnd; return 0; }
+
+/* --- barra de menu de ventana (Fase D) ---
+ * SetMenu activa la barra en el kernel (SYS_MENUBAR: franja gris +
+ * labels top-level dibujados por el winmgr, que sobreviven a las
+ * recomposiciones) y guarda el hwnd para el menú modal. */
+
+static uint32_t menu_win_hwnd;      /* hwnd con la barra de menu        */
+
+/* Labels top-level (depth 0) en flat NUL-separados para el kernel. */
+static void menu_build_flat(char *flat, uint32_t max)
+{
+    uint32_t k = 0;
+    uint32_t i;
+
+    flat[0] = 0;
+    for (i = 0; i < loaded_menu.count; i++) {
+        menu_item_t *it = &loaded_menu.items[i];
+        if (it->depth == 0 && it->type == MNU_POP) {
+            uint32_t j = 0;
+            while (it->text[j] && j < 47 && k < max - 2) {
+                flat[k++] = it->text[j++];
+            }
+            flat[k++] = 0;
+        }
+    }
+    flat[k] = 0;
+}
+
+uint32_t SetMenu(uint32_t hwnd, uint32_t menu)
+{
+    char flat[200];
+
+    (void)menu;
+    if (hwnd == 0 || loaded_menu.count == 0)
+        return 0;
+    menu_build_flat(flat, sizeof(flat));
+    sys_menubar(hwnd, 1, flat);
+    menu_win_hwnd = hwnd;
+    return 1;
+}
+
+uint32_t DrawMenuBar(uint32_t hwnd)
+{
+    if (hwnd == 0 || loaded_menu.count == 0)
+        return 0;
+    menu_win_hwnd = hwnd;
+    sys_winupdate(hwnd);
+    return 1;
+}
+
+/* --- menu desplegable modal (Fase D) --- */
+
+#define MENU_ITEM_H     18
+#define MENU_W          220
+
+#define C_POPUP_BG  0x00F0F0F0u
+#define C_POPUP_TX  0x00000000u
+#define C_POPUP_HI  0x000000A0u
+#define C_POPUP_HI_TX 0x00FFFFFFu
+
+/* Texto del item sin '&' y sin el '\tshortcut' (la parte de shortcut
+ * se ignora en el dibujo). */
+static void menu_label(const menu_item_t *it, char *out, uint32_t max)
+{
+    uint32_t k = 0, i;
+
+    for (i = 0; it->text[i] && k < max - 1; i++) {
+        char c = it->text[i];
+        if (c == '&')
+            continue;
+        if (c == '\t')
+            break;
+        out[k++] = c;
+    }
+    out[k] = 0;
+}
+
+/* Numero de items (depth 1) del top-level `top` (los MNU_SEP cuentan
+ * como fila pero no son seleccionables). */
+static int menu_popup_rows(int top)
+{
+    int n = 0, i;
+
+    for (i = top + 1; i < (int)loaded_menu.count; i++) {
+        menu_item_t *it = &loaded_menu.items[i];
+        if (it->depth <= 0)
+            break;
+        if (it->depth == 1)
+            n++;
+    }
+    return n;
+}
+
+/* item (indice global) de la fila `row` del popup de `top`. */
+static int menu_popup_item(int top, int row)
+{
+    int i, r = 0;
+
+    for (i = top + 1; i < (int)loaded_menu.count; i++) {
+        menu_item_t *it = &loaded_menu.items[i];
+        if (it->depth <= 0)
+            break;
+        if (it->depth == 1) {
+            if (r == row)
+                return i;
+            r++;
+        }
+    }
+    return -1;
+}
+
+/* Indice del top-level cuyo label cae en la x de pantalla `x`
+ * (replica el layout del kernel: x0 = winx+FRAME+4, paso 8*len+16). */
+static int menu_bar_top_at(uint32_t hwnd, int x)
+{
+    uint32_t info[8];
+    int cur, i;
+
+    if (sys_wininfo(hwnd, info) != 0)
+        return -1;
+    cur = (int)info[0] + 2 + 4;
+    for (i = 0; i < (int)loaded_menu.count; i++) {
+        menu_item_t *it = &loaded_menu.items[i];
+        uint32_t len;
+        if (it->depth != 0 || it->type != MNU_POP)
+            continue;
+        menu_label(it, (char *)&it->text, 48);
+        len = 0;
+        while (it->text[len])
+            len++;
+        if (x >= cur && x < cur + (int)len * 8 + 16)
+            return i;
+        cur += (int)len * 8 + 16;
+    }
+    return -1;
+}
+
+/* X de pantalla donde empieza el label del top-level `top`. */
+static int menu_bar_top_x(uint32_t hwnd, int top)
+{
+    uint32_t info[8];
+    int cur, i;
+
+    if (sys_wininfo(hwnd, info) != 0)
+        return 0;
+    cur = (int)info[0] + 2 + 4;
+    for (i = 0; i <= top && i < (int)loaded_menu.count; i++) {
+        menu_item_t *it = &loaded_menu.items[i];
+        uint32_t len;
+        if (it->depth != 0 || it->type != MNU_POP)
+            continue;
+        if (i == top)
+            return cur;
+        menu_label(it, (char *)&it->text, 48);
+        len = 0;
+        while (it->text[len])
+            len++;
+        cur += (int)len * 8 + 16;
+    }
+    return 0;
+}
+
+/* Top-level cuyo mnemónico (char tras '&') es `c`. */
+static int menu_bar_top_letter(uint32_t hwnd, char c)
+{
+    uint32_t info[8];
+    int i;
+    int cur;
+
+    if (sys_wininfo(hwnd, info) != 0)
+        return -1;
+    if (c >= 'a' && c <= 'z')
+        c = (char)(c - 32);
+    cur = (int)info[0] + 2 + 4;
+    for (i = 0; i < (int)loaded_menu.count; i++) {
+        menu_item_t *it = &loaded_menu.items[i];
+        uint32_t len = 0, j;
+        char mn = 0;
+        if (it->depth != 0 || it->type != MNU_POP)
+            continue;
+        for (j = 0; it->text[j]; j++) {
+            if (it->text[j] == '&' && it->text[j + 1]) {
+                mn = it->text[j + 1];
+                break;
+            }
+        }
+        if (mn >= 'a' && mn <= 'z')
+            mn = (char)(mn - 32);
+        if (mn == c)
+            return i;
+        for (j = 0; it->text[j]; j++)
+            if (it->text[j] != '&')
+                len++;
+        cur += (int)len * 8 + 16;
+    }
+    return -1;
+}
+
+/* Dibuja el desplegable de `top` con highlight `hi` (-1 = ninguno).
+ * Devuelve el alto en *h. La x del popup es la del top-level. */
+static void menu_popup_draw(uint32_t hwnd, int top, int x, int y, int hi)
+{
+    uint32_t info[8];
+    char lb[48];
+    int rows, r, px, py, i;
+
+    if (sys_wininfo(hwnd, info) != 0)
+        return;
+    rows = menu_popup_rows(top);
+    px = x;
+    py = (int)info[1] + WM_TITLE_H + WM_MENU_H;
+    fillrect(px - 1, py - 1, MENU_W + 2, rows * MENU_ITEM_H + 3,
+             COLOR_FRAME);
+    fillrect(px, py, MENU_W, rows * MENU_ITEM_H + 1, C_POPUP_BG);
+    for (r = 0; r < rows; r++) {
+        i = menu_popup_item(top, r);
+        if (i < 0)
+            break;
+        {
+            menu_item_t *it = &loaded_menu.items[i];
+            int iy = py + 1 + r * MENU_ITEM_H;
+            if (r == hi) {
+                fillrect(px + 1, iy, MENU_W - 2, MENU_ITEM_H - 2,
+                         C_POPUP_HI);
+            }
+            if (it->type == MNU_SEP) {
+                fillrect(px + 8, iy + MENU_ITEM_H / 2 - 1,
+                         MENU_W - 16, 1, 0x00808080u);
+                continue;
+            }
+            menu_label(it, lb, sizeof(lb));
+            drawtext(px + 8, iy + 1,
+                     (r == hi) ? lb : lb, (r == hi) ? C_POPUP_HI_TX
+                                                    : C_POPUP_TX);
+            if (it->type == MNU_POP) {
+                drawtext(px + MENU_W - 16, iy + 1, ">",
+                         (r == hi) ? C_POPUP_HI_TX : C_POPUP_TX);
+            }
+        }
+    }
+}
+
+/* Bucle modal del desplegable del top-level `top` (x = x del label).
+ * Devuelve el id del item elegido o 0 al cancelar. */
+static uint32_t menu_modal(uint32_t hwnd, int top, int x)
+{
+    uint32_t info[8];
+    uint32_t ev[5];
+    int hi = -1, rows, pop_x, pop_y;
+    uint32_t id = 0;
+
+    if (sys_gfxinfo(info) != 0)
+        return 0;
+    lfb = (uint32_t *)info[0];
+    scr_w = info[1];
+    scr_h = info[2];
+    if (sys_wininfo(hwnd, info) != 0)
+        return 0;
+    pop_x = menu_bar_top_x(hwnd, top);
+    if (pop_x == 0)
+        pop_x = x;
+    pop_y = (int)info[1] + WM_TITLE_H + WM_MENU_H;
+    rows = menu_popup_rows(top);
+    menu_popup_draw(hwnd, top, pop_x, pop_y, hi);
+
+    for (;;) {
+        int sel = 0;
+        if (sys_event(ev) != 0)
+            continue;
+        switch (ev[0]) {
+        case EV_MOVE: {
+            int row = ((int)ev[2] - pop_y) / MENU_ITEM_H;
+            int t;
+            if (row >= 0 && row < rows && row != hi) {
+                hi = row;
+                menu_popup_draw(hwnd, top, pop_x, pop_y, hi);
+            } else if (row < 0 || row >= rows) {
+                t = menu_bar_top_at(hwnd, (int)ev[1]);
+                if (t >= 0 && t != top) {
+                    top = t;
+                    hi = -1;
+                    rows = menu_popup_rows(top);
+                    menu_popup_draw(hwnd, top, pop_x, pop_y, hi);
+                }
+            }
+            break;
+        }
+        case EV_BUTTON_DOWN: {
+            int row = ((int)ev[2] - pop_y) / MENU_ITEM_H;
+            int t;
+            if (row >= 0 && row < rows) {
+                if (row != hi) {
+                    hi = row;
+                    menu_popup_draw(hwnd, top, pop_x, pop_y, hi);
+                }
+            } else if ((t = menu_bar_top_at(hwnd, (int)ev[1])) >= 0 &&
+                       t != top) {
+                top = t;
+                hi = -1;
+                rows = menu_popup_rows(top);
+                menu_popup_draw(hwnd, top, pop_x, pop_y, hi);
+            } else {
+                goto out_cancel;
+            }
+            break;
+        }
+        case EV_BUTTON_UP: {
+            int row = ((int)ev[2] - pop_y) / MENU_ITEM_H;
+            if ((int)ev[2] < pop_y) {
+                /* UP del clic que abrio el menu (sobre la barra):
+                 * ignorar, no seleccionar ni cancelar. */
+                break;
+            }
+            if (row >= 0 && row < rows) {
+                hi = row;
+                sel = 1;
+            } else {
+                goto out_cancel;
+            }
+            break;
+        }
+        case EV_KEY: {
+            uint32_t key = ev[4];
+            if (key == 0x102 || key == 0x103) {   /* Up/Down */
+                int step = (key == 0x102) ? -1 : 1;
+                int r = hi;
+                do {
+                    r += step;
+                    if (r < 0 || r >= rows) {
+                        if (r < 0)
+                            r = rows - 1;
+                        else
+                            r = 0;
+                    }
+                    if (menu_popup_item(top, r) >= 0 &&
+                        loaded_menu.items[menu_popup_item(top, r)].type
+                            != MNU_SEP)
+                        break;
+                } while (1);
+                hi = r;
+                menu_popup_draw(hwnd, top, pop_x, pop_y, hi);
+            } else if (key == '\n') {
+                sel = 1;
+            } else if (key == 27) {
+                goto out_cancel;
+            } else if (key == 0x100 || key == 0x101) {  /* Izq/Der */
+                int dir = (key == 0x100) ? -1 : 1;
+                int t = top, guard = 0;
+                do {
+                    int i;
+                    t += dir;
+                    if (t < 0 || t >= (int)loaded_menu.count) {
+                        t = (t < 0) ? (int)loaded_menu.count - 1 : 0;
+                    }
+                    for (i = t; i >= 0 && i < (int)loaded_menu.count; i++) {
+                        menu_item_t *it = &loaded_menu.items[i];
+                        if (it->depth == 0 && it->type == MNU_POP) {
+                            t = i;
+                            break;
+                        }
+                    }
+                    guard++;
+                } while (t == top && guard < 4);
+                if (t != top) {
+                    top = t;
+                    hi = -1;
+                    rows = menu_popup_rows(top);
+                    menu_popup_draw(hwnd, top, pop_x, pop_y, hi);
+                }
+            } else if (key >= 32 && key <= 126) {
+                int r;
+                for (r = 0; r < rows; r++) {
+                    int ii = menu_popup_item(top, r);
+                    menu_item_t *it;
+                    uint32_t j;
+                    if (ii < 0)
+                        break;
+                    it = &loaded_menu.items[ii];
+                    for (j = 0; it->text[j]; j++) {
+                        if (it->text[j] == '&' && it->text[j + 1] &&
+                            (it->text[j + 1] == (char)key ||
+                             (it->text[j + 1] >= 'A' &&
+                              it->text[j + 1] <= 'Z' &&
+                              it->text[j + 1] + 32 == (char)key))) {
+                            hi = r;
+                            sel = 1;
+                            break;
+                        }
+                    }
+                    if (sel)
+                        break;
+                }
+            }
+            break;
+        }
+        default:
+            break;
+        }
+        if (sel) {
+            int ii = menu_popup_item(top, hi < 0 ? 0 : hi);
+            if (ii >= 0 && loaded_menu.items[ii].type == MNU_CMD)
+                id = loaded_menu.items[ii].id;
+            else
+                id = 0;
+            goto out;
+        }
+    }
+out_cancel:
+    id = 0;
+out:
+    sys_winupdate(hwnd);
+    if (id)
+        msgq_push(hwnd, WM_COMMAND, id, 0);
+    return id;
+}
 uint32_t DestroyMenu(uint32_t menu) { (void)menu; return 0; }
 uint32_t GetSubMenu(uint32_t menu, int pos) { (void)menu; (void)pos; return 0; }
 uint32_t GetMenuItemCount(uint32_t menu) { (void)menu; return 0; }

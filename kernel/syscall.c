@@ -506,6 +506,20 @@ void syscall_handler(registers_t *regs)
     case SYS_EXEBASE:
         regs->eax = sched_current_exe_base();
         break;
+    case SYS_MENUBAR: { /* ebx=id, ecx=on, edx=flat* (validado por PD) */
+        char flat[200];
+        if (regs->ecx && regs->edx) {
+            if (user_strcpy(flat, sizeof(flat), (const char *)regs->edx,
+                            pd) != 0) {
+                regs->eax = -1;
+                break;
+            }
+            regs->eax = wm_set_menu((int)regs->ebx, (int)regs->ecx, flat);
+        } else {
+            regs->eax = wm_set_menu((int)regs->ebx, (int)regs->ecx, 0);
+        }
+        break;
+    }
     default:
         break;
     }

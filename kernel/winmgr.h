@@ -15,6 +15,7 @@
 
 #define WM_MAX_WINS   8
 #define WM_TITLE_H    20          /* alto de la barra de titulo          */
+#define WM_MENU_H     20          /* alto de la barra de menu (si hay)   */
 #define WM_FRAME      2           /* borde de la ventana                 */
 #define WM_X_BTN      16          /* boton X: 16x16, arriba a la derecha */
 
@@ -43,6 +44,11 @@ int wm_move(int id, int dx, int dy);
 int wm_update(int id);
 int wm_set_title(int id, const char *title);
 int wm_info(int id, uint32_t *out);
+
+/* Barra de menu (Fase D): on=1 activa la franja de menu con los labels
+ * top-level en flat (cadena con NULs: "File\0Edit\0...\0\0"), on=0 la
+ * quita. Reajusta el area cliente y recompone. */
+int wm_set_menu(int id, int on, const char *flat);
 
 /* Limpieza al morir una tarea (Fase 17): retira todas sus ventanas,
  * cancela un drag en curso si era suyo, libera la cola de eventos de su

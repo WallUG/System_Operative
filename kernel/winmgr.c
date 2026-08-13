@@ -29,6 +29,10 @@
 #define C_TITLE_TX  0x00FFFFFFu
 #define C_X_BG      0x00CC3333u
 #define C_X_TX      0x00FFFFFFu
+#define C_MENU      0x00D0D0D0u
+#define C_MENU_TX   0x00000000u
+
+#include "drivers/font8x16.h"
 
 /* Los colores se definen en formato logico 0x00RRGGBB, pero el LFB
  * (VBE 32bpp) espera el byte bajo = R (BGRx8888 en memoria). El
@@ -56,6 +60,9 @@ typedef struct {
     int      visible;
     int      dragging;
     int      drag_dx, drag_dy;    /* offset del clic dentro de la vent */
+    int      has_menu;            /* Fase D: barra de menu activa      */
+    int      menu_n;              /* top-levels visibles               */
+    char     menu_tx[8][24];
 } win_t;
 
 static win_t wins[WM_MAX_WINS];
@@ -216,6 +223,60 @@ static void wm_blit_client(const win_t *w)
     }
 }
 
+/* Recalcula el area cliente segun el marco/titulo y la barra de menu
+ * (Fase D: la franja de menu baja el cliente 20px). */
+static void wm_layout(win_t *w)
+{
+    if (w->flags & WM_FLAG_NOFRAME) {
+        w->cx = w->x;
+        w->cy = w->y;
+        w->cw = w->w;
+        w->ch = w->h;
+    } else {
+        w->cx = w->x + WM_FRAME;
+        w->cy = w->y + WM_TITLE_H + (w->has_menu ? WM_MENU_H : 0);
+        w->cw = w->w - 2 * WM_FRAME;
+        w->ch = w->h - WM_TITLE_H - (w->has_menu ? WM_MENU_H : 0) -
+                WM_FRAME;
+    }
+}
+
+/* Texto 8x16 al LFB (fuente del kernel, igual que user32). */
+static void wm_putpixel(int x, int y, uint32_t c)
+{
+    volatile uint32_t *lfb = (volatile uint32_t *)vbe_lfb_phys;
+    if (x < 0 || y < 0 || x >= VBE_SCREEN_W || y >= VBE_SCREEN_H)
+        return;
+    lfb[y * VBE_SCREEN_W + x] = px_disp(c);
+}
+
+static uint32_t wm_strlen(const char *s)
+{
+    uint32_t n = 0;
+    while (s && s[n])
+        n++;
+    return n;
+}
+
+static void wm_text(int x, int y, const char *s, uint32_t c)
+{
+    const unsigned char *g;
+    int i, j;
+
+    while (s && *s) {
+        char ch = *s;
+        if (ch < 32 || ch > 126)
+            ch = '?';
+        g = font8x16_basic[(unsigned char)ch - 32];
+        for (j = 0; j < 16; j++)
+            for (i = 0; i < 8; i++)
+                if (g[j] & (0x80u >> i))
+                    wm_putpixel(x + i, y + j, c);
+        x += 8;
+        s++;
+    }
+}
+
 /* Dibuja una ventana: marco/titulo/X (si no es NOFRAME) + cliente. */
 static void wm_draw_one(const win_t *w)
 {
@@ -254,6 +315,27 @@ static void wm_draw_one(const win_t *w)
                     w->y + j >= 0 && w->y + j < VBE_SCREEN_H)
                     lfb[(w->y + j) * VBE_SCREEN_W + k] =
                         px_disp(C_TITLE);
+            }
+        }
+        wm_text(w->x + WM_FRAME + 4, w->y + 2, w->title, C_TITLE_TX);
+        /* barra de menu (Fase D): franja + labels top-level */
+        if (w->has_menu) {
+            int k;
+            for (j = 0; j < WM_MENU_H; j++)
+                for (k = w->x + WM_FRAME; k < w->x + w->w - WM_FRAME; k++)
+                    if (k >= 0 && k < VBE_SCREEN_W &&
+                        w->y + WM_TITLE_H + j >= 0 &&
+                        w->y + WM_TITLE_H + j < VBE_SCREEN_H)
+                        lfb[(w->y + WM_TITLE_H + j) * VBE_SCREEN_W + k] =
+                            px_disp(C_MENU);
+            {
+                int x = w->x + WM_FRAME + 4;
+                for (k = 0; k < w->menu_n && k < 8; k++) {
+                    if (w->menu_tx[k][0])
+                        wm_text(x, w->y + WM_TITLE_H + 2,
+                                w->menu_tx[k], C_MENU_TX);
+                    x += 8 * (int)wm_strlen(w->menu_tx[k]) + 16;
+                }
             }
         }
         /* boton X (16x16, arriba a la derecha) */
@@ -374,17 +456,7 @@ int wm_create(const char *title, int x, int y, int w, int h,
     win->w = w;
     win->h = h;
     win->flags = flags;
-    if (flags & WM_FLAG_NOFRAME) {
-        win->cx = x;
-        win->cy = y;
-        win->cw = w;
-        win->ch = h;
-    } else {
-        win->cx = x + WM_FRAME;
-        win->cy = y + WM_TITLE_H;
-        win->cw = w - 2 * WM_FRAME;
-        win->ch = h - WM_TITLE_H - WM_FRAME;
-    }
+    wm_layout(win);
     win->buf_va = buf_va;
     win->buf_sz = buf_sz;
     win->pd = pd;
@@ -435,13 +507,7 @@ int wm_move(int id, int dx, int dy)
         return -1;
     w->x += dx;
     w->y += dy;
-    if (w->flags & WM_FLAG_NOFRAME) {
-        w->cx = w->x;
-        w->cy = w->y;
-    } else {
-        w->cx = w->x + WM_FRAME;
-        w->cy = w->y + WM_TITLE_H;
-    }
+    wm_layout(w);
     wm_compose();
     return 0;
 }
@@ -466,6 +532,39 @@ int wm_set_title(int id, const char *title)
     for (i = 0; title && title[i] && i < (int)sizeof(w->title) - 1; i++)
         w->title[i] = title[i];
     w->title[i] = 0;
+    wm_compose();
+    return 0;
+}
+
+/* Fase D: activa/desactiva la barra de menu y guarda los labels
+ * top-level (flat: "File\0Edit\0...\0\0"). Reajusta el cliente. */
+int wm_set_menu(int id, int on, const char *flat)
+{
+    win_t *w = wm_find(id);
+    int i;
+
+    if (!w)
+        return -1;
+    w->menu_n = 0;
+    for (i = 0; i < 8; i++)
+        w->menu_tx[i][0] = 0;
+    if (on && flat) {
+        const char *p = flat;
+        while (*p && w->menu_n < 8) {
+            int j = 0;
+            while (*p && j < 23)
+                w->menu_tx[w->menu_n][j++] = *p++;
+            w->menu_tx[w->menu_n][j] = 0;
+            while (*p)
+                p++;
+            p++;                /* salta el NUL */
+            w->menu_n++;
+        }
+    }
+    if (w->has_menu != on) {
+        w->has_menu = on;
+        wm_layout(w);
+    }
     wm_compose();
     return 0;
 }
@@ -568,6 +667,10 @@ int wm_route(mouse_event_t *ev)
                 wm_raise(w);
             return (int)w->pd;
         }
+        /* Fase D: clic en la barra de menu -> va a la app (ella abre el
+         * desplegable), no es un drag de la ventana. */
+        if (w->has_menu && ev->y >= w->y + WM_TITLE_H + WM_FRAME)
+            return (int)w->pd;
         if (ev->x >= w->x + w->w - WM_FRAME - WM_X_BTN) {
             /* boton X: la app decide cerrar con SYS_WINCLOSE */
             ev->type = EV_WINCLOSE;
@@ -587,13 +690,7 @@ int wm_route(mouse_event_t *ev)
             if (nx != w->x || ny != w->y) {
                 w->x = nx;
                 w->y = ny;
-                if (w->flags & WM_FLAG_NOFRAME) {
-                    w->cx = w->x;
-                    w->cy = w->y;
-                } else {
-                    w->cx = w->x + WM_FRAME;
-                    w->cy = w->y + WM_TITLE_H;
-                }
+                wm_layout(w);
                 wm_compose();
             }
             return WM_ROUTE_CONSUMED;

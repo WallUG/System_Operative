@@ -29,6 +29,8 @@
 #define SYS_WININFO 22  /* ebx=id, ecx=&{x,y,w,h,cx,cy,cw,ch}         */
 #define SYS_WINTITLE 23 /* ebx=id, ecx=title*: titulo de la barra      */
 #define SYS_EXEBASE 24  /* base ImageBase del PE actual (0 si ELF)     */
+#define SYS_MENUBAR 25  /* ebx=id, ecx=on, edx=flat*: barra de menu    */
+                        /* (Fase D; flat = labels top-level NUL-sep)   */
 
 void syscall_init(void);            /* registra el gate 0x80 (DPL=3) */
 void syscall_handler(registers_t *regs);

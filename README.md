@@ -233,6 +233,20 @@ Todos los detalles, decisiones y bugs encontrados están en `DESIGN.md`.
   comdlg32.elf más grande dejaba metapad.exe cortado en el disco). Validado
   en QEMU: Ctrl+O → diálogo → "readme" → Enter → las 4 líneas de readme.txt
   en el editor; regresión Fase A OK y escalera 14/14 en disco.
+- Fase D concluida: **menú de barra + desplegables** — la ventana de metapad
+  muestra la **barra de menú** (File Edit Favourites Options Help) dibujada por
+  el winmgr del kernel (`SYS_MENUBAR`), y clic o `Alt+letra` despliegan un
+  **menú modal** navegable por teclado (flechas/Home/End/PgUp/PgDn/Enter/Esc/
+  mnemónico) y por ratón (hit-testing + highlight) que envía `WM_COMMAND` a
+  los handlers existentes (Open 0x9c43, New, Save, Exit...). **Se reescribió
+  el parser RT_MENU** (recursivo, `MF_END`/`MF_POPUP` como flags del
+  `mtOption` y separadores = id 0 + texto vacío): antes los submenús anidados
+  (Viewers, File Format, Block, Convert Selected, Options...) se aplanaban a
+  depth 0 y la barra solo mostraba "File". Corregido también el bug de "el
+  menú se abre y desaparece al soltar" (`EV_BUTTON_UP` sobre la barra se
+  ignora) y el popup se dibujaba con `lfb=NULL` (se inicializa en el modal).
+  Validado en QEMU: Alt+F → File (18 items) persiste → ↓↓Enter → diálogo
+  Abrir; Alt+E/Alt+H abren Edit/Help; 4/4 PASS en disco.
 - Roadmap tentativo: long mode (64 bits), ATA con escritura de archivos
   (CreateFileA con GENERIC_WRITE), **apps Windows GUI reales** (ver
   `docs/10-win32-gui-eval.md`: primero nuestro notepad mingw, luego un

@@ -104,6 +104,8 @@ kernel lo usa para elegir la fuente del filesystem: `mefs_init_mem`
 - [x] Fase 16 - **Gestor de ventanas en el kernel** (opcion B): `kernel/winmgr.c/h` con hasta 8 ventanas (rect total + area cliente `cx/cy/cw/ch`, buffer de la app en ring 3 leido con validacion por pagina, z-order, snapshot del LFB como fondo); el kernel dibuja marco/titulo/boton X y blitea el cliente en orden z; `wm_filter_event` en `SYS_EVENT` consume drag (titulo) y entrega el boton X como `EV_WINCLOSE` 5 (key = id); syscalls `SYS_WINCREATE` 18 (struct por valor con `user_memcpy_in`), `SYS_WINCLOSE` 19, `SYS_WINMOVE` 20, `SYS_WINUPDATE` 21, `SYS_WININFO` 22 (x/y/w/h + cliente). `win_demo.c` (2 ventanas) validado con QMP: arrastre real por el titulo, cierre por X con recomposicion limpia. **Escalera 14/14 PASS** en disco
 - [x] Fase 17 - **Enrutado de eventos por PD + limpieza al morir la tarea**: el modelo de la Fase 14 (cola global + un unico consumidor) no sirve con 2+ procesos graficos. `SYS_EVENT` drena la cola global y `wm_route` la enruta por PD a colas FIFO por app (`wm_client_t`, hasta 4); EV_KEY → `wm_topmost()`, EV_BUTTON_*/MOVE → dueno bajo el cursor (o foco), drag consumido; cada app reclama solo su cola. `SYS_WINCLOSE` valida dueno (`wm_close(id, pd)`). **Bug #1 corregido**: al morir una tarea, `wm_cleanup_pd(cr3)` en `sched_kill_current` elimina sus ventanas, libera su cola y recalcula fondo/foco. `win_two.c` (fork + 2 procesos con 2 ventanas cada uno) validado por QMP: dos `q` cierran ambos procesos (limpieza 2 ventanas x2), la shell vuelve al prompt y el screendump final no deja restos de ventanas. **Escalera 14/14 PASS** en disco
 - [x] Fase 18 - **GDI de dibujo + metapad.exe 100% cargado**: modulo `gdi32.dll` (0xB4000000) con DC de dibujo (`myos_dc_t`/`gdi_dc.h`, buffer del cliente creado por `GetDC/ReleaseDC` de user32, px_disp BGRx) y primitivas `TextOutA`/`FillRect`/`Rectangle`/`MoveToEx`/`LineTo` (Bresenham)/`PatBlt` con objetos GDI (stock index+1, creados en tabla `gdi_obj[]` con handles 0x1000+slot*4: `CreateSolidBrush`/`CreatePen`/`CreateFontIndirectA`/`SelectObject`/`DeleteObject`), atributos (`SetText*/GetText*`/`SetBkMode`), métrica (`GetTextMetricsA`/`TextFaceA`/`CharWidthA`/`GetDeviceCaps` con resolución real via `SYS_GFXINFO`) y stubs de impresión. Modulos nuevos `comctl32.dll` (0xB5000000: `InitCommonControls` ord#8/`InitCommonControlsEx` ord#17, `CreateToolbarEx` handle fake, `PropertySheetA` 0), `comdlg32.dll` (0xB6000000: stubs), `advapi32.dll` (0xB7000000: registro), `shell32.dll` (0xB8000000). **`kernel/pe.c`: reubicacion de PE con ImageBase baja (0x00400000 de metapad) aplicando la tabla `.reloc` a `PE_REBASE_BASE` 0x81000000**. **Teclado set 1 completo** (`keyboard.c`): mayusculas/simbolos, modificadores Ctrl/Alt/Shift/Caps en `buttons` del evento, teclas VK especiales (flechas/home/end/del...) como `EV_KEY` 0x100+. `gdi_demo.c` → `gdidemo.exe` (mingw `-luser32 -lgdi32`, subsystem windows) de prueba; `FS_SECTORS` 560→1100. **metapad.exe (3.6, mingw) carga al 100%**: imports resueltos de sus 8 DLLs (KERNEL32/USER32/GDI32/COMCTL32/COMDLG32/ADVAPI32/SHELL32/msvcrt), ventana con menu (146 items), control hijo RichEdit20A virtual, `GetDC`/paint sincrono. Validado por screendump + conteo de pixeles: gdidemo con rectangulo azul `#4060C0` (4400 px exactos), relleno gris `#C0C0C0`, diagonal roja `#C02020` (LineTo) y fondo de texto `#F0F0F0` (bk opaco); metapad con cliente blanco + titulo + marco. **Escalera 14/14 PASS** en disco y CD
+- [x] Fase D - **Menú de barra y desplegables (TrackPopupMenuEx)**: la barra de menú se dibuja en el winmgr del kernel (`wm_set_menu` via `SYS_MENUBAR` 25: franja gris + labels top-level que sobreviven a las recomposiciones y reajustan el cliente), y los desplegables son un modal en user32 (`menu_modal` sobre la lista `loaded_menu` del `LoadMenuA`). **Se corrigió el parser de RT_MENU** (`menu_parse`, recursivo): el formato real de mingw es `[mtOption][mtID][texto]` con `MF_POPUP (0x10)` y `MF_END (0x80)` como *flags combinados* del `mtOption` (no words standalone) y separadores = item con id 0 y texto vacío; antes los submenús anidados (Viewers, File Format, Block, Convert Selected, Date/Time, Favourites, Options) se aplanaban a depth 0 y la barra solo mostraba "File". Ahora `menu_build_flat` emite 5 top-levels reales (File, Edit, Favourites, Options, Help). Interceptación en `event_to_wm`: clic en la franja del menú (`menu_bar_top_at`) y `Alt+letra` (`menu_bar_top_letter`) abren el modal; `EV_BUTTON_UP` sobre la barra se ignora (era el bug del clic: cerraba el menú al soltar). Navegación por teclado (flechas/Home/End/PgUp/PgDn/Enter/Esc/mnemónico) y por clic (hit-testing + highlight). Selección → `msgq_push(hwnd, WM_COMMAND, id, 0)` a los handlers existentes (Open 0x9C43, New, Save, Exit...). `Ctrl+O` (acelerador Fase C) y `Alt+F→↓→Enter` abren el diálogo Abrir real. **4/4 PASS** en disco
+- [x] Fase C - **Diálogo Abrir real (GetOpenFileNameA)**: `comdlg32.dll` lista los archivos MEFS (SYS_DLIST 13) con filtro `lpstrFilter`+`nFilterIndex` y campo de nombre; navegación por teclado (flechas/PgUp/PgDn/Home/End/Enter/Esc, autocompletado) y por ratón; botones Abrir/Cancelar. Corrección de `TranslateAcceleratorA` en user32 (Fase C): flags de acelerador no se guardaban, comparación de mnemónico case-sensitive ('o' vs 'O') y WM_COMMAND iba al RichEdit en vez de la ventana principal → `Ctrl+O` dispara id 40003.
 
 ## Notas de implementación (bitácora)
 
@@ -288,7 +290,6 @@ Para poder escribir texto (Fase A siguiente) `kernel/drivers/keyboard.c` deja de
 
 ### Pendientes (fases siguientes)
 
-- **D** — menús/WM_COMMAND + `TrackPopupMenuEx` visible.
 - **E** — FS de escritura (MEFS read-only hoy) para Guardar de verdad.
 
 ## Bitácora de la Fase B (abrir archivo por línea de comandos)
@@ -393,3 +394,55 @@ una fila y botones Abrir/Cancelar. Al confirmar copia el nombre en
   metapad sigue vivo tras cerrar el diálogo.
 - **Regresión Fase A**: tecleo normal + caret siguen funcionando.
 - **Escalera 14/14 PASS** (disco).
+
+## Bitácora de la Fase D (menú de barra y desplegables)
+
+### Objetivo y alcance
+
+Que la ventana de metapad muestre la **barra de menú** (File Edit Favourites
+Options Help) y que clic o `Alt+letra` desplieguen un **menú desplegable** que
+navegue (teclado y ratón) y envíe el `WM_COMMAND` con el id del item a los
+handlers que ya existían (Open 0x9c43, New, Save, Exit...). Hasta ahora el
+menú se cargaba (`LoadMenuA` parseaba 146 items) pero no se dibujaba ni
+interactuaba.
+
+### Cambios
+
+1. **Parser RT_MENU corregido** (`user32.c` `menu_parse`, ahora recursivo
+   `menu_parse_level`). El formato real que emite mingw es, para cada item,
+   `[mtOption][mtID][texto]` con `MF_POPUP (0x10)` y `MF_END (0x80)` como
+   **flags combinados** del word `mtOption` (no un word `0x0080` separado), y
+   el separador es un item con `mtID==0` y texto vacío. El parser viejo leía
+   `0x0080` como "fin de popup" y `w<0x0100` como item con flags, lo que
+   **aplanaba todos los submenús anidados** (Viewers, File Format, Block,
+   Convert Selected, Insert Date/Time, Favourites, Options) a depth 0: la
+   barra solo mostraba "File" y el popup de File era un galimatías. Con el
+   parser nuevo hay 5 top-levels reales y cada submenú conserva su depth.
+2. **Barra de menú en el kernel** (`winmgr.c/h` + `SYS_MENUBAR` 25): la
+   franja gris y los labels top-level los dibuja el **winmgr** (no la app), así
+   sobreviven a las recomposiciones de z-order/arrastre y el área cliente se
+   reajusta (`wm_layout` con `WM_MENU_H=20`). `SetMenu`/`DrawMenuBar` reales
+   en user32 construyen el flat (`menu_build_flat`) y llaman `SYS_MENUBAR`.
+3. **Desplegable modal** (`menu_modal` en user32): dibuja el popup sobre el
+   LFB (marco + fondo + items + highlight), inicializa `lfb/scr_w/scr_h` con
+   `SYS_GFXINFO` (antes `lfb` solo se ponía en MessageBox → el popup se
+   dibujaba con `lfb=NULL`), y captura `sys_event` en bucle: flechas
+   (saltando separadores), Home/End/PgUp/PgDn, Enter=seleccionar, Esc=cerrar,
+   mnemónico, y ratón (move/hit-testing/up=seleccionar). Al elegir hace
+   `msgq_push(hwnd, WM_COMMAND, id, 0)`.
+4. **Interceptación** (`event_to_wm`): clic en la franja del menú
+   (`menu_bar_top_at`) y `Alt+letra` (`menu_bar_top_letter`) abren el modal.
+   `EV_BUTTON_UP` sobre la barra (`ev.y < pop_y`) se **ignora**: era el bug de
+   "el menú se abre y desaparece al soltar" — el UP del clic de apertura caía
+   en `out_cancel`. `menu_bar_top_x` alinea el popup bajo el label.
+
+### Validación
+
+- QEMU headless (test_faseD.py): `run metapad.exe` → `Alt+F` abre el popup de
+  File (18 items: New, Open, Save, SaveAs, ReadOnly, sep, Launch, File
+  Format, Refresh, Calculate, Page Setup, Print, Recent, sep, Exit) y
+  **persiste** (screendumps separados 1.5 s iguales, 15921 px de popup) →
+  `↓ ↓ Enter` abre el diálogo Abrir real (`[cdlg] GetOpenFileNameA dialog`) →
+  `Alt+E` y `Alt+H` abren Edit y Help. Clic con ratón en la franja de menú
+  también despliega.
+- **4/4 PASS** en disco.
