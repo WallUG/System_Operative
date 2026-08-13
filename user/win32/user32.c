@@ -137,6 +137,17 @@ static int sys_winupdate(uint32_t id)
     return r;
 }
 
+/* Fase 20-D: blit por regiones. ecx = rect {x,y,w,h} (coords cliente). */
+static int sys_winupdate_rect(uint32_t id, const int32_t *rect)
+{
+    int r;
+    __asm__ volatile("int $0x80"
+                     : "=a"(r)
+                     : "a"(SYS_WINUPDATE), "b"(id), "c"(rect)
+                     : "memory");
+    return r;
+}
+
 static int sys_wintitle(uint32_t id, const char *title)
 {
     int r;
@@ -1130,8 +1141,23 @@ static void wm_paint_window(uint32_t hwnd)
     for (i = 0; i < CHILD_MAX; i++)
         if (child_parent[i] == hwnd && wnd_proc[CHILD_BASE + i])
             child_paint((uint32_t)i);
-    if (!is_child(hwnd))
-        sys_winupdate(hwnd);
+    if (!is_child(hwnd)) {
+        /* Fase 20-D: si el DC acumulo un rect sucio, blit solo esa
+         * region; si no, cliente completo. */
+        myos_dc_t *d = &dc_pool[hwnd];
+        if (d->magic == GDI_DC_MAGIC && d->dirty_w > 0 && d->dirty_h > 0) {
+            int32_t rect[4];
+            rect[0] = d->dirty_x;
+            rect[1] = d->dirty_y;
+            rect[2] = d->dirty_w;
+            rect[3] = d->dirty_h;
+            d->dirty_w = 0;
+            d->dirty_h = 0;
+            sys_winupdate_rect(hwnd, rect);
+        } else {
+            sys_winupdate(hwnd);
+        }
+    }
 }
 
 uint32_t ShowWindow(uint32_t hwnd, int cmd)
@@ -1354,6 +1380,11 @@ static uint32_t dc_lookup(uint32_t hwnd, myos_dc_t **dc)
         d->pen = STOCK_HANDLE(BLACK_PEN);       /* y pen negro por defecto */
         d->pen_x = 0;
         d->pen_y = 0;
+        d->hwnd = hwnd;
+        d->dirty_x = 0;
+        d->dirty_y = 0;
+        d->dirty_w = 0;
+        d->dirty_h = 0;
         *dc = d;
     }
     return 1;
@@ -1602,8 +1633,15 @@ static void child_repaint(uint32_t i)
     if (!wnd_proc[hwnd])
         return;
     child_paint(i);
-    if (parent < MAX_WNDPROCS && wnd_proc[parent])
-        sys_winupdate(parent);
+    if (parent < MAX_WNDPROCS && wnd_proc[parent]) {
+        /* Fase 20-D: blit solo el rect del hijo (region pequena) */
+        int32_t rect[4];
+        rect[0] = child_x[i];
+        rect[1] = child_y[i];
+        rect[2] = child_w[i];
+        rect[3] = child_h[i];
+        sys_winupdate_rect(parent, rect);
+    }
 }
 
 /* Inserta/borra un caracter en el caret del control (hijo builtin). */

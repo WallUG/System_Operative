@@ -43,6 +43,9 @@ int wm_create(const char *title, int x, int y, int w, int h,
 int wm_close(int id, uint32_t pd);   /* solo la app duena puede cerrar */
 int wm_move(int id, int dx, int dy);
 int wm_update(int id);
+/* Fase 20-D: actualiza solo el rect (blit por regiones). rect =
+ * {x,y,w,h} en coordenadas del cliente de la ventana. */
+int wm_update_rect(int id, const int32_t *rect);
 int wm_set_title(int id, const char *title);
 int wm_info(int id, uint32_t *out);
 

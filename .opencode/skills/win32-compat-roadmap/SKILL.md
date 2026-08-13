@@ -119,7 +119,17 @@ host emulation.
       `SYS_GETPROC` (32) + GetModuleHandleA/GetProcAddress resuelven por
       base real; `find_module` usa dll_idx (no deriva de la base);
       `tools/test_fase20c.py` 7/7 PASS)
-- [ ] Phase D — font metrics / text measurement
+- [x] Phase D — font metrics / text measurement + region-based blitting
+      (GetTextMetricsA/GetTextExtentPoint32A/GetCharWidthA con metricas
+      8x16 correctas; blit por regiones: DC con dirty rect acumulado,
+      SYS_WINUPDATE acepta un rect {x,y,w,h} opcional, wm_update_rect
+      restaura solo el rect del fondo y redibuja las ventanas que lo
+      intersectan con blit parcial del cliente; child_repaint usa el
+      rect del hijo; `tools/test_fase20d.py` 6/6 PASS)
+
+**Fase 20 completa (A-D).** Quedan en backlog los items 1 (mas shims
+OLE32/SHLWAPI/WINSPOOL), 4-6 (message loop, CreateWindowEx extendido,
+dialogos modales), 9 (modos binario/texto) y 12 (per-process heap).
 
 ## Validation notes
 - Metapad is the reference app (already runs: editing, menus, save). Each

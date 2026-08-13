@@ -288,7 +288,16 @@ Todos los detalles, decisiones y bugs encontrados están en `DESIGN.md`.
   resuelven por la base real (GetModuleHandleA/GetProcAddress). Validado:
   **7/7 PASS** (`tools/test_fase20c.py`) con todos los binarios
   (metapad abrir/editar/guardar, dir.exe FindFirstFileA, messagebox.exe).
-- **Fase 20 (D)** pendiente: métricas de texto / fuentes reales.
+- **Fase 20 (D) concluida**: **métricas de texto reales + blit por
+  regiones**. `GetTextMetricsA`/`GetTextExtentPoint32A`/`GetCharWidthA`
+  devuelven métricas 8x16 correctas; el DC de gdi32 acumula un rect sucio
+  y `SYS_WINUPDATE` acepta un rect opcional: el kernel (`wm_update_rect`)
+  restaura solo el rect del fondo y hace blit parcial del cliente de las
+  ventanas que lo intersectan (los hijos usan su rect). Validado:
+  **6/6 PASS** (`tools/test_fase20d.py`) + regresión Fase C 7/7.
+- **Fase 20 completa (A-D).** Backlog: más shims (OLE32/SHLWAPI/WINSPOOL),
+  message loop + CreateWindowEx extendido, diálogos modales, modos
+  binario/texto, per-process heap.
 - Roadmap tentativo: long mode (64 bits), **apps Windows GUI reales** (ver
   `docs/10-win32-gui-eval.md`: primero nuestro notepad mingw, luego un
   exe externo como Metapad), según el interés.

@@ -66,6 +66,8 @@ typedef struct {
     int      has_toolbar;         /* Fase 20-B: barra de herramientas  */
     int      tb_n;                /* numero de botones                 */
     char     tb_tx[12][12];       /* etiquetas de los botones           */
+    int      dirty_x, dirty_y, dirty_w, dirty_h;  /* Fase 20-D: blit
+                               por regiones (rect del cliente a copiar) */
 } win_t;
 
 static win_t wins[WM_MAX_WINS];
@@ -191,18 +193,34 @@ static void wm_ensure_bg(void)
 
 /* Blit del area cliente desde el buffer de la app (validado por pagina
  * con el PD de la app) hacia el LFB. */
+/* Copia del buffer del cliente al LFB SOLO el rect sucio
+ * (Fase 20-D: blit por regiones). dirty = rect en coordenadas del
+ * cliente; si dirty_w/h <= 0 copia el cliente completo. */
 static void wm_blit_client(const win_t *w)
 {
     volatile uint32_t *lfb = (volatile uint32_t *)vbe_lfb_phys;
     uint32_t y;
+    int bx = 0, by = 0, bw = w->cw, bh = w->ch;
 
     if (!w->buf_va)
         return;
-    for (y = 0; y < (uint32_t)w->ch; y++) {
+    if (w->dirty_w > 0 && w->dirty_h > 0) {
+        bx = w->dirty_x;
+        by = w->dirty_y;
+        bw = w->dirty_w;
+        bh = w->dirty_h;
+        if (bx < 0) { bw += bx; bx = 0; }
+        if (by < 0) { bh += by; by = 0; }
+        if (bx + bw > w->cw) bw = w->cw - bx;
+        if (by + bh > w->ch) bh = w->ch - by;
+        if (bw <= 0 || bh <= 0)
+            return;
+    }
+    for (y = (uint32_t)by; y < (uint32_t)(by + bh); y++) {
         uint8_t *dst = (uint8_t *)lfb +
-                       ((uint32_t)(w->cy + y) * VBE_SCREEN_W + w->cx) * 4;
-        uint32_t row = y * (uint32_t)w->cw * 4;  /* linea del buffer     */
-        uint32_t n = (uint32_t)w->cw * 4;
+                       ((uint32_t)(w->cy + y) * VBE_SCREEN_W + w->cx + bx) * 4;
+        uint32_t row = ((uint32_t)y * (uint32_t)w->cw + (uint32_t)bx) * 4;
+        uint32_t n = (uint32_t)bw * 4;
         while (n > 0) {
             uint32_t va = w->buf_va + row;
             uint32_t chunk = 0x1000 - (va & 0xFFF);
@@ -404,15 +422,21 @@ static void wm_compose(void)
     }
     for (zz = 0; zz < WM_MAX_WINS; zz++) {
         for (i = 0; i < WM_MAX_WINS; i++) {
-            const win_t *w = &wins[i];
-            if (w->visible && !(w->flags & WM_FLAG_FIXED) && w->z == zz)
+            win_t *w = &wins[i];
+            if (w->visible && !(w->flags & WM_FLAG_FIXED) && w->z == zz) {
+                w->dirty_w = 0;
+                w->dirty_h = 0;
                 wm_draw_one(w);
+            }
         }
     }
     for (i = 0; i < WM_MAX_WINS; i++) {
-        const win_t *w = &wins[i];
-        if (w->visible && (w->flags & WM_FLAG_FIXED))
+        win_t *w = &wins[i];
+        if (w->visible && (w->flags & WM_FLAG_FIXED)) {
+            w->dirty_w = 0;
+            w->dirty_h = 0;
             wm_draw_one(w);
+        }
     }
     /* el blit pisa el cursor: re-dibujarlo */
     mouse_cursor_invalidate();
@@ -552,6 +576,83 @@ int wm_update(int id)
     if (!w)
         return -1;
     wm_compose();
+    return 0;
+}
+
+/* Fase 20-D: blit por regiones. Actualiza SOLO el rect dado (en
+ * coordenadas del cliente de la ventana): restaura ese rect del fondo
+ * y redibuja las ventanas que lo intersectan (marco + blit parcial de
+ * su cliente). Devuelve 0 o -1. */
+int wm_update_rect(int id, const int32_t *rect)
+{
+    volatile uint32_t *lfb = (volatile uint32_t *)vbe_lfb_phys;
+    win_t *w = wm_find(id);
+    int rx, ry, rw, rh, zz, i;
+
+    if (!w || !rect)
+        return -1;
+    if (!vbe_graphics_active)
+        return 0;
+    rx = w->cx + rect[0];
+    ry = w->cy + rect[1];
+    rw = rect[2];
+    rh = rect[3];
+    if (rx < w->cx) { rw += rx - w->cx; rx = w->cx; }
+    if (ry < w->cy) { rh += ry - w->cy; ry = w->cy; }
+    if (rw < 0 || rh < 0)
+        return 0;
+
+    /* 1) restaura el rect del fondo snapshot */
+    if (wm_background) {
+        uint32_t *bg = (uint32_t *)wm_background;
+        int y;
+        for (y = ry; y < ry + rh; y++) {
+            uint32_t *d = (uint32_t *)lfb +
+                          (uint32_t)y * VBE_SCREEN_W + (uint32_t)rx;
+            if (y >= 0 && y < VBE_SCREEN_H && rx >= 0 &&
+                rx + rw <= VBE_SCREEN_W)
+                memcpy(d, bg + (uint32_t)y * VBE_SCREEN_W + (uint32_t)rx,
+                       (uint32_t)rw * 4);
+        }
+    }
+
+    /* 2) redibuja las ventanas que intersectan el rect (orden z) */
+    for (zz = 0; zz < WM_MAX_WINS; zz++) {
+        for (i = 0; i < WM_MAX_WINS; i++) {
+            win_t *o = &wins[i];
+            int ox2 = o->x + o->w, oy2 = o->y + o->h;
+            int rx2 = rx + rw, ry2 = ry + rh;
+            if (!o->visible || o->z != zz || rx2 <= o->x || o->x >= rx2 ||
+                ry2 <= o->y || o->y >= ry2)
+                continue;
+            /* clip del rect sucio a esta ventana */
+            o->dirty_x = rx - o->cx;
+            o->dirty_y = ry - o->cy;
+            o->dirty_w = rw;
+            o->dirty_h = rh;
+            wm_draw_one(o);
+            o->dirty_w = 0;
+            o->dirty_h = 0;
+        }
+    }
+    /* 3) las ventanas fijas (taskbar) siempre encima */
+    for (i = 0; i < WM_MAX_WINS; i++) {
+        win_t *o = &wins[i];
+        int ox2 = o->x + o->w, oy2 = o->y + o->h;
+        int rx2 = rx + rw, ry2 = ry + rh;
+        if (!o->visible || !(o->flags & WM_FLAG_FIXED) || rx2 <= o->x ||
+            o->x >= rx2 || ry2 <= o->y || o->y >= ry2)
+            continue;
+        o->dirty_x = rx - o->cx;
+        o->dirty_y = ry - o->cy;
+        o->dirty_w = rw;
+        o->dirty_h = rh;
+        wm_draw_one(o);
+        o->dirty_w = 0;
+        o->dirty_h = 0;
+    }
+    mouse_cursor_invalidate();
+    mouse_draw_cursor();
     return 0;
 }
 

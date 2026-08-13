@@ -29,6 +29,9 @@ typedef struct {
     uint32_t brush;        /* handle de brush seleccionado         */
     uint32_t pen;          /* handle de pen seleccionado           */
     int      pen_x, pen_y; /* posicion actual del pen              */
+    uint32_t hwnd;         /* ventana del DC (para el dirty rect)  */
+    int      dirty_x, dirty_y, dirty_w, dirty_h; /* Fase 20-D: rect
+                               sucio acumulado (coordenadas buffer) */
 } myos_dc_t;
 
 #endif

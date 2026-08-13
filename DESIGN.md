@@ -536,7 +536,48 @@ Progreso:
 - [x] Fase 20 (A) — MEFS bitmap + format + subdirectorios
 - [x] Fase 20 (B) — comctl32 real + GetSaveFileNameA confirmación
 - [x] Fase 20 (C) — relocaciones PE
-- [ ] Fase 20 (D) — métricas de texto reales
+- [x] Fase 20 (D) — métricas de texto reales + blit por regiones
+
+**Fase 20 completa (A-D).** Backlog para fases futuras: más shims
+(OLE32/SHLWAPI/WINSPOOL), message loop + CreateWindowEx extendido,
+diálogos modales correctos, modos binario/texto, per-process heap.
+
+## Bitácora de la Fase 20 (D): métricas de texto + blit por regiones
+
+### Objetivo
+
+Dos mejoras de corrección/rendimiento: (1) **métricas de texto reales**
+(`GetTextMetrics`/`GetTextExtentPoint32`/`GetCharWidth`) para que las apps
+midan el texto y hagan layout correcto, y (2) **blit por regiones**: hoy
+cada `WM_PAINT`/update copiaba el área cliente completo al LFB; ahora solo
+se copia el rectángulo sucio.
+
+### Cambios
+
+- **`user/win32/gdi_dc.h`** — `myos_dc_t` con `hwnd` y dirty rect
+  (`dirty_x/y/w/h`, coordenadas del buffer).
+- **`user/win32/gdi32.c`** — `dc_dirty()` expande el rect sucio; `dc_px` y
+  `dc_rect` lo mantienen (TextOutA/figuras lo cubren vía dc_px).
+  `GetTextMetricsA`/`GetTextExtentPoint32A`/`GetCharWidthA`/`GetTextFaceA`
+  ya existían con métricas 8x16 correctas (revisadas, sin cambios).
+- **`user/win32/user32.c`** — `wm_paint_window` envía el dirty rect del DC
+  (`sys_winupdate_rect` con {x,y,w,h}) si está sucio, si no el cliente
+  completo; `child_repaint` usa el rect del hijo (región pequeña del
+  editor). `dc_lookup` inicializa el dirty.
+- **`kernel/winmgr.c/h`** — `win_t` con dirty rect; `wm_blit_client` copia
+  solo el rect (con clipping); `wm_update_rect(id, rect)` restaura solo el
+  rect del fondo snapshot y redibuja las ventanas que lo intersectan (blit
+  parcial de su cliente); los dirty se limpian tras cada blit.
+- **`kernel/syscall.c`** — `SYS_WINUPDATE` acepta `ecx` = rect opcional
+  (validado por PD con `user_memcpy_in`).
+
+### Validación
+
+- QEMU headless (`tools/test_fase20d.py`): metapad arranca sin #PF,
+  edición con blit por regiones (screendump: texto dibujado), Ctrl+O
+  abre, Save As con nombre nuevo guarda. **6/6 PASS**.
+- Regresión Fase C (`tools/test_fase20c.py`): 7/7 PASS con el blit por
+  regiones activo.
 
 ## Bitácora de la Fase 20 (C): relocaciones para DLLs en direcciones variables
 

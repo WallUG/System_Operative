@@ -522,9 +522,21 @@ void syscall_handler(registers_t *regs)
         regs->eax = wm_move((int)regs->ebx, (int)regs->ecx, (int)regs->edx);
         break;
     }
-    case SYS_WINUPDATE:  /* ebx=id */
-        regs->eax = wm_update((int)regs->ebx);
+    case SYS_WINUPDATE: { /* ebx=id, ecx=&rect{x,y,w,h} opcional (Fase 20-D:
+                       * blit por regiones; 0 = cliente completo) */
+        int32_t rect[4];
+        if (regs->ecx != 0) {
+            if (user_memcpy_in(rect, (const void *)regs->ecx,
+                               sizeof(rect), pd) != 0) {
+                regs->eax = -1;
+                break;
+            }
+            regs->eax = wm_update_rect((int)regs->ebx, rect);
+        } else {
+            regs->eax = wm_update((int)regs->ebx);
+        }
         break;
+    }
     case SYS_WININFO: {  /* ebx=id, ecx=&{x,y,w,h,cx,cy,cw,ch} */
         uint32_t info[8];
         if (wm_info((int)regs->ebx, info) != 0 ||

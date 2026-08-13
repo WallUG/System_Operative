@@ -145,6 +145,8 @@ static inline uint32_t px_disp(uint32_t c)
            (c & 0xFF000000u);
 }
 
+static void dc_dirty(myos_dc_t *dc, int x, int y, int w, int h);
+
 /* pinta un pixel en coords locales del DC (clips al buffer) */
 static void dc_px(myos_dc_t *dc, int x, int y, uint32_t c)
 {
@@ -157,14 +159,35 @@ static void dc_px(myos_dc_t *dc, int x, int y, uint32_t c)
         return;
     ((uint32_t *)dc->buf)[(uint32_t)ay * (uint32_t)dc->cw + (uint32_t)ax] =
         px_disp(c);
+    dc_dirty(dc, ax, ay, 1, 1);
 }
 
 static void dc_rect(myos_dc_t *dc, int x, int y, int w, int h, uint32_t c)
 {
     int i, j;
+    dc_dirty(dc, dc->ox + x, dc->oy + y, w, h);
     for (j = 0; j < h; j++)
         for (i = 0; i < w; i++)
             dc_px(dc, x + i, y + j, c);
+}
+
+/* Fase 20-D: expande el rect sucio del DC (coordenadas buffer). */
+static void dc_dirty(myos_dc_t *dc, int x, int y, int w, int h)
+{
+    int x2 = x + w, y2 = y + h;
+    if (w <= 0 || h <= 0)
+        return;
+    if (dc->dirty_w == 0 || dc->dirty_h == 0) {
+        dc->dirty_x = x;
+        dc->dirty_y = y;
+        dc->dirty_w = w;
+        dc->dirty_h = h;
+        return;
+    }
+    if (x < dc->dirty_x) dc->dirty_x = x;
+    if (y < dc->dirty_y) dc->dirty_y = y;
+    if (x2 > dc->dirty_x + dc->dirty_w) dc->dirty_w = x2 - dc->dirty_x;
+    if (y2 > dc->dirty_y + dc->dirty_h) dc->dirty_h = y2 - dc->dirty_y;
 }
 
 /* --- stock objects --- */
