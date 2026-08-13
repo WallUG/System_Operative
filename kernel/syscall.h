@@ -40,6 +40,10 @@
 #define SYS_DLLBASE 31  /* ebx=nombre_dll -> base real de carga (Fase C)
                            (0 si no existe)                             */
 #define SYS_GETPROC 32  /* ebx=base_dll, ecx=nombre -> VA export (0 si no) */
+#define SYS_DLISTDIR 33 /* ebx=parent, ecx=idx, edx=&{name[16],size,flags}:
+                           entrada idx-esima de un directorio (Fase 21)   */
+#define SYS_DPARENT 34  /* ebx=idx -> parent (MEFS_ROOT si raiz/inexist)  */
+#define SYS_DLOOKUP 35  /* ebx=parent, ecx=name -> indice de la entrada   */
 
 void syscall_init(void);            /* registra el gate 0x80 (DPL=3) */
 void syscall_handler(registers_t *regs);

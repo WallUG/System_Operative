@@ -421,6 +421,42 @@ void syscall_handler(registers_t *regs)
         regs->eax = 0;
         break;
     }
+    case SYS_DLISTDIR: { /* ebx=parent, ecx=idx, edx=&{name,size,flags} */
+        uint32_t parent = regs->ebx;
+        uint32_t idx = regs->ecx;
+        uint32_t out[6];
+        char name[MEFS_NAME_LEN];
+        uint32_t size, flags;
+        if (mefs_ls(parent, idx, name, &size, &flags) != 0) {
+            regs->eax = -1;
+            break;
+        }
+        for (int i = 0; i < MEFS_NAME_LEN; i++)
+            ((uint8_t *)out)[i] = (uint8_t)name[i];
+        out[4] = size;
+        out[5] = flags;
+        if (user_memcpy_out((char *)regs->edx, (const char *)out,
+                            sizeof(out), pd) != 0) {
+            regs->eax = -1;
+            break;
+        }
+        regs->eax = 0;
+        break;
+    }
+    case SYS_DPARENT: { /* ebx=idx -> parent */
+        regs->eax = mefs_parent(regs->ebx);
+        break;
+    }
+    case SYS_DLOOKUP: { /* ebx=parent, ecx=name -> indice */
+        char name[MEFS_NAME_LEN];
+        if (user_strcpy(name, sizeof(name), (const char *)regs->ecx,
+                        pd) != 0) {
+            regs->eax = -1;
+            break;
+        }
+        regs->eax = (uint32_t)mefs_lookup(regs->ebx, name);
+        break;
+    }
     case SYS_SELFNAME: { /* ebx=buf, ecx=max: nombre del ejecutable
                           * actual (kernel32.GetModuleFileNameA) */
         char *buf = (char *)regs->ebx;

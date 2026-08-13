@@ -1,14 +1,11 @@
 /* MyOS - user/desktop.c
- * Escritorio (Fase 17 del roadmap GUI): dos ventanas del WM creadas por
- * la app:
- *   - Fondo (WM_FLAG_BG | NOFRAME, pantalla completa): el wallpaper se
- *     pinta en el buffer de la app, no en el LFB; el WM lo compone
- *     siempra en z=0 y el snapshot del fondo sigue siendo la consola
- *     (al cerrar el escritorio, vuelve).
+ * Escritorio (Fase 17 + Fase 21): dos ventanas del WM creadas por la app:
+ *   - Fondo (WM_FLAG_BG | NOFRAME, pantalla completa): wallpaper.
  *   - Barra de tareas (WM_FLAG_FIXED | NOFRAME, borde inferior) con un
- *     boton por app. Clic: fork + exec de la app (explorer.elf) en un
- *     proceso hijo con su propio PD; cuando cierra, el WM recomponre
- *     con el snapshot y el escritorio queda intacto.
+ *     boton por app (Fase 21): clic lanza la app (fork + exec) como
+ *     proceso hijo con su propio PD. Se lanzan tanto apps nativas
+ *     (.elf) como apps Win32 reales (.exe) — el kernel las distingue
+ *     automaticamente (PE vs ELF).
  * 'q' cierra el escritorio (el WM restaura la consola). */
 
 #include <stdint.h>
@@ -27,6 +24,20 @@
 #define COLOR_LBL   0x00FFFFFFu
 #define COLOR_LBL_P 0x00E0F0FFu
 
+#define MAX_APPS    4
+
+typedef struct {
+    const char *label;
+    const char *file;       /* .elf nativo o .exe Win32 */
+} app_t;
+
+static const app_t apps[MAX_APPS] = {
+    { "EXPLORADOR",  "explorer.elf"   },
+    { "METAPAD",     "metapad.exe"    },
+    { "MENSAJE",     "messagebox.exe" },
+    { "DEMO",        "win_demo.elf"   },
+};
+
 static uint32_t scr_w, scr_h;
 
 /* Dibuja un boton de la barra de tareas en el buffer de la taskbar
@@ -44,8 +55,7 @@ static void tb_button(uint32_t *tb, int bx, int lbw, const char *label,
                 bx + (lbw - (int)lw) / 2, 4 + (TB_H - 8 - 16) / 2, label, fg);
 }
 
-/* Wallpaper en el buffer del fondo (el WM lo compone en z=0; el snapshot
- * del LFB sigue siendo la consola). */
+/* Wallpaper en el buffer del fondo (el WM lo compone en z=0). */
 static void paint_wallpaper(uint32_t *bg, int bw, int bh)
 {
     int x, y;
@@ -55,17 +65,44 @@ static void paint_wallpaper(uint32_t *bg, int bw, int bh)
         wl_fillrect(bg, bw, bh, x, 0, 2, bh, COLOR_STRIP);
     for (y = 8; y < bh; y += 96)
         wl_fillrect(bg, bw, bh, 0, y, bw, 1, COLOR_STRIP);
-    wl_drawtext(bg, bw, bh, 16, 16, "MyOS desktop (Fase 17)", COLOR_LBL);
+    wl_drawtext(bg, bw, bh, 16, 16, "MyOS desktop (Fase 21)", COLOR_LBL);
     wl_drawtext(bg, bw, bh, 16, 36,
-                "Clic en la barra de tareas para lanzar una app; q cierra",
-                COLOR_HINT);
+                "1-4 lanzan app, clic en la barra, q cierra", COLOR_HINT);
+}
+
+/* Lanza la app i-esima como hijo (fork + exec). */
+static void launch_app(int i)
+{
+    int kid;
+    char l[64];
+    const char *pre = "esc: lanzando ";
+    uint32_t p = 0, k = 0;
+
+    while (*pre)
+        l[p++] = *pre++;
+    while (apps[i].file[k] && k < 30 && p < 60)
+        l[p++] = apps[i].file[k++];
+    l[p++] = '\n';
+    l[p] = 0;
+    sys_write(l, p);
+
+    kid = sys_fork();
+    if (kid == 0) {
+        /* Hijo: imagen nueva (exec libera el espacio heredado). */
+        if (sys_exec(apps[i].file) != 0) {
+            sys_write("esc: exec fallo\n", 16);
+        }
+        sys_exit(2);
+    } else if (kid < 0) {
+        sys_write("esc: fork fallo\n", 16);
+    }
 }
 
 int _start(void)
 {
     uint32_t info[4], a[8], ev[5];
     uint32_t *bg, *tb;
-    int idb, idt;
+    int idb, idt, i;
 
     sys_write("esc: escritorio iniciando\n", 26);
     if (sys_gfxinfo(info) != 0) {
@@ -83,8 +120,7 @@ int _start(void)
     }
     paint_wallpaper(bg, (int)scr_w, (int)scr_h);
 
-    /* Fondo: pantalla completa, siempre z=0, sin hit-test (los clics
-     * sobre el escritorio van al foco). */
+    /* Fondo: pantalla completa, siempre z=0, sin hit-test. */
     a[0] = (uint32_t)"Fondo"; a[1] = 0; a[2] = 0;
     a[3] = scr_w; a[4] = scr_h; a[5] = (uint32_t)bg;
     a[6] = scr_w * scr_h * 4;
@@ -101,7 +137,8 @@ int _start(void)
                 (int)scr_w, 1, COLOR_TB_ED);
     wl_drawtext(tb, (int)scr_w, (int)scr_h, (int)scr_w - 66, 6,
                 "q:salir", COLOR_HINT);
-    tb_button(tb, 6, 128, "EXPLORADOR", 0);
+    for (i = 0; i < MAX_APPS; i++)
+        tb_button(tb, 6 + i * 136, 128, apps[i].label, 0);
 
     a[0] = (uint32_t)"Taskbar"; a[1] = 0; a[2] = TB_Y;
     a[3] = scr_w; a[4] = TB_H; a[5] = (uint32_t)tb;
@@ -113,38 +150,62 @@ int _start(void)
         return 1;
     }
     sys_write("esc: escritorio listo\n", 22);
+    {
+        char d[40];
+        uint32_t p = 0;
+        const char *pre = "esc: ventanas idb=";
+        while (*pre)
+            d[p++] = *pre++;
+        {
+            char n[12];
+            uint32_t sl = wl_dec(n, (uint32_t)idb);
+            uint32_t k;
+            for (k = 0; k < sl; k++)
+                d[p++] = n[k];
+        }
+        d[p++] = ' '; d[p++] = 'i'; d[p++] = 'd'; d[p++] = 't'; d[p++] = '=';
+        {
+            char n[12];
+            uint32_t sl = wl_dec(n, (uint32_t)idt);
+            uint32_t k;
+            for (k = 0; k < sl; k++)
+                d[p++] = n[k];
+        }
+        d[p++] = '\n'; d[p] = 0;
+        sys_write(d, p);
+    }
 
     for (;;) {
-        int kid;
+        int ai = -1;
+
         if (sys_event(ev) != 0)
             continue;
         switch (ev[0]) {
         case EV_KEY:
             if (ev[4] == 'q')
                 goto salir;
+            if (ev[4] >= '1' && ev[4] <= '0' + MAX_APPS)
+                launch_app((int)(ev[4] - '1'));
             break;
         case EV_BUTTON_DOWN:
-            if (wl_point_in((int)ev[1], (int)ev[2], 6, TB_Y, 128, TB_H)) {
-                tb_button(tb, 6, 128, "EXPLORADOR", 1);
+            for (i = 0; i < MAX_APPS; i++)
+                if (wl_point_in((int)ev[1], (int)ev[2],
+                                6 + i * 136, TB_Y, 128, TB_H))
+                    ai = i;
+            if (ai >= 0) {
+                tb_button(tb, 6 + ai * 136, 128, apps[ai].label, 1);
                 sys_winupdate(idt);
             }
             break;
         case EV_BUTTON_UP:
-            if (wl_point_in((int)ev[1], (int)ev[2], 6, TB_Y, 128, TB_H)) {
-                tb_button(tb, 6, 128, "EXPLORADOR", 0);
+            for (i = 0; i < MAX_APPS; i++)
+                if (wl_point_in((int)ev[1], (int)ev[2],
+                                6 + i * 136, TB_Y, 128, TB_H))
+                    ai = i;
+            if (ai >= 0) {
+                tb_button(tb, 6 + ai * 136, 128, apps[ai].label, 0);
                 sys_winupdate(idt);
-                sys_write("esc: lanzando explorer.elf\n", 28);
-                kid = sys_fork();
-                if (kid == 0) {
-                    /* Hijo: imagen nueva (exec libera el espacio
-                     * heredado); el WM no le hereda ninguna ventana
-                     * (viven en el kernel, del PD del padre). */
-                    if (sys_exec("explorer.elf") != 0)
-                        sys_write("esc: exec explorer.elf fallo\n", 30);
-                    sys_exit(2);
-                } else if (kid < 0) {
-                    sys_write("esc: fork fallo\n", 16);
-                }
+                launch_app(ai);
             }
             break;
         }

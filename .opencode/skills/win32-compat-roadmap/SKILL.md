@@ -9,6 +9,32 @@ This skill captures the full roadmap for extending MyOS Windows compatibility,
 grouped into four implementation phases (A-D). It exists so the plan does not
 get lost between sessions. Use it whenever work on any of these areas begins.
 
+## Historical context: Fase 21 (escritorio lanzador + explorador con subdirs)
+
+After Fase 20 (A-D), MyOS completed **Fase 21** = desktop launcher +
+subdirectory explorer, closing the loop between the Win32 work and the
+native GUI environment:
+
+- **`SYS_DLISTDIR` (33), `SYS_DPARENT` (34), `SYS_DLOOKUP` (35)** — ring-3
+  navigation of MEFS subdirectories (`parent` = entry index, `MEFS_ROOT`
+  = 0xFFFFFFFF). `sys_dlistdir` returns `{name[16], size, flags}` per entry,
+  `sys_dparent(idx)` the parent, `sys_dlookup(parent, name)` the index.
+- **`desktop.elf` multi-button taskbar** — buttons for EXPLORADOR
+  (explorer.elf), METAPAD (metapad.exe), MENSAJE (messagebox.exe), DEMO
+  (win_demo.elf); keys 1-4 or click launch via fork+exec (kernel picks PE
+  vs ELF automatically). Clicking is mouse-driven; keys 1-4 are the
+  headless-test path.
+- **`explorer.elf` subdirectory navigation** — lists the cwd via
+  `sys_dlistdir`, dirs shown with trailing `/` and in cyan; Enter on a dir
+  = cd, `b` = up (`sys_dparent`), arrows Up (0x102)/Down (0x103) or
+  u/d/j/k move the selection; Enter on `.exe`/`.elf` = fork+exec
+  (launches Win32 and native apps), Enter on other files = text viewer.
+- **Bugfix**: `sys_winupdate` in `winlib.h` now forces `ecx=0` — the kernel
+  treats `ecx!=0` as an optional rect pointer for region blits (Fase 20-D),
+  and garbage in ecx made `user_memcpy_in` fail silently so `wm_update`
+  never ran → the window stayed black (only appeared when launched from
+  the desktop; direct launch happened to leave ecx=0).
+
 ## Historical context: Fase 19 (metapad phases A-E)
 
 Before the Fase 20 roadmap, MyOS completed **Fase 19** = the metapad
@@ -127,9 +153,14 @@ host emulation.
       intersectan con blit parcial del cliente; child_repaint usa el
       rect del hijo; `tools/test_fase20d.py` 6/6 PASS)
 
-**Fase 20 completa (A-D).** Quedan en backlog los items 1 (mas shims
-OLE32/SHLWAPI/WINSPOOL), 4-6 (message loop, CreateWindowEx extendido,
-dialogos modales), 9 (modos binario/texto) y 12 (per-process heap).
+**Fase 20 completa (A-D).** **Fase 21 completada** (escritorio lanzador de
+apps Win32/ELF + explorador con subdirectorios, ver arriba). Quedan en
+backlog los items 1 (mas shims OLE32/SHLWAPI/WINSPOOL), 4-6 (message loop,
+CreateWindowEx extendido, dialogos modales), 9 (modos binario/texto) y 12
+(per-process heap). Siguiente paso natural propuesto: instalador tipo
+Windows (dialogo que copia archivos del FS a un disco persistente con
+estructura de directorios) una vez exista un concepto de "disco de
+instalacion".
 
 ## Validation notes
 - Metapad is the reference app (already runs: editing, menus, save). Each

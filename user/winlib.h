@@ -27,6 +27,9 @@
 #define SYS_WINMOVE 20
 #define SYS_WINUPDATE 21
 #define SYS_WININFO 22
+#define SYS_DLISTDIR 33
+#define SYS_DPARENT 34
+#define SYS_DLOOKUP 35
 
 /* --- eventos (kernel/drivers/mouse.h) --- */
 #define EV_MOVE         1
@@ -94,6 +97,45 @@ static inline int sys_dlist(uint32_t idx, char *name, uint32_t *size)
     return r;
 }
 
+/* Fase 21: directorio idx-esimo de 'parent' (MEFS_ROOT = raiz).
+ * out = {name[16], size, flags}; flags bit0 = IS_DIR. -1 = fin. */
+static inline int sys_dlistdir(uint32_t parent, uint32_t idx,
+                               char *name, uint32_t *size, uint32_t *flags)
+{
+    int r;
+    uint32_t out[6];
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_DLISTDIR), "b"(parent), "c"(idx), "d"(out)
+                     : "memory");
+    if (r != 0)
+        return r;
+    for (int i = 0; i < 16; i++)
+        name[i] = (char)((uint8_t *)out)[i];
+    if (size) *size = out[4];
+    if (flags) *flags = out[5];
+    return 0;
+}
+
+static inline uint32_t sys_dparent(uint32_t idx)
+{
+    uint32_t r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_DPARENT), "b"(idx) : "memory");
+    return r;
+}
+
+static inline int sys_dlookup(uint32_t parent, const char *name)
+{
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_DLOOKUP), "b"(parent), "c"(name)
+                     : "memory");
+    return r;
+}
+
+/* MEFS_ROOT = indice de la raiz (mismas syscalls del kernel). */
+#define MEFS_ROOT 0xFFFFFFFFu
+
 static inline int sys_dread(const char *name, char *buf,
                             uint32_t off, uint32_t max)
 {
@@ -132,7 +174,8 @@ static inline int sys_winupdate(int id)
 {
     int r;
     __asm__ volatile("int $0x80" : "=a"(r)
-                     : "a"(SYS_WINUPDATE), "b"(id) : "memory");
+                     : "a"(SYS_WINUPDATE), "b"(id), "c"(0)
+                     : "memory");
     return r;
 }
 

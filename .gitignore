@@ -12,3 +12,6 @@ os-image.bin
 # Python
 __pycache__/
 *.pyc
+
+# opencode backup
+.backup_opencode/
