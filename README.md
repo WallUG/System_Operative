@@ -273,8 +273,13 @@ Todos los detalles, decisiones y bugs encontrados están en `DESIGN.md`.
   **8/8 PASS** en disco (`tools/test_fase20a.py`): crear/borrar/reutilizar
   bloques, `mkdir docs`→`cd`→`pwd`→`/docs` persiste, `format` limpia,
   regresión metapad OK.
-- **Fase 20 (B)** pendiente: comctl32 real (listview/toolbar) +
-  `GetSaveFileNameA` con confirmación.
+- **Fase 20 (B) concluida**: **`GetSaveFileNameA` con confirmación de
+  sobrescritura** (diálogo modal Sí/No en comdlg32 cuando el archivo ya
+  existe; si respondes No se vuelve al diálogo y no se sobrescribe) +
+  **`CreateToolbarEx` real** en comctl32 (syscall `SYS_TOOLBAR` 30; el
+  kernel dibuja la barra de herramientas bajo el menú, igual que
+  `SYS_MENUBAR`). Validado: **3/3 PASS** (`tools/test_fase20b.py`) +
+  screendump de la toolbar + regresión metapad (abrir/editar/guardar).
 - **Fase 20 (C)** pendiente: relocaciones PE para DLLs en dirección variable.
 - **Fase 20 (D)** pendiente: métricas de texto / fuentes reales.
 - Roadmap tentativo: long mode (64 bits), **apps Windows GUI reales** (ver

@@ -125,6 +125,15 @@ static int sys_dlist(uint32_t idx, char *name, uint32_t *size)
     return r;
 }
 
+static int sys_fsize(const char *name)
+{
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_FSIZE), "b"(name)
+                     : "memory");
+    return r;
+}
+
 static void dlg_write(const char *s, uint32_t len)
 {
     int r;
@@ -402,6 +411,110 @@ static void find_prefix(void)
     }
 }
 
+/* Fase 20-B: dialogo de confirmacion de sobrescritura. Devuelve 1 (Si)
+ * o 0 (No). 'name' = archivo que ya existe. Se dibuja una caja modal
+ * sobre la pantalla y se espera a que el usuario elija. */
+static int confirm_overwrite(const char *name)
+{
+    uint32_t info[4];
+    uint32_t ev[5];
+    const int cw = 360, ch = 140;
+    int cx, cy;
+    cdlg_btn_t btn_yes, btn_no;
+    int done = 0, result = 0;
+    char msg[96];
+
+    if (sys_gfxinfo(info) != 0)
+        return 1;               /* sin framebuffer: asumir Si */
+
+    cx = ((int)info[1] - cw) / 2;
+    cy = ((int)info[2] - ch) / 2;
+
+    fillrect(cx - 3, cy - 3, cw + 6, ch + 6, COLOR_FRAME);
+    fillrect(cx, cy, cw, ch, COLOR_BG);
+    fillrect(cx, cy, cw, 20, COLOR_TITLE);
+    drawtext(cx + 6, cy + 2, "Confirmar sobrescritura", COLOR_TEXT);
+
+    /* mensaje: el archivo ya existe */
+    {
+        uint32_t k = 0, m = 0;
+        static const char pre[] = "'";
+        static const char post[] = "' ya existe. Quieres sobrescribirlo?";
+        while (pre[m]) msg[k++] = pre[m++];
+        m = 0;
+        while (name[m] && k < sizeof(msg) - 40) msg[k++] = name[m++];
+        m = 0;
+        while (post[m] && k < sizeof(msg) - 1) msg[k++] = post[m++];
+        msg[k] = 0;
+    }
+    drawtext(cx + 16, cy + 36, msg, COLOR_TEXT);
+
+    btn_yes.x = cx + 60;  btn_yes.y = cy + ch - 48;
+    btn_yes.w = 80;       btn_yes.h = 26;
+    btn_yes.label = "Si";
+    btn_yes.hovered = 0;  btn_yes.pressed = 0;
+    btn_no = btn_yes;
+    btn_no.x = cx + 220;
+    btn_no.label = "No";
+
+    draw_btn(&btn_yes);
+    draw_btn(&btn_no);
+
+    while (!done) {
+        if (sys_event(ev) != 0)
+            continue;
+        switch (ev[0]) {
+        case EV_KEY:
+            if (ev[4] == 'y' || ev[4] == 'Y') { done = 1; result = 1; }
+            else if (ev[4] == 'n' || ev[4] == 'N') { done = 1; result = 0; }
+            else if (ev[4] == '\n') { done = 1; result = 1; }
+            else if (ev[4] == 27) { done = 1; result = 0; }
+            break;
+        case EV_BUTTON_DOWN:
+        case EV_BUTTON_UP:
+        case EV_MOVE:
+            if (btn_feed(&btn_yes, ev)) { done = 1; result = 1; break; }
+            if (btn_feed(&btn_no, ev)) { done = 1; result = 0; break; }
+            break;
+        default:
+            break;
+        }
+    }
+    return result;
+}
+
+static void dlg_current_name(char *dst);
+
+/* Fase 20-B: devuelve 1 si el nombre actual de Guardar ya existe (hay
+ * que confirmar sobrescritura). */
+static int dlg_wants_confirm(void)
+{
+    char nm[NAME_MAX];
+    if (fname_len == 0 && sel < file_count)
+        return 0;               /* nombre del archivo seleccionado (a salvar nuevo no pide confirmacion si se tipeo) */
+    dlg_current_name(nm);
+    return sys_fsize(nm) >= 0;
+}
+
+/* Copia a 'dst' el nombre actual del dialogo (fname tipeado o el
+ * archivo seleccionado). */
+static void dlg_current_name(char *dst)
+{
+    uint32_t k = 0;
+    if (fname_len > 0) {
+        while (k < NAME_MAX - 1 && fname[k]) {
+            dst[k] = fname[k];
+            k++;
+        }
+    } else if (sel < file_count && files[sel].name[0]) {
+        while (k < NAME_MAX - 1 && files[sel].name[k]) {
+            dst[k] = files[sel].name[k];
+            k++;
+        }
+    }
+    dst[k] = 0;
+}
+
 static uint32_t dlg_run(const void *ofn, int is_save)
 {
     uint32_t info[4];
@@ -534,6 +647,13 @@ static uint32_t dlg_run(const void *ofn, int is_save)
                 draw_btn(&btn_open);
                 draw_btn(&btn_cancel);
             } else if (key == '\n') {           /* Enter */
+                if (is_save && dlg_wants_confirm()) {
+                    /* el archivo ya existe: confirmar antes de cerrar */
+                    char nm[NAME_MAX];
+                    dlg_current_name(nm);
+                    if (!confirm_overwrite(nm))
+                        break;              /* No: seguir en el dialogo */
+                }
                 done = 1;
                 result = 1;
             } else if (key == 27) {             /* Esc */
@@ -563,6 +683,12 @@ static uint32_t dlg_run(const void *ofn, int is_save)
         case EV_BUTTON_UP:
         case EV_MOVE:
             if (btn_feed(&btn_open, ev)) {
+                if (is_save && dlg_wants_confirm()) {
+                    char nm[NAME_MAX];
+                    dlg_current_name(nm);
+                    if (!confirm_overwrite(nm))
+                        break;              /* No: seguir en el dialogo */
+                }
                 done = 1;
                 result = 1;
                 break;

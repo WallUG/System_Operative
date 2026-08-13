@@ -563,6 +563,20 @@ void syscall_handler(registers_t *regs)
         }
         break;
     }
+    case SYS_TOOLBAR: { /* ebx=id, ecx=on, edx=flat* (validado por PD) */
+        char flat[200];
+        if (regs->ecx && regs->edx) {
+            if (user_strcpy(flat, sizeof(flat), (const char *)regs->edx,
+                            pd) != 0) {
+                regs->eax = -1;
+                break;
+            }
+            regs->eax = wm_set_toolbar((int)regs->ebx, (int)regs->ecx, flat);
+        } else {
+            regs->eax = wm_set_toolbar((int)regs->ebx, (int)regs->ecx, 0);
+        }
+        break;
+    }
     default:
         break;
     }

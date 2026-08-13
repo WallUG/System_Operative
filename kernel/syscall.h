@@ -35,6 +35,8 @@
 #define SYS_FWRITE 27   /* ebx=nombre, ecx=buf, edx=len: sobrescribe    */
 #define SYS_FDELETE 28  /* ebx=nombre: elimina archivo                 */
 #define SYS_FLUSH  29   /* persiste superbloque+directorio al disco     */
+#define SYS_TOOLBAR 30  /* ebx=id, ecx=on, edx=flat*: barra herramientas */
+                        /* (Fase 20-B; igual que SYS_MENUBAR)           */
 
 void syscall_init(void);            /* registra el gate 0x80 (DPL=3) */
 void syscall_handler(registers_t *regs);

@@ -105,7 +105,12 @@ host emulation.
       bitmap_lba/data_start/fs_capacity; entradas con flags+parent;
       `mefs_format`; comandos shell `format`/`mkdir`/`cd`/`pwd`/`ls`;
       `tools/test_fase20a.py` 8/8 PASS)
-- [ ] Phase B — real comctl32 + GetSaveFileNameA confirmation
+- [x] Phase B — real comctl32 + GetSaveFileNameA confirmation
+      (GetSaveFileNameA pide confirmacion de sobrescritura: dialogo Si/No
+      en comdlg32 cuando el archivo existe; CreateToolbarEx real via
+      syscall SYS_TOOLBAR (30) que dibuja la barra de herramientas en el
+      kernel bajo el menu; `tools/test_fase20b.py` 3/3 PASS + screendump
+      toolbar)
 - [ ] Phase C — PE relocations
 - [ ] Phase D — font metrics / text measurement
 

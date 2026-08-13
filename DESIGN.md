@@ -534,9 +534,54 @@ validación) en la skill `.opencode/skills/win32-compat-roadmap/`.
 
 Progreso:
 - [x] Fase 20 (A) — MEFS bitmap + format + subdirectorios
-- [ ] Fase 20 (B) — comctl32 real + GetSaveFileNameA confirmación
+- [x] Fase 20 (B) — comctl32 real + GetSaveFileNameA confirmación
 - [ ] Fase 20 (C) — relocaciones PE
 - [ ] Fase 20 (D) — métricas de texto reales
+
+## Bitácora de la Fase 20 (B): comctl32 real + confirmación de sobrescritura
+
+### Objetivo
+
+Dos mejoras de compatibilidad: (1) que **`GetSaveFileNameA` pida confirmación
+de sobrescritura** cuando el archivo ya existe (hoy sobrescribe en silencio),
+y (2) que **`comctl32.CreateToolbarEx` dibuje una barra de herramientas real**
+(hoy era un stub que devolvía un handle fake).
+
+### Cambios
+
+- **`user/win32/comdlg32.c`** — diálogo modal `confirm_overwrite()` (Sí/No,
+  teclado y/o ratón) reutilizando las primitivas del diálogo (fillrect/
+  drawtext/cdlg_btn_t/btn_feed). Se activa en `dlg_run` (modo save) cuando
+  el nombre a guardar ya existe (`sys_fsize >= 0`): `dlg_wants_confirm()` y
+  `dlg_current_name()`. Si el usuario responde No, se **vuelve al diálogo**
+  (no se cierra ni se sobrescribe).
+- **`user/win32/comctl32.c`** — `CreateToolbarEx` construye un flat de
+  etiquetas (Nuevo/Abrir/Guardar/Cortar/Copiar/Pegar/Ayuda) y activa la
+  barra vía la syscall `SYS_TOOLBAR` (30). Devuelve un handle virtual.
+- **`kernel/winmgr.c/h`** — `win_t` con `has_toolbar`/`tb_n`/`tb_tx`;
+  `wm_set_toolbar(id, on, flat)` (igual que `wm_set_menu`); `wm_layout`
+  reserva `WM_TOOLBAR_H` (22) bajo el menú; `wm_draw_one` dibuja la franja
+  (C_MENU) y botones (C_FRAME + texto).
+- **`kernel/syscall.c/h`** — `SYS_TOOLBAR` (30), misma forma que
+  `SYS_MENUBAR` (ebx=id, ecx=on, edx=flat validado por PD).
+
+### Decisión de diseño
+
+La barra de herramientas se dibuja **en el kernel** (winmgr) igual que la
+barra de menú (Fase D), en vez de integrarla con el renderizado del buffer
+del cliente de user32: es el mismo mecanismo probado, de bajo riesgo, y el
+kernel ya conoce la geometría y el LFB. `CreateToolbarEx` (en comctl32) solo
+le pasa las etiquetas; metapad sigue funcionando con el handle no nulo.
+
+### Validación
+
+- QEMU headless (`tools/test_fase20b.py`): crear `abc`, metapad Guardar Como
+  con `abc` → Enter → **no** llama `CreateFileA` (la confirmación bloquea);
+  responder No tampoco crea. **3/3 PASS**.
+- Toolbar: screendump de metapad muestra la franja (C_MENU, ~24k px) y los
+  botones (C_FRAME, ~3.5k px) en las filas bajo el menú.
+- Regresión metapad: Ctrl+O abre, edición OK, Save As con nombre nuevo
+  guarda (CreateFileA) sin confirmación.
 
 ## Bitácora de la Fase 20 (A): MEFS v2 (bitmap + format + subdirectorios)
 

@@ -63,6 +63,9 @@ typedef struct {
     int      has_menu;            /* Fase D: barra de menu activa      */
     int      menu_n;              /* top-levels visibles               */
     char     menu_tx[8][24];
+    int      has_toolbar;         /* Fase 20-B: barra de herramientas  */
+    int      tb_n;                /* numero de botones                 */
+    char     tb_tx[12][12];       /* etiquetas de los botones           */
 } win_t;
 
 static win_t wins[WM_MAX_WINS];
@@ -234,10 +237,11 @@ static void wm_layout(win_t *w)
         w->ch = w->h;
     } else {
         w->cx = w->x + WM_FRAME;
-        w->cy = w->y + WM_TITLE_H + (w->has_menu ? WM_MENU_H : 0);
+        w->cy = w->y + WM_TITLE_H + (w->has_menu ? WM_MENU_H : 0) +
+                (w->has_toolbar ? WM_TOOLBAR_H : 0);
         w->cw = w->w - 2 * WM_FRAME;
         w->ch = w->h - WM_TITLE_H - (w->has_menu ? WM_MENU_H : 0) -
-                WM_FRAME;
+                (w->has_toolbar ? WM_TOOLBAR_H : 0) - WM_FRAME;
     }
 }
 
@@ -335,6 +339,36 @@ static void wm_draw_one(const win_t *w)
                         wm_text(x, w->y + WM_TITLE_H + 2,
                                 w->menu_tx[k], C_MENU_TX);
                     x += 8 * (int)wm_strlen(w->menu_tx[k]) + 16;
+                }
+            }
+        }
+        /* barra de herramientas (Fase 20-B): franja + botones de texto */
+        if (w->has_toolbar) {
+            int y0 = w->y + WM_TITLE_H + (w->has_menu ? WM_MENU_H : 0);
+            for (j = 0; j < WM_TOOLBAR_H; j++) {
+                int k;
+                for (k = w->x + WM_FRAME; k < w->x + w->w - WM_FRAME; k++)
+                    if (k >= 0 && k < VBE_SCREEN_W && y0 + j >= 0 &&
+                        y0 + j < VBE_SCREEN_H)
+                        lfb[(y0 + j) * VBE_SCREEN_W + k] =
+                            px_disp(C_MENU);
+            }
+            {
+                int x = w->x + WM_FRAME + 4;
+                for (int k = 0; k < w->tb_n && k < 12; k++) {
+                    int len = (int)wm_strlen(w->tb_tx[k]);
+                    int bw = len * 8 + 12;
+                    int bx = x, by = y0 + 2;
+                    int bj, bk;
+                    for (bj = 0; bj < 18; bj++)
+                        for (bk = bx; bk < bx + bw; bk++)
+                            if (bk >= 0 && bk < VBE_SCREEN_W &&
+                                by + bj >= 0 && by + bj < VBE_SCREEN_H)
+                                lfb[(by + bj) * VBE_SCREEN_W + bk] =
+                                    px_disp(C_FRAME);
+                    if (w->tb_tx[k][0])
+                        wm_text(bx + 6, by + 1, w->tb_tx[k], C_MENU_TX);
+                    x += bw + 6;
                 }
             }
         }
@@ -563,6 +597,37 @@ int wm_set_menu(int id, int on, const char *flat)
     }
     if (w->has_menu != on) {
         w->has_menu = on;
+        wm_layout(w);
+    }
+    wm_compose();
+    return 0;
+}
+
+int wm_set_toolbar(int id, int on, const char *flat)
+{
+    win_t *w = wm_find(id);
+    int i;
+
+    if (!w)
+        return -1;
+    w->tb_n = 0;
+    for (i = 0; i < 12; i++)
+        w->tb_tx[i][0] = 0;
+    if (on && flat) {
+        const char *p = flat;
+        while (*p && w->tb_n < 12) {
+            int j = 0;
+            while (*p && j < 11)
+                w->tb_tx[w->tb_n][j++] = *p++;
+            w->tb_tx[w->tb_n][j] = 0;
+            while (*p)
+                p++;
+            p++;                /* salta el NUL */
+            w->tb_n++;
+        }
+    }
+    if (w->has_toolbar != on) {
+        w->has_toolbar = on;
         wm_layout(w);
     }
     wm_compose();
