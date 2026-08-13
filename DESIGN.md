@@ -288,9 +288,11 @@ Para poder escribir texto (Fase A siguiente) `kernel/drivers/keyboard.c` deja de
 - **Fase A (edición real)** en QEMU (sendkey PS/2): teclado `hola<enter>mundo<backspace><enter>xyz` dibuja el texto en el cliente (diff vs editor vacío: 2673 px en la esquina superior izquierda, fondo blanco y letras negras); `HOME`/flechas mueven el caret (diff edit1→edit2: 30 px en la barra del caret/líneas de texto); backspace borra. Verificado también interactivamente (se escribe y borra dentro de metapad).
 - **Escalera 14/14 PASS** en disco (**floppy/HD raw**) y **CD (El Torito)**.
 
-### Pendientes (fases siguientes)
-
-- **E** — FS de escritura (MEFS read-only hoy) para Guardar de verdad.
+> **Nota (agrupamiento)**: las bitácoras que siguen (Fases A, B, C, D, E
+> sobre metapad) conforman **Fase 19** — el conjunto de capacidades de
+> metapad (edición, apertura, diálogo Abrir, menús, persistencia). El
+> roadmap siguiente (Fase 20) se documenta en la skill
+> `.opencode/skills/win32-compat-roadmap/` y se agrupa en cuatro fases A-D.
 
 ## Bitácora de la Fase B (abrir archivo por línea de comandos)
 
@@ -513,3 +515,25 @@ escritura con asignación de bloques, y las syscalls/APIs Win32 de escritura.
      al reinicio y `cat` los lee desde el disco.
 - **6/6 PASS** en disco. Nota: el disco de trabajo debe vivir en el **cwd del
   proceso** (el repo); QEMU no arrancó desde una ruta `/tmp/...`.
+
+## Fase 20: roadmap de compatibilidad Win32
+
+La Fase 19 (metapad A-E) está completa. La **Fase 20** agrupa el resto del
+roadmap en cuatro fases A-D. Detalle completo (12 items, archivos a tocar y
+validación) en la skill `.opencode/skills/win32-compat-roadmap/`.
+
+- **Fase 20 (A)**: migrar MEFS del allocator "bump" (`next_free_lba`) a un
+  **bitmap de bloques libres** + comando shell `format` (formatear un disco
+  para uso propio desde MyOS) + **subdirectorios** (para un explorador real).
+- **Fase 20 (B)**: **comctl32.dll real** (`InitCommonControls`, listviews/
+  toolbars) + **`GetSaveFileNameA` con confirmación de sobrescritura**.
+- **Fase 20 (C)**: **relocaciones PE (`.reloc`)** para que las DLLs Win32
+  carguen en direcciones variables (hoy fijas en 0xB0000000+, 1 MiB cada una).
+- **Fase 20 (D)**: **métricas de texto / fuentes reales** (`GetTextMetrics`,
+  `GetTextExtentPoint32`) y **blit por regiones**.
+
+Progreso:
+- [ ] Fase 20 (A) — MEFS bitmap + format + subdirectorios
+- [ ] Fase 20 (B) — comctl32 real + GetSaveFileNameA confirmación
+- [ ] Fase 20 (C) — relocaciones PE
+- [ ] Fase 20 (D) — métricas de texto reales

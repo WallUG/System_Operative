@@ -259,6 +259,14 @@ Todos los detalles, decisiones y bugs encontrados están en `DESIGN.md`.
   Validado en QEMU disco raw: metapad edita `hola` → menú File→Save As →
   Guardar → persiste tras reinicio; `writetest.exe` y shell `write` también
   persisten. **6/6 PASS en disco** (`tools/test_faseE.py`).
+- **Fase 19** = las Fases A-E sobre metapad (edición, abrir, diálogo Abrir,
+  menús, persistencia) como un conjunto; ver `DESIGN.md`.
+- **Fase 20 (en curso)** = roadmap de compatibilidad Win32 agrupado en 4
+  fases: **(A)** MEFS con bitmap de bloques + comando `format` +
+  subdirectorios; **(B)** comctl32 real (listview/toolbar) +
+  `GetSaveFileNameA` con confirmación; **(C)** relocaciones PE para DLLs en
+  dirección variable; **(D)** métricas de texto / fuentes reales. Detalle en
+  la skill `.opencode/skills/win32-compat-roadmap/`.
 - Roadmap tentativo: long mode (64 bits), **apps Windows GUI reales** (ver
   `docs/10-win32-gui-eval.md`: primero nuestro notepad mingw, luego un
   exe externo como Metapad), según el interés.
