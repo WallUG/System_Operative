@@ -247,7 +247,18 @@ Todos los detalles, decisiones y bugs encontrados están en `DESIGN.md`.
   ignora) y el popup se dibujaba con `lfb=NULL` (se inicializa en el modal).
   Validado en QEMU: Alt+F → File (18 items) persiste → ↓↓Enter → diálogo
   Abrir; Alt+E/Alt+H abren Edit/Help; 4/4 PASS en disco.
-- Roadmap tentativo: long mode (64 bits), ATA con escritura de archivos
-  (CreateFileA con GENERIC_WRITE), **apps Windows GUI reales** (ver
+- Fase E concluida: **persistencia real (escritura a disco)** — **Guardar /
+  Guardar Como de metapad escribe en el disco físico** y sobrevive al
+  reinicio. Se añadieron: `ata_write_sector` (comando ATA 0x30); un MEFS de
+  escritura con allocator "bump" (`next_free_lba` en el superbloque) y
+  `mefs_create/write/delete/flush`; syscalls `SYS_FCREATE`/`SYS_FWRITE`/
+  `SYS_FDELETE`/`SYS_FLUSH` (26-29); `CreateFileA(GENERIC_WRITE)` +
+  `WriteFile` + `SetEndOfFile` + `CloseHandle` reales en kernel32;
+  `GetSaveFileNameA` (diálogo Guardar Como) real en comdlg32; comandos de
+  shell `touch/write/rm/flush`; teclas F1-F12 mapeadas. `FS_SECTORS` 1130→1400.
+  Validado en QEMU disco raw: metapad edita `hola` → menú File→Save As →
+  Guardar → persiste tras reinicio; `writetest.exe` y shell `write` también
+  persisten. **6/6 PASS en disco** (`tools/test_faseE.py`).
+- Roadmap tentativo: long mode (64 bits), **apps Windows GUI reales** (ver
   `docs/10-win32-gui-eval.md`: primero nuestro notepad mingw, luego un
   exe externo como Metapad), según el interés.

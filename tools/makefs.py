@@ -48,6 +48,9 @@ def build(files, out):
     sb = MAGIC + struct.pack(
         "<III", len(entries), LBA_FS_START + 1, len(dir_bytes)
     )
+    # Fase E: next_free_lba = primer sector libre tras los datos (offs. 20)
+    next_free = lba            # `lba` ya apunta al primer sector libre
+    sb = sb + struct.pack("<I", next_free)
     sb = sb.ljust(512, b"\0")
 
     data = b""

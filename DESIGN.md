@@ -446,3 +446,70 @@ interactuaba.
   `Alt+E` y `Alt+H` abren Edit y Help. Clic con ratón en la franja de menú
   también despliega.
 - **4/4 PASS** en disco.
+
+## Bitácora de la Fase E (persistencia real: Guardar con escritura a disco)
+
+### Objetivo y alcance
+
+Que **Guardar / Guardar Como de metapad** y la escritura de archivos desde la
+capa Win32 **persistan en el disco físico** y sobrevivan al reinicio de QEMU.
+Esto requiere tres piezas que antes no existían: escritura ATA, un MEFS de
+escritura con asignación de bloques, y las syscalls/APIs Win32 de escritura.
+
+### Cambios
+
+- **`kernel/drivers/ata.c`**: `ata_write_sector()` (comando ATA `0x30` WRITE
+  SECTORS, LBA28, polling con `ata_wait_drq` para el preámbulo y
+  `ata_wait_ready` para el comando); se extrajo el preámbulo común en
+  `ata_select()`. `ata.h` declara el nuevo prototipo.
+- **`kernel/fs/mefs.c/h`**: el superbloque persiste ahora `next_free_lba`
+  (offset `MEFS_SB_FREE` = 20), un **allocator "bump"** que asigna sectores
+  libres a archivos nuevos/crecidos. Nuevas funciones: `mefs_create`,
+  `mefs_write` (reasigna y sobrescribe), `mefs_delete`, `mefs_flush`
+  (vuelca superbloque+directorio al disco) y `mefs_writable` (1 solo en modo
+  ATA; en CD la imagen RAM es ROM y no persiste). `fs_write_sector`
+  despacha a `ata_write_sector` en disco.
+- **`tools/makefs.py`**: escribe `next_free_lba` en el superbloque = primer
+  sector libre tras los datos al construir la imagen.
+- **`kernel/syscall.c/h`**: nuevas syscalls `SYS_FCREATE` (26),
+  `SYS_FWRITE` (27), `SYS_FDELETE` (28), `SYS_FLUSH` (29), con copia segura
+  de buffers de usuario (`user_memcpy_in`).
+- **`kernel/shell.c`**: comandos `touch`, `write`, `rm`, `flush` para
+  probar la escritura desde la shell.
+- **`kernel/drivers/keyboard.c`**: se mapean **F1–F12** a sus `VK` reales
+  (0x70–0x7B) para que los aceleradores de función se reconozcan.
+- **`user/win32/kernel32.c`**: `CreateFileA` maneja `GENERIC_WRITE`
+  (0x40000000) y las disposiciones de creación (crea si no existe); tabla de
+  archivos ampliada con `writable`/`wlen`/`wbuf`; `WriteFile` acumula en un
+  buffer compartido de 64 KB; `CloseHandle`/`SetEndOfFile` hacen
+  `sys_fwrite` + `sys_flush` para persistir. Nuevos wrappers
+  `sys_fcreate/sys_fwrite/sys_fdelete/sys_flush`.
+- **`user/win32/comdlg32.c`**: `GetSaveFileNameA` real reutilizando el
+  diálogo (refactor `dlg_run(ofn, is_save)`) con título/botón "Guardar" y
+  aceptación de nombres nuevos (Guardar Como).
+- **`Makefile`**: `FS_SECTORS` 1130 → **1400** (el FS base llegaba a 1208
+  relativo y se truncaba con 29 archivos); `writetest.exe` añadido a
+  `WIN_APPS`; `boot.asm` y `pmm.c` sincronizados (reserva RAM CD hasta
+  0x1EF000). `tools/test_faseE.py` añadido.
+
+### Decisiones de bajo nivel
+
+- **Allocator bump vs bitmap**: `next_free_lba` avanzando es suficiente para
+  archivos pequeños (los de metapad); evita la complejidad de un bitmap de
+  bloques. Coste: reasigna todo el archivo en cada `mefs_write` (sin
+  fragmentación, no compacta).
+- **Flush en `CloseHandle`/`SetEndOfFile`**: la escritura se persigue al
+  disco al cerrar el handle, no en cada `WriteFile`, porque metapad acumula
+  el texto en un buffer y lo vuelca en una sola llamada.
+
+### Validación
+
+- QEMU headless (tools/test_faseE.py, disco raw en el repo):
+  1. shell `write nuevo.txt` + `flush` crea y persiste `nuevo.txt`.
+  2. `writetest.exe` (CreateFileA GENERIC_WRITE + WriteFile) crea `saved.txt`.
+  3. metapad: editar `hola` → `Alt+F` → `↓×4` → Enter (Save As) →
+     `GetSaveFileNameA` → escribir nombre → Enter → `CreateFileA` → persistir.
+  4. Los tres archivos (`nuevo.txt`, `saved.txt`, el de metapad) sobreviven
+     al reinicio y `cat` los lee desde el disco.
+- **6/6 PASS** en disco. Nota: el disco de trabajo debe vivir en el **cwd del
+  proceso** (el repo); QEMU no arrancó desde una ruta `/tmp/...`.

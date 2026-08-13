@@ -50,6 +50,20 @@ static volatile int kbd_caps = 0;   /* bloqueo de mayusculas */
 #define VK_SPECIAL_PGDN   0x107
 #define VK_SPECIAL_DEL    0x108
 #define VK_SPECIAL_INS    0x109
+/* Teclas de funcion: se entregan con su VK de Windows real (0x70..0x7B)
+ * para que los aceleradores (Ctrl+F2 = Save As) los reconozcan. */
+#define VK_F1  0x70
+#define VK_F2  0x71
+#define VK_F3  0x72
+#define VK_F4  0x73
+#define VK_F5  0x74
+#define VK_F6  0x75
+#define VK_F7  0x76
+#define VK_F8  0x77
+#define VK_F9  0x78
+#define VK_F10 0x79
+#define VK_F11 0x7A
+#define VK_F12 0x7B
 
 /* Scancode set 1 (US QWERTY), tecla base sin shift. 0 = sin caracter. */
 static const char scancode_table[128] = {
@@ -212,6 +226,18 @@ void keyboard_irq(void)
         case 0x51: special = VK_SPECIAL_PGDN; break;
         case 0x53: special = VK_SPECIAL_DEL; break;
         case 0x52: special = VK_SPECIAL_INS; break;
+        case 0x3B: special = VK_F1; break;
+        case 0x3C: special = VK_F2; break;
+        case 0x3D: special = VK_F3; break;
+        case 0x3E: special = VK_F4; break;
+        case 0x3F: special = VK_F5; break;
+        case 0x40: special = VK_F6; break;
+        case 0x41: special = VK_F7; break;
+        case 0x42: special = VK_F8; break;
+        case 0x43: special = VK_F9; break;
+        case 0x44: special = VK_F10; break;
+        case 0x57: special = VK_F11; break;
+        case 0x58: special = VK_F12; break;
         default: break;
         }
         if (special >= 0) {

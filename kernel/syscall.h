@@ -31,6 +31,10 @@
 #define SYS_EXEBASE 24  /* base ImageBase del PE actual (0 si ELF)     */
 #define SYS_MENUBAR 25  /* ebx=id, ecx=on, edx=flat*: barra de menu    */
                         /* (Fase D; flat = labels top-level NUL-sep)   */
+#define SYS_FCREATE 26  /* ebx=nombre: crea archivo vacio (Fase E)     */
+#define SYS_FWRITE 27   /* ebx=nombre, ecx=buf, edx=len: sobrescribe    */
+#define SYS_FDELETE 28  /* ebx=nombre: elimina archivo                 */
+#define SYS_FLUSH  29   /* persiste superbloque+directorio al disco     */
 
 void syscall_init(void);            /* registra el gate 0x80 (DPL=3) */
 void syscall_handler(registers_t *regs);

@@ -359,6 +359,49 @@ void syscall_handler(registers_t *regs)
         kfree(tmp);
         break;
     }
+    case SYS_FCREATE: { /* ebx=nombre: crea archivo vacio */
+        char name[32];
+        if (user_strcpy(name, sizeof(name), (const char *)regs->ebx, pd) != 0)
+            regs->eax = -1;
+        else
+            regs->eax = (int32_t)mefs_create(name);
+        break;
+    }
+    case SYS_FWRITE: { /* ebx=nombre, ecx=buf, edx=len: sobrescribe */
+        char name[32];
+        void *tmp;
+        uint32_t len = regs->edx;
+        if (user_strcpy(name, sizeof(name), (const char *)regs->ebx, pd) != 0
+            || len > 0x100000) {
+            regs->eax = -1;
+            break;
+        }
+        tmp = kmalloc(len ? len : 1);
+        if (tmp == NULL) {
+            regs->eax = -1;
+            break;
+        }
+        if (user_memcpy_in(tmp, (const void *)regs->ecx, len, pd) != 0) {
+            kfree(tmp);
+            regs->eax = -1;
+            break;
+        }
+        regs->eax = (int32_t)mefs_write(name, tmp, len);
+        kfree(tmp);
+        break;
+    }
+    case SYS_FDELETE: { /* ebx=nombre: elimina archivo */
+        char name[32];
+        if (user_strcpy(name, sizeof(name), (const char *)regs->ebx, pd) != 0)
+            regs->eax = -1;
+        else
+            regs->eax = (int32_t)mefs_delete(name);
+        break;
+    }
+    case SYS_FLUSH: { /* persiste superbloque + directorio al disco */
+        regs->eax = (int32_t)mefs_flush();
+        break;
+    }
     case SYS_DLIST: { /* ebx=idx dir, ecx=name[16], edx=&size: entrada
                        * del directorio (FindFirstFile/FindNextFile) */
         uint32_t idx = regs->ebx;

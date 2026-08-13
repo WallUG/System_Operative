@@ -30,7 +30,7 @@
 KERNEL_LOAD_SEG  equ 0x1000        ; segmento:0x1000 -> fisica 0x10000
 KERNEL_OFFSET    equ 0x0000
 KERNEL_SECTORS   equ 128           ; 128 sectores = 64 KB (kernel pad)
-FS_SECTORS       equ 1130          ; fs.bin rellenado a 1130 sectores (Makefile)
+FS_SECTORS       equ 1400          ; fs.bin rellenado a 1400 sectores (Makefile)
 CODE_SEG         equ gdt_code - gdt_start
 DATA_SEG         equ gdt_data - gdt_start
 MMAP_ADDR        equ 0x7E00        ; buffer E820: dword contador + entradas de 20 B

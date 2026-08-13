@@ -8,4 +8,8 @@
  * Devuelve 0 en exito, -1 en error/timeout. */
 int ata_read_sector(uint32_t lba, uint8_t *buffer);
 
+/* Escribe 1 sector (512 B) al canal primario (maestro).
+ * Devuelve 0 en exito, -1 en error/timeout. */
+int ata_write_sector(uint32_t lba, const uint8_t *buffer);
+
 #endif

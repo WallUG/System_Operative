@@ -402,7 +402,7 @@ static void find_prefix(void)
     }
 }
 
-uint32_t GetOpenFileNameA(const void *ofn)
+static uint32_t dlg_run(const void *ofn, int is_save)
 {
     uint32_t info[4];
     uint32_t ev[5];
@@ -412,6 +412,7 @@ uint32_t GetOpenFileNameA(const void *ofn)
     uint32_t out_n = 0;
     cdlg_btn_t btn_open, btn_cancel;
     int done = 0, result = 0;
+    const char *ok_label = is_save ? "Guardar" : "Abrir";
 
     if (ofn == 0)
         return 0;
@@ -426,7 +427,7 @@ uint32_t GetOpenFileNameA(const void *ofn)
     parse_filter(*(const char **)((const char *)ofn + OFN_LPSTRFILTER),
                  *(uint32_t *)((const char *)ofn + OFN_NFILTERINDEX));
     load_list();
-    if (file_count == 0) {
+    if (file_count == 0 && !is_save) {
         out[0] = 0;
         return 0;
     }
@@ -462,13 +463,16 @@ uint32_t GetOpenFileNameA(const void *ofn)
     dl_x = ((int)scr_w - DIALOG_W) / 2;
     dl_y = ((int)scr_h - DIALOG_H) / 2;
 
-    dlg_write("[cdlg] GetOpenFileNameA dialog\n", 31);
+    if (is_save)
+        dlg_write("[cdlg] GetSaveFileNameA dialog\n", 30);
+    else
+        dlg_write("[cdlg] GetOpenFileNameA dialog\n", 31);
 
     btn_open.x = dl_x + DIALOG_W / 2 - 165;
     btn_open.y = dl_y + DIALOG_H - 56;
     btn_open.w = 70;
     btn_open.h = 24;
-    btn_open.label = "Abrir";
+    btn_open.label = (char *)ok_label;
     btn_open.hovered = 0;
     btn_open.pressed = 0;
     btn_cancel = btn_open;
@@ -588,22 +592,27 @@ uint32_t GetOpenFileNameA(const void *ofn)
         const char *src;
         uint32_t k = 0;
         if (fname_len > 0) {
-            /* prefijo tipeado: completar con el archivo que matchea
-             * (find_prefix ya movio sel al primer match) */
-            int i, m = 0;
-            for (i = 0; i < file_count; i++) {
-                int j = 0;
-                while (j < fname_len &&
-                       low8(files[i].name[j]) == low8(fname[j]))
-                    j++;
-                if (j == fname_len) {
-                    m = 1;
-                    break;
+            if (is_save) {
+                /* Guardar: usa el nombre tipeado tal cual (puede ser
+                 * nuevo). Si es exacto a uno existente, se sobrescribe. */
+                src = fname;
+            } else {
+                /* Abrir: completar con el archivo que matchea */
+                int i, m = 0;
+                for (i = 0; i < file_count; i++) {
+                    int j = 0;
+                    while (j < fname_len &&
+                           low8(files[i].name[j]) == low8(fname[j]))
+                        j++;
+                    if (j == fname_len) {
+                        m = 1;
+                        break;
+                    }
                 }
+                src = m ? files[sel].name : fname;
             }
-            src = m ? files[sel].name : fname;
         } else {
-            src = files[sel].name;
+            src = (file_count > 0) ? files[sel].name : fname;
         }
         while (src[k] && k < out_n - 1) {
             out[k] = src[k];
@@ -617,10 +626,14 @@ uint32_t GetOpenFileNameA(const void *ofn)
     return (uint32_t)result;
 }
 
+uint32_t GetOpenFileNameA(const void *ofn)
+{
+    return dlg_run(ofn, 0);
+}
+
 uint32_t GetSaveFileNameA(const void *ofn)
 {
-    (void)ofn;
-    return 0;
+    return dlg_run(ofn, 1);
 }
 
 /* FindTextA/ReplaceTextA devuelven HWND del dialogo modelo (0 = no

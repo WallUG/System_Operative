@@ -20,6 +20,10 @@
 #define MEFS_MAX_FILES  32
 #define MEFS_FS_START   129         /* LBA donde empieza el FS (tras boot + kernel) */
 
+/* Desplazamiento dentro del superbloque del campo "next_free_lba" (Fase E:
+ * siguiente sector libre para asignar a archivos nuevos/crecidos). */
+#define MEFS_SB_FREE    20
+
 typedef struct {
     char     name[MEFS_NAME_LEN];
     uint32_t size;
@@ -46,5 +50,23 @@ int  mefs_read_off(const char *name, uint8_t *buffer, uint32_t off,
                    uint32_t max);
 /* Entrada i-esima del directorio: nombre (hasta 16) + tamano; -1 si no. */
 int  mefs_dir_get(uint32_t i, char *name, uint32_t *size);
+
+/* --- escritura (Fase E) ---
+ * El directorio y el superbloque se cachean en RAM; mefs_flush() los
+ * vuelca al disco (modo ATA). next_free_lba se persiste en el superbloque. */
+
+/* Crea un archivo nuevo (nombre <= 15, no existe). Devuelve 0 o -1.
+ * Aun no reserva sectores; se asignan en la primera mefs_write. */
+int  mefs_create(const char *name);
+/* Escribe 'len' bytes en 'name'. Si el archivo existe lo sobrescribe
+ * (reasigna sectores y actualiza size). Devuelve 0 o -1. */
+int  mefs_write(const char *name, const uint8_t *buf, uint32_t len);
+/* Elimina el archivo (libera su nombre). Devuelve 0 o -1. */
+int  mefs_delete(const char *name);
+/* Vuelca superbloque (con next_free_lba) + directorio al disco. En modo
+ * CD (imagen RAM) no hace nada. Devuelve 0 o -1. */
+int  mefs_flush(void);
+/* Devuelve 1 si el FS soporta escritura persistente (modo ATA). */
+int  mefs_writable(void);
 
 #endif

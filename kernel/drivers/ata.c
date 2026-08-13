@@ -19,6 +19,7 @@
 
 #define ATA_DRV_MASTER 0xE0
 #define ATA_CMD_READ   0x20      /* READ SECTORS (LBA28) */
+#define ATA_CMD_WRITE  0x30      /* WRITE SECTORS (LBA28) */
 
 /* Espera hasta 4 s; devuelve 0 cuando hay datos listos (DRQ=1, sin ERR).
  * Registro de status: bit7 BSY, bit6 DRDY, bit5 DF, bit3 DRQ, bit0 ERR. */
@@ -38,13 +39,36 @@ static int ata_wait_drq(void)
     return -1;
 }
 
-int ata_read_sector(uint32_t lba, uint8_t *buffer)
+/* Espera hasta 4 s a que el dispositivo quede listo (BSY=0 y DRQ=0 tras
+ * un comando de escritura); devuelve 0 en exito, -1 en error. */
+static int ata_wait_ready(void)
+{
+    for (uint32_t tries = 0; tries < 4000000; tries++) {
+        uint8_t st = inb(ATA_STATUS);
+        if (st & 0x80)                  /* BSY: aun ocupado */
+            continue;
+        if (st & 0x01)                  /* ERR */
+            return -1;
+        if (tries % 100000 == 0)
+            io_wait();
+    }
+    return 0;
+}
+
+/* Envia el seleccion de LBA + numero de sectores (preambulo comun de
+ * lectura y escritura). */
+static void ata_select(uint32_t lba)
 {
     outb(ATA_DRIVE_SEL, ATA_DRV_MASTER | ((lba >> 24) & 0x0F));
     outb(ATA_SECTOR_CNT, 1);
     outb(ATA_LBA_LO, (uint8_t)(lba & 0xFF));
     outb(ATA_LBA_MID, (uint8_t)((lba >> 8) & 0xFF));
     outb(ATA_LBA_HI, (uint8_t)((lba >> 16) & 0xFF));
+}
+
+int ata_read_sector(uint32_t lba, uint8_t *buffer)
+{
+    ata_select(lba);
     outb(ATA_CMD, ATA_CMD_READ);
 
     if (ata_wait_drq() != 0)
@@ -56,4 +80,20 @@ int ata_read_sector(uint32_t lba, uint8_t *buffer)
         buffer[i * 2 + 1] = (uint8_t)(w >> 8);
     }
     return 0;
+}
+
+int ata_write_sector(uint32_t lba, const uint8_t *buffer)
+{
+    ata_select(lba);
+    outb(ATA_CMD, ATA_CMD_WRITE);
+
+    if (ata_wait_drq() != 0)
+        return -1;
+
+    for (int i = 0; i < 256; i++) {
+        uint16_t w = (uint16_t)buffer[i * 2] |
+                     ((uint16_t)buffer[i * 2 + 1] << 8);
+        outw(ATA_DATA, w);
+    }
+    return ata_wait_ready();
 }

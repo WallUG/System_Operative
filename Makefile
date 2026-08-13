@@ -7,7 +7,7 @@ LD        = ld
 OBJCOPY   = objcopy
 QEMU      = qemu-system-i386
 KERNEL_SECTORS = 128            # tamano de kernel en sectores (1 = 512 bytes)
-FS_SECTORS     = 1130           # fs.bin rellenado a 1130 sectores (FS real ~1105 con comdlg32 Fase C; boot.asm usa el mismo valor)
+FS_SECTORS     = 1400           # fs.bin rellenado a 1400 sectores (FS real ~1208 + margen Fase E para escrituras; boot.asm usa el mismo valor)
 
 BUILD     = build
 CFLAGS    = -m32 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
@@ -122,6 +122,8 @@ WIN_APPS  += $(BUILD)/user/win32/messagebox.exe
 # El binario se llama gdidemo.exe (sin '_': el driver PS/2 de MyOS no
 # mapea shift+'-' a '_').
 WIN_APPS  += $(BUILD)/user/win32/gdidemo.exe
+# writetest.exe: escritura Win32 (CreateFileA WRITE + WriteFile), Fase E.
+WIN_APPS  += $(BUILD)/user/win32/writetest.exe
 
 $(BUILD)/user/win32/%.exe: user/win32/%.c
 	@mkdir -p $(dir $@)

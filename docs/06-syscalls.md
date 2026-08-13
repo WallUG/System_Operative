@@ -52,6 +52,14 @@ Todo puntero de ring 3 se copia por página contra el PD del que llama:
 | 23 | `SYS_WINTITLE` | `ebx=id, ecx=title*` | Cambia el título de la barra |
 | 24 | `SYS_EXEBASE` | — | Base `ImageBase` del PE actual (0 si ELF) |
 | 25 | `SYS_MENUBAR` | `ebx=id, ecx=on, edx=flat*` | Activa la barra de menú (Fase D): `flat` = labels top-level NUL-separados |
+| 26 | `SYS_FCREATE` | `ebx=nombre` | Crea un archivo vacío (Fase E) |
+| 27 | `SYS_FWRITE` | `ebx=nombre, ecx=buf, edx=len` | Sobrescribe un archivo |
+| 28 | `SYS_FDELETE` | `ebx=nombre` | Elimina un archivo |
+| 29 | `SYS_FLUSH` | — | Persiste superbloque + directorio al disco |
+
+Las syscalls 26-29 (Fase E) solo tienen efecto en modo **disco ATA**
+(`mefs_writable()`); en CD/RAM devuelven -1 o no-op. Copian los buffers de
+usuario con `user_memcpy_in` antes de tocar el FS.
 
 ## SYS_EVENT y el enrutado por PD (Fases 14-17)
 

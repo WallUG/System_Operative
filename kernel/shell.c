@@ -93,6 +93,10 @@ void shell_loop(void)
             kprint("  echo <txt> repite el texto\n");
             kprint("  ver <f>    muestra <f> como hex+ascii\n");
             kprint("  run <f>    ejecuta el binario de usuario <f>\n");
+            kprint("  touch <f>  crea un archivo vacio (Fase E)\n");
+            kprint("  write <f>  escribe 'hola desde MyOS!' en <f>\n");
+            kprint("  rm <f>     elimina el archivo <f>\n");
+            kprint("  flush      persiste el FS al disco (Fase E)\n");
             kprint("  pf         provoca un #PF intencional\n");
         } else if (strcmp(line, "ls") == 0) {
             int n = mefs_file_count();
@@ -121,6 +125,30 @@ void shell_loop(void)
             }
         } else if (strncmp(line, "echo ", 5) == 0) {
             echo_line(line + 5);
+        } else if (strncmp(line, "touch ", 6) == 0) {
+            if (mefs_create(line + 6) != 0)
+                kprint("no se pudo crear\n");
+            else
+                kprint("creado\n");
+        } else if (strncmp(line, "write ", 6) == 0) {
+            static const char msg[] = "hola desde MyOS!\n";
+            if (mefs_size(line + 6) < 0)
+                mefs_create(line + 6);
+            if (mefs_write(line + 6, (const uint8_t *)msg,
+                           (uint32_t)(sizeof(msg) - 1)) != 0)
+                kprint("no se pudo escribir\n");
+            else
+                kprint("escrito\n");
+        } else if (strncmp(line, "rm ", 3) == 0) {
+            if (mefs_delete(line + 3) != 0)
+                kprint("no se pudo eliminar\n");
+            else
+                kprint("eliminado\n");
+        } else if (strcmp(line, "flush") == 0) {
+            if (mefs_flush() != 0)
+                kprint("no se pudo flushear\n");
+            else
+                kprint("FS flusheado al disco\n");
         } else if (strncmp(line, "ver ", 4) == 0) {
             static uint8_t buf[512];
             int n = mefs_read(line + 4, buf, sizeof(buf));

@@ -24,8 +24,35 @@
 #define SYS_DREAD  12
 #define SYS_DLIST  13
 #define SYS_SELFNAME 14
+#define SYS_FCREATE 26
+#define SYS_FWRITE  27
+#define SYS_FDELETE 28
+#define SYS_FLUSH   29
 
 #define INVALID_HANDLE_VALUE ((uint32_t)-1)
+
+/* --- tabla de archivos abiertos (Fase E: escritura) --- */
+
+struct win32_file_s {
+    char     name[40];
+    uint32_t size;
+    uint32_t pos;
+    uint32_t writable;      /* abierto para GENERIC_WRITE (Fase E) */
+    uint32_t wlen;          /* bytes acumulados en wbuf               */
+    uint8_t *wbuf;          /* buffer de escritura (apunta a wbuf_global) */
+};
+
+static struct win32_file_s open_files[16];
+static uint8_t wbuf_global[65536];   /* buffer compartido de escritura */
+
+/* handle -> puntero a la entrada abierta (o NULL) */
+static struct win32_file_s *win32_file_of(uint32_t h)
+{
+    int i = (int)h - 0x100;
+    if (i < 0 || i >= 16 || open_files[i].name[0] == 0)
+        return 0;
+    return &open_files[i];
+}
 
 /* --- util --- */
 
@@ -109,8 +136,24 @@ uint32_t WriteFile(uint32_t h, const void *buf, uint32_t n,
                    uint32_t *written)
 {
     int r;
-    if (h != STD_OUTPUT_HANDLE)
-        return 0;
+    /* Fase E: handle de archivo abierto para escritura -> acumular en
+     * wbuf; el contenido se escribe al FS en CloseHandle (o SetEndOfFile). */
+    if (h != STD_OUTPUT_HANDLE) {
+        struct win32_file_s *f = win32_file_of((uint32_t)h);
+        if (f == 0 || !f->writable)
+            return 0;
+        if (f->wlen + n > 65536)
+            n = 65536 - f->wlen;
+        {
+            uint32_t k;
+            for (k = 0; k < n; k++)
+                f->wbuf[f->wlen + k] = ((const uint8_t *)buf)[k];
+        }
+        f->wlen += n;
+        if (written)
+            *written = n;
+        return 1;
+    }
     r = sys_write((const char *)buf, n);
     if (written)
         *written = (uint32_t)(r > 0 ? r : 0);
@@ -502,14 +545,6 @@ void GetStartupInfo(void *si)
  * nombre del archivo y la posicion de lectura, el kernel lee de RAM
  * (solo lectura). EL archivo se abre con CreateFileA -> pos=0. */
 
-typedef struct {
-    char     name[40];
-    uint32_t size;
-    uint32_t pos;
-} win32_file_t;
-
-static win32_file_t open_files[16];
-
 static int sys_fsize(const char *name)
 {
     int r;
@@ -538,22 +573,65 @@ static int sys_dlist(uint32_t idx, char *name, uint32_t *size)
     return r;
 }
 
+static int sys_fcreate(const char *name)
+{
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_FCREATE), "b"(name)
+                     : "memory");
+    return r;
+}
+
+static int sys_fwrite(const char *name, const void *buf, uint32_t len)
+{
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_FWRITE), "b"(name), "c"(buf), "d"(len)
+                     : "memory");
+    return r;
+}
+
+static int sys_fdelete(const char *name)
+{
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_FDELETE), "b"(name)
+                     : "memory");
+    return r;
+}
+
+static int sys_flush(void)
+{
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_FLUSH)
+                     : "memory");
+    return r;
+}
+
 /* Abre un archivo del FS. Devuelve HANDLE (0x100+slot) o -1. */
 void *CreateFileA(const char *name, uint32_t access, uint32_t share,
                   uint32_t sec_attrs, uint32_t creation, uint32_t flags,
                   uint32_t tmpl)
 {
-    int i, sz;
-    (void)access; (void)share; (void)sec_attrs; (void)creation;
-    (void)flags; (void)tmpl;
+    int i, sz, writable;
+    (void)share; (void)sec_attrs; (void)flags; (void)tmpl;
     if (name == 0)
         return (void *)INVALID_HANDLE_VALUE;
     trace("[k32] CreateFileA '");
     trace(name);
     trace("'\n");
+    /* GENERIC_WRITE = 0x40000000 (Fase E: Guardar). */
+    writable = (access & 0x40000000u) != 0;
     sz = sys_fsize(name);
-    if (sz < 0)
-        return (void *)INVALID_HANDLE_VALUE;
+    if (sz < 0) {
+        /* no existe: solo se crea si la disposicion lo pide */
+        if (!writable || creation == 3 /*OPEN_EXISTING*/)
+            return (void *)INVALID_HANDLE_VALUE;
+        if (sys_fcreate(name) != 0)
+            return (void *)INVALID_HANDLE_VALUE;
+        sz = 0;
+    }
     for (i = 0; i < 16; i++)
         if (open_files[i].name[0] == 0)
             break;
@@ -569,6 +647,9 @@ void *CreateFileA(const char *name, uint32_t access, uint32_t share,
     }
     open_files[i].size = (uint32_t)sz;
     open_files[i].pos  = 0;
+    open_files[i].writable = (uint32_t)writable;
+    open_files[i].wlen = 0;
+    open_files[i].wbuf = (writable) ? wbuf_global : 0;
     return (void *)(uint32_t)(0x100 + i);
 }
 
@@ -605,8 +686,20 @@ uint32_t GetFileSize(void *h, uint32_t *high)
 uint32_t CloseHandle(void *h)
 {
     int i = (uint32_t)h - 0x100;
-    if (i >= 0 && i < 16)
+    if (i >= 0 && i < 16) {
+        /* Fase E: si se escribio, persistir al FS + flush al disco */
+        if (open_files[i].writable && open_files[i].name[0]) {
+            if (open_files[i].wlen > 0)
+                sys_fwrite(open_files[i].name, open_files[i].wbuf,
+                           open_files[i].wlen);
+            else if (open_files[i].wlen == 0)
+                sys_fwrite(open_files[i].name, (const void *)"", 0);
+            sys_flush();
+        }
         open_files[i].name[0] = 0;
+        open_files[i].writable = 0;
+        open_files[i].wlen = 0;
+    }
     return 1;
 }
 
@@ -890,8 +983,12 @@ uint32_t SetFilePointer(void *h, int32_t dist_low, int32_t *dist_high,
 uint32_t SetEndOfFile(void *h)
 {
     int i = (uint32_t)h - 0x100;
-    (void)i;
-    return 1;                   /* FS readonly: fija el tam actual */
+    if (i >= 0 && i < 16 && open_files[i].writable && open_files[i].name[0]) {
+        sys_fwrite(open_files[i].name, open_files[i].wbuf,
+                   open_files[i].wlen);
+        sys_flush();
+    }
+    return 1;
 }
 
 uint32_t GetFullPathNameA(const char *name, uint32_t n, char *buf,
