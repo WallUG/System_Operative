@@ -254,7 +254,7 @@ La meta de la Fase 18 fue que **`metapad.exe` real (3.6, mingw-w64) cargara y ej
 ### Modulos nuevos
 
 - **comctl32.dll** (0xB5000000): `InitCommonControls` (exportada por **ordinal 8**, como la importa metapad) y `InitCommonControlsEx` (ordinal 17) sin efectos; `CreateToolbarEx` → **handle fake 0x200** (metapad solo comprueba que no sea NULL para habilitar la barra; no hay toolbar real); `PropertySheetA` → 0 (el diálogo de propiedades no abre).
-- **comdlg32.dll** (0xB6000000): `GetOpenFileNameA`/`GetSaveFileNameA`/`FindTextA`/`ReplaceTextA`/`ChooseFontA`/`ChooseColorA`/`PrintDlgA`/`PageSetupDlgA` → **0 (FALSE, stubs de la Fase 18)**. Se reemplazan en las Fases C/D (diálogo Abrir real sobre MEFS, menús por WM_COMMAND).
+- **comdlg32.dll** (0xB6000000): `GetOpenFileNameA` **real (Fase C)** — diálogo Abrir sobre la lista MEFS (SYS_DLIST) con filtro `lpstrFilter`+`nFilterIndex`, campo de nombre con prefijo, navegación por teclado y botones; `GetSaveFileNameA`/`FindTextA`/`ReplaceTextA`/`ChooseFontA`/`ChooseColorA`/`PrintDlgA`/`PageSetupDlgA` → **0 (FALSE, stubs de la Fase 18)**. Se reemplazan en las Fases D (Guardar/Find, menús por WM_COMMAND).
 - **advapi32.dll** (0xB7000000): `RegCreateKeyExA`/`RegOpenKeyExA`/`RegQueryValueExA`/`RegSetValueExA`/`RegCloseKey` (en memoria, backend trivial por ahora) e `IsTextUnicode`.
 - **shell32.dll** (0xB8000000): `ShellExecuteA`, `DragQueryFileA`/`DragFinish`.
 
@@ -288,7 +288,6 @@ Para poder escribir texto (Fase A siguiente) `kernel/drivers/keyboard.c` deja de
 
 ### Pendientes (fases siguientes)
 
-- **C** — diálogo Abrir real (`GetOpenFileNameA` sobre lista MEFS con `FindFirstFileA/FindNextFileA`).
 - **D** — menús/WM_COMMAND + `TrackPopupMenuEx` visible.
 - **E** — FS de escritura (MEFS read-only hoy) para Guardar de verdad.
 
@@ -345,3 +344,52 @@ BOM de 3 bytes) y `ReadFile`; el contenido llega al RichEdit por
   <enter>xyz`, HOME y flechas siguen funcionando (1320 px de texto, caret
   se mueve: diff edit1→edit2 de 30 px).
 - **Escalera 14/14 PASS** en disco y CD (sin regresión).
+
+## Bitácora de la Fase C (diálogo Abrir real: GetOpenFileNameA)
+
+### Objetivo y alcance
+
+`Ctrl+O` en metapad (acelerador id 104 → WM_COMMAND 40003 = 0x9c43) debe abrir
+un diálogo Abrir real: ventana propia sobre el LFB con la **lista de archivos
+del MEFS** (syscall `SYS_DLIST` desde el módulo, sin pasar por kernel32),
+filtro por extensiones del `OPENFILENAME.lpstrFilter` + `nFilterIndex`,
+campo de nombre con autocompletado por prefijo, navegación por teclado
+(flechas/PgUp/PgDn/Home/End, tipeo, Enter=Abrir, Esc=Cancelar), clic sobre
+una fila y botones Abrir/Cancelar. Al confirmar copia el nombre en
+`ofn.lpstrFile` y devuelve 1 (0 al cancelar); metapad hace
+`lstrcpyA(0x4108a0, ofn.lpstrFile)` y reutiliza el flujo de la Fase B
+(`0x405a2e` → CreateFileA/ReadFile/SetWindowTextA).
+
+### Cambios
+
+1. **`comdlg32.c`**: `GetOpenFileNameA` real (~460 líneas nuevas): colores/
+   fuente compartidos con user32 (`font8x16.h`), `parse_filter` (formato
+   "desc\0pat1;pat2\0...\0\0", índice 1-based), lista con scroll de 16 filas,
+   campo de nombre con caret, botones con hover/pressed. **El prefijo
+   tipeado completa el nombre del primer archivo que matchea** (readme →
+   readme.txt) en vez de devolver el prefijo.
+2. **`user32.c` `TranslateAcceleratorA`** (3 bugs): guarda `fFlags` del
+   acelerador (antes solo key/id), compara la tecla sin distinguir
+   mayúsculas (el teclado entrega 'o' minúscula con Ctrl; el recurso guarda
+   'O') y exige los modificadores (FCONTROL/FSHIFT/FALT contra los bits de
+   `lParam`). **El WM_COMMAND va a la ventana principal (primer wndproc)** y
+   no al hwnd del WM_KEYDOWN (que puede ser el RichEdit enfocado, que
+   descartaba el comando).
+3. **`user32.c` `event_to_wm`**: Ctrl+letra ya no genera WM_CHAR (Ctrl+O no
+   dejaba una 'o' residual en el documento).
+4. **FS**: el `comdlg32.elf` creció 6184→~12 KB y metapad.exe quedaba
+   cortado en el disco (FS real 1105 sectores > 1100). `FS_SECTORS`
+   1100→1130 (Makefile + `boot/boot.asm` + reserva del PMM 0x1C9800→0x1CD400
+   en `kernel/mem/pmm.c`).
+
+### Validación
+
+- QEMU headless (test_faseC.py): `run metapad.exe` → `sendkey ctrl-o` →
+  `SetCurrentDirectoryA` → `[cdlg] GetOpenFileNameA dialog` → tipeo "readme"
+  (la selección salta a readme.txt) → Enter → `GetCurrentDirectoryA` →
+  `CreateFileA 'readme.txt'` → `GetFileAttributesA` → 4× `lstrlenA` con el
+  contenido completo de readme.txt → **las 4 líneas visibles** en el
+  cliente blanco (bloques de texto negro en y70-146). Sin #PF, sin cuelgues,
+  metapad sigue vivo tras cerrar el diálogo.
+- **Regresión Fase A**: tecleo normal + caret siguen funcionando.
+- **Escalera 14/14 PASS** (disco).

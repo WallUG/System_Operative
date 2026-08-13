@@ -221,6 +221,18 @@ Todos los detalles, decisiones y bugs encontrados están en `DESIGN.md`.
   set para format."). Validado en QEMU: serial muestra el flujo completo y
   el screendump deja ver las 4 líneas de readme.txt en el cliente blanco;
   regresión Fase A OK y escalera 14/14 en disco y CD.
+- Fase C concluida: **diálogo Abrir real (`GetOpenFileNameA`)** — `Ctrl+O`
+  en metapad (acelerador → `TranslateAcceleratorA` corregido: comparación
+  sin mayúsculas, verificación de Ctrl y WM_COMMAND a la ventana principal)
+  abre una ventana propia con la **lista de archivos del MEFS** (SYS_DLIST),
+  filtro por extensiones (`lpstrFilter`+`nFilterIndex`), campo de nombre con
+  **autocompletado por prefijo** (teclear "readme" selecciona readme.txt),
+  navegación por teclado (flechas/PgUp/PgDn/Home/End/Enter/Esc), clic en
+  filas y botones Abrir/Cancelar. Al confirmar devuelve el nombre y metapad
+  reutiliza el flujo de apertura de la Fase B. `FS_SECTORS` 1100→1130 (el
+  comdlg32.elf más grande dejaba metapad.exe cortado en el disco). Validado
+  en QEMU: Ctrl+O → diálogo → "readme" → Enter → las 4 líneas de readme.txt
+  en el editor; regresión Fase A OK y escalera 14/14 en disco.
 - Roadmap tentativo: long mode (64 bits), ATA con escritura de archivos
   (CreateFileA con GENERIC_WRITE), **apps Windows GUI reales** (ver
   `docs/10-win32-gui-eval.md`: primero nuestro notepad mingw, luego un

@@ -622,7 +622,10 @@ uint32_t LoadMenuA(uint32_t hinst, const char *name)
 
 #define ACCEL_MAX 64
 static uint16_t accel_key[ACCEL_MAX], accel_id[ACCEL_MAX];
+static uint8_t  accel_flags[ACCEL_MAX];
 static int accel_count;
+
+static uint32_t *wnd_proc_fwd;      /* ref a wnd_proc[] (definida abajo) */
 
 static void msgq_push(uint32_t hwnd, uint32_t m, uint32_t wp, uint32_t lp);
 
@@ -642,8 +645,9 @@ uint32_t LoadAcceleratorsA(uint32_t hinst, uint32_t name)
     if (n > ACCEL_MAX)
         n = ACCEL_MAX;
     for (i = 0; i < n; i++) {
-        accel_key[i] = rd16u(acc + i * 6 + 2);   /* wAnsi */
-        accel_id[i] = rd16u(acc + i * 6 + 4);    /* wId */
+        accel_flags[i] = (uint8_t)rd16u(acc + i * 6);   /* fFlags */
+        accel_key[i] = rd16u(acc + i * 6 + 2);          /* wAnsi */
+        accel_id[i] = rd16u(acc + i * 6 + 4);           /* wId */
     }
     accel_count = (int)n;
     console_print("[user32] LoadAcceleratorsA id=");
@@ -659,16 +663,38 @@ uint32_t TranslateAcceleratorA(uint32_t hwnd, uint32_t haccel, uint32_t m)
     const uint8_t *m8 = (const uint8_t *)(uint32_t)m;
     uint32_t msg = rd32u(m8 + 4);
     uint32_t key = rd32u(m8 + 8);
+    uint32_t buttons = rd32u(m8 + 12);      /* lParam = modifiers EV_KEY */
     int i;
 
     (void)hwnd; (void)haccel;
     if (msg != WM_KEYDOWN || accel_count == 0)
         return 0;
-    for (i = 0; i < accel_count; i++)
-        if (accel_key[i] == (uint16_t)key) {
-            msgq_push(rd32u(m8), WM_COMMAND, accel_id[i], 0);
-            return 1;
+    for (i = 0; i < accel_count; i++) {
+        uint8_t fl = accel_flags[i];
+        uint16_t k = accel_key[i];
+        /* comparacion sin distinguir mayusculas */
+        if (k >= 'a' && k <= 'z')
+            k = (uint16_t)(k - 32);
+        {
+            uint32_t kk = key;
+            if (kk >= 'a' && kk <= 'z')
+                kk -= 32;
+            if (kk != k)
+                continue;
         }
+        /* modificadores: FCONTROL=2, FSHIFT=4, FALT=16 (bits en ev[3]) */
+        if ((fl & 2) && !(buttons & 1))
+            continue;
+        if ((fl & 4) && !(buttons & 4))
+            continue;
+        if ((fl & 16) && !(buttons & 2))
+            continue;
+        /* El WM_COMMAND va a la ventana principal (primer wndproc),
+         * no al hwnd del WM_KEYDOWN (que puede ser el control edit). */
+        msgq_push(wnd_proc_fwd[1] ? 1 : rd32u(m8), WM_COMMAND,
+                  accel_id[i], 0);
+        return 1;
+    }
     return 0;
 }
 
@@ -703,6 +729,7 @@ static uint32_t class_procs[MAX_CLASSES];
 static uint32_t class_count;
 
 static uint32_t wnd_proc[MAX_WNDPROCS];
+static uint32_t *wnd_proc_fwd = wnd_proc;
 uint32_t DefWindowProcA(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b);
 
 /* --- estado por ventana (slice 2 del Hito B) ---
@@ -878,7 +905,8 @@ static void event_to_wm(const uint32_t *ev)
             wnd_proc[focus_edit])
             target = focus_edit;
         msgq_push(target, WM_KEYDOWN, key, ev[3]);
-        if (key >= 32 && key <= 126)
+        /* WM_CHAR solo sin Ctrl: Ctrl+letra es comando (acelerador) */
+        if (key >= 32 && key <= 126 && !(ev[3] & 1))
             msgq_push(target, WM_CHAR, key, ev[3]);
         break;
     }
