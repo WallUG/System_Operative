@@ -210,6 +210,29 @@ test: os-image.bin
 	$(QEMU) -display none -monitor none -serial stdio -no-reboot \
 	        -drive format=raw,file=$<
 
+# --- Fase E: persistencia en disco separado -------------------------------
+# El disco os-image.bin solo tiene ~190 sectores libres tras los datos del
+# FS. Para Guardar con margen se genera un disco de trabajo ampliado
+# (os-image + relleno a PERSIST_SECTORS) sobre el que el FS (modo ATA)
+# escribe y persiste. El disco vive en el cwd del proceso (QEMU no arranca
+# desde /tmp). 'persist_disk' regenera el disco limpio desde os-image.
+PERSIST_SECTORS = 16384            # 8 MiB: boot+kernel+FS + ~15k sectores libres
+PERSIST_DISK    = build/os-persist.bin
+
+persist_disk: os-image.bin
+	@mkdir -p $(dir $(PERSIST_DISK))
+	@cp os-image.bin $(PERSIST_DISK)
+	@truncate -s $$(( $(PERSIST_SECTORS) * 512 )) $(PERSIST_DISK)
+	@echo "OK: disco de persistencia $(PERSIST_DISK) = $(PERSIST_SECTORS) sectores (espacio libre para Guardar)"
+
+run_persist: persist_disk
+	$(QEMU) -drive format=raw,file=$(PERSIST_DISK)
+
+# Headless (serial + monitor QMP por socket) para automatizar/persistir.
+test_persist: persist_disk
+	$(QEMU) -display none -monitor none -serial stdio -no-reboot \
+	        -drive format=raw,file=$(PERSIST_DISK)
+
 # Fase 7: ISO9660 booteable (El Torito no-emulation, Python puro).
 iso: os-image.bin
 	python3 tools/makeiso.py $< $(USER_ELFS) -o $(BUILD)/myos.iso
@@ -229,4 +252,4 @@ debug: os-image.bin
 clean:
 	rm -rf $(BUILD) os-image.bin kernel.elf
 
-.PHONY: all run test debug clean
+.PHONY: all run test debug clean persist_disk run_persist test_persist
