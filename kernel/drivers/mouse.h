@@ -29,6 +29,12 @@ void mouse_cursor_invalidate(void);
 int  mouse_read(int *x, int *y, int *buttons);
 void mouse_event_push_key(int key);
 void mouse_event_push_key_ext(int key, int mods);  /* mods: 1=ctrl 2=alt 4=shift */
+/* Fase 23-A3: inyeccion sintetica de eventos (tests headless: el raton
+ * del monitor de QEMU no inyecta PS/2 fiable). Pasa por la misma cola
+ * global y por wm_route como un evento real. */
+void mouse_event_push(int type, int x, int y, int buttons, int key);
+/* Mueve la posicion del raton (con cursor) sin generar EV_MOVE. */
+void mouse_set_pos(int x, int y);
 int  mouse_event_dequeue(mouse_event_t *ev);
 /* Descarta los eventos pendientes de la cola global (Fase 22-fix: al
  * crear una ventana, el input de antes no debe llegar a la app nueva). */

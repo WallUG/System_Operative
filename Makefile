@@ -93,7 +93,7 @@ $(BUILD)/task/switch.o: kernel/task/switch.asm
 # la region WIN32_REGION_BASE (0xB0000000, tools/dll32.ld) y el
 # programa de prueba con imports (user/winapi.c).
 USER_TEXT = 0x80000000
-USER_SRCS = user/hello.c user/fork.c user/exec.c user/console.c user/winapi.c user/quick.c user/desktop.c user/explorer.c
+USER_SRCS = user/hello.c user/fork.c user/exec.c user/console.c user/winapi.c user/quick.c user/desktop.c user/explorer.c user/inject.c
 USER_ELFS = $(patsubst user/%.c,$(BUILD)/user/%.elf,$(USER_SRCS))
 USER_EXES = $(patsubst user/%.c,$(BUILD)/user/%.exe,$(USER_SRCS))
 
@@ -102,7 +102,8 @@ USER_EXES = $(patsubst user/%.c,$(BUILD)/user/%.exe,$(USER_SRCS))
 # compat_suite pero no ocupan sectores del FS (que mide 512 sectores).
 FS_USER_ELFS = $(BUILD)/user/hello.elf $(BUILD)/user/mouseinfo.elf \
                $(BUILD)/user/win_demo.elf $(BUILD)/user/win_two.elf \
-               $(BUILD)/user/desktop.elf $(BUILD)/user/explorer.elf
+               $(BUILD)/user/desktop.elf $(BUILD)/user/explorer.elf \
+               $(BUILD)/user/inject.elf
 FS_USER_EXES = $(filter %quick.exe %winapi.exe %fork.exe %exec.exe %console.exe,\
                        $(USER_EXES))
 

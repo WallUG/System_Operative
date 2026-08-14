@@ -889,8 +889,15 @@ int wm_route(mouse_event_t *ev)
             return (int)w->pd;
         }
         if (ev->y >= w->cy) {       /* area cliente: raise + entregar */
-            if (ev->x < w->x + w->w - WM_FRAME - WM_X_BTN)
+            if (ev->x < w->x + w->w - WM_FRAME - WM_X_BTN) {
+                /* Fase 23-A3: wm_raise cambia el z-order pero no pinta;
+                 * la ventana subida debe repintarse sobre las que
+                 * estaban encima (el area la tapaba la antigua topmost).
+                 * El rect completo de la ventana cubre el antes/despues
+                 * porque el raise solo la mueve en z, no en pantalla. */
                 wm_raise(w);
+                wm_redraw_rect(w->x, w->y, w->w, w->h);
+            }
             return (int)w->pd;
         }
         /* Fase D: clic en la barra de menu -> va a la app (ella abre el

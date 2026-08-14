@@ -597,6 +597,23 @@ void syscall_handler(registers_t *regs)
     case SYS_EXEBASE:
         regs->eax = sched_current_exe_base();
         break;
+    case SYS_MOUSE_INJECT: { /* ebx=&mouse_event_t: evento sintetico.
+                              * Solo para tests (el monitor de QEMU no
+                              * inyecta PS/2 fiable en headless). Pasa
+                              * por la cola global y wm_route como uno
+                              * real. */
+        mouse_event_t ev;
+        if (user_memcpy_in(&ev, (const void *)regs->ebx, sizeof(ev), pd)
+            != 0) {
+            regs->eax = -1;
+            break;
+        }
+        if (ev.type == EV_MOVE)
+            mouse_set_pos(ev.x, ev.y);
+        mouse_event_push(ev.type, ev.x, ev.y, ev.buttons, ev.key);
+        regs->eax = 0;
+        break;
+    }
     case SYS_MENUBAR: { /* ebx=id, ecx=on, edx=flat* (validado por PD) */
         char flat[200];
         if (regs->ecx && regs->edx) {

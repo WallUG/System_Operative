@@ -230,6 +230,21 @@ void mouse_event_push_key_ext(int key, int mods)
     event_push(EV_KEY, 0, 0, mods, key);
 }
 
+/* Fase 23-A3: inyeccion sintetica (tests). El evento entra en la cola
+ * global y lo procesa wm_route como cualquiera del IRQ. */
+void mouse_event_push(int type, int x, int y, int buttons, int key)
+{
+    event_push(type, x, y, buttons, key);
+}
+
+void mouse_set_pos(int x, int y)
+{
+    mouse_x = x;
+    mouse_y = y;
+    mouse_cursor_invalidate();
+    mouse_draw_cursor();
+}
+
 int mouse_event_dequeue(mouse_event_t *ev)
 {
     if (ev_head == ev_tail)

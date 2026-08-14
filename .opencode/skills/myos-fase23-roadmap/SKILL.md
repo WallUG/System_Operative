@@ -90,23 +90,24 @@ Colores en PPM: thumb=0x80A080, track=0x305030 (bytes LE del LFB).
 
 ### A3. Foco y eventos entre apps
 
-**Estado**: `mouse_event_flush` al crear ventana evita teclas fantasma en
-la app nueva. Falta: verificación sistemática del cambio de foco por clic
-entre ventanas (desktop + explorer + metapad a la vez) y que las teclas
-vayan a la ventana correcta.
-
-**Tarea**:
-- Reproducir con 3 apps abiertas a la vez; clic en cada una y teclear.
-- Verificar `wm_route`: EV_KEY → topmost, EV_BUTTON_* → dueño bajo el
-  cursor, drag en título, X → EV_WINCLOSE.
-- Si un clic en una ventana cubierta no la sube (wm_raise solo en área
-  cliente), decidir: clic en cualquier parte visible debe raise.
-- Probar la vuelta a la consola (cerrar todas las ventanas) y que la
-  shell recibe el teclado limpio (`keyboard_flush` ya cubre la última
-  tecla).
-
-**Test**: test_fase23a3.py con 3 apps, clics sintéticos + sendkeys,
-verificando por serial qué app recibe cada tecla.
+**Estado: COMPLETADO.** Se encontró y arregló un bug real: el `wm_raise`
+del clic en `wm_route` (EV_BUTTON_DOWN, área cliente) cambiaba el
+z-order pero NO repintaba — la ventana subida quedaba oculta por la que
+estaba encima. Ahora `wm_raise` + `wm_redraw_rect(w)` al subir. Se añadió
+`SYS_MOUSE_INJECT 36` (inyección sintética de eventos de ratón; el
+monitor de QEMU no inyecta PS/2 fiable en headless) + `mouse_set_pos` /
+`mouse_event_push` públicos + wrapper `sys_mouse_inject` en winlib.h. App
+`user/inject.c` (`inject.elf`, en el FS) que inyecta clics sintéticos con
+marcadores al serial para que el test sincronice los sendkeys. Test
+`tools/test_fase23a3.py` **5/5 PASS**: teclas→topmost (metapad), clic en
+explorer tapado lo sube y el teclado pasa a él, vuelta a la consola limpia.
+NOTA: cuando el metapad queda BAJO el explorer, su área se muestra como
+fondo (bug de renderizado pre-existente del buffer del RichEdit al
+repintarse cubierto, p.ej. un `wm_update_rect` basura `0x1000011...`
+del propio metapad; NO es de enrutado de foco/eventos) — pendiente de
+investigar en una sub-fase posterior si rompe algo. Inyección sintética:
+`sys_mouse_inject(EV_MOVE/DOWN/UP, x, y, 1, 0)` → cola global → wm_route
+(raise+redraw+deliver) → la app objetivo llama sys_event y lo procesa.
 
 ### A4. Instalador tipo Windows
 

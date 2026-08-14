@@ -44,6 +44,9 @@
                            entrada idx-esima de un directorio (Fase 21)   */
 #define SYS_DPARENT 34  /* ebx=idx -> parent (MEFS_ROOT si raiz/inexist)  */
 #define SYS_DLOOKUP 35  /* ebx=parent, ecx=name -> indice de la entrada   */
+#define SYS_MOUSE_INJECT 36 /* ebx=&mouse_event_t: evento sintetico (Fase
+                               23-A3, solo tests: el monitor de QEMU no
+                               inyecta PS/2 fiable en headless)          */
 
 void syscall_init(void);            /* registra el gate 0x80 (DPL=3) */
 void syscall_handler(registers_t *regs);

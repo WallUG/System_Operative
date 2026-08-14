@@ -30,6 +30,7 @@
 #define SYS_DLISTDIR 33
 #define SYS_DPARENT 34
 #define SYS_DLOOKUP 35
+#define SYS_MOUSE_INJECT 36
 
 /* --- eventos (kernel/drivers/mouse.h) --- */
 #define EV_MOVE         1
@@ -130,6 +131,22 @@ static inline int sys_dlookup(uint32_t parent, const char *name)
     __asm__ volatile("int $0x80" : "=a"(r)
                      : "a"(SYS_DLOOKUP), "b"(parent), "c"(name)
                      : "memory");
+    return r;
+}
+
+/* Fase 23-A3: inyeccion sintetica de eventos de raton (tests). */
+static inline int sys_mouse_inject(int type, int x, int y,
+                                   int buttons, int key)
+{
+    int r;
+    uint32_t ev[5];
+    ev[0] = (uint32_t)type;
+    ev[1] = (uint32_t)x;
+    ev[2] = (uint32_t)y;
+    ev[3] = (uint32_t)buttons;
+    ev[4] = (uint32_t)key;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_MOUSE_INJECT), "b"(ev) : "memory");
     return r;
 }
 
