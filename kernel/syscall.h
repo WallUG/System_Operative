@@ -47,6 +47,10 @@
 #define SYS_MOUSE_INJECT 36 /* ebx=&mouse_event_t: evento sintetico (Fase
                                23-A3, solo tests: el monitor de QEMU no
                                inyecta PS/2 fiable en headless)          */
+#define SYS_MKDIR 37        /* ebx=nombre, ecx=parent: crea subdirectorio
+                               (Fase 23-A4)                              */
+#define SYS_FCREATE_IN 38   /* ebx=parent, ecx=nombre: crea archivo en un
+                               subdirectorio (Fase 23-A4)                */
 
 void syscall_init(void);            /* registra el gate 0x80 (DPL=3) */
 void syscall_handler(registers_t *regs);

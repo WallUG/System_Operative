@@ -31,6 +31,10 @@
 #define SYS_DPARENT 34
 #define SYS_DLOOKUP 35
 #define SYS_MOUSE_INJECT 36
+#define SYS_MKDIR 37
+#define SYS_FCREATE_IN 38
+#define SYS_FWRITE 27
+#define SYS_FLUSH 29
 
 /* --- eventos (kernel/drivers/mouse.h) --- */
 #define EV_MOVE         1
@@ -147,6 +151,41 @@ static inline int sys_mouse_inject(int type, int x, int y,
     ev[4] = (uint32_t)key;
     __asm__ volatile("int $0x80" : "=a"(r)
                      : "a"(SYS_MOUSE_INJECT), "b"(ev) : "memory");
+    return r;
+}
+
+/* Fase 23-A4: escritura/persistencia en el FS. */
+static inline int sys_fwrite(const char *name, const void *buf,
+                             uint32_t len)
+{
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_FWRITE), "b"(name), "c"(buf), "d"(len)
+                     : "memory");
+    return r;
+}
+
+static inline int sys_flush(void)
+{
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r) : "a"(SYS_FLUSH));
+    return r;
+}
+
+static inline int sys_mkdir(uint32_t parent, const char *name)
+{
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_MKDIR), "b"(name), "c"(parent) : "memory");
+    return r;
+}
+
+static inline int sys_fcreate_in(uint32_t parent, const char *name)
+{
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_FCREATE_IN), "b"(parent), "c"(name)
+                     : "memory");
     return r;
 }
 

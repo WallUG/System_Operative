@@ -70,6 +70,9 @@ int  mefs_dir_get(uint32_t i, char *name, uint32_t *size);
 
 /* --- escritura (Fase E, v2) --- */
 int  mefs_create(const char *name);
+/* Fase 23-A4: crea un archivo dentro del directorio 'parent' (indice de
+ * una entrada dir, o MEFS_ROOT). El nombre es unico en ese directorio. */
+int  mefs_create_in(uint32_t parent, const char *name);
 int  mefs_write(const char *name, const uint8_t *buf, uint32_t len);
 int  mefs_delete(const char *name);
 int  mefs_flush(void);

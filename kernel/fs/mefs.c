@@ -289,7 +289,7 @@ static int find_free_slot(void)
     return -1;
 }
 
-int mefs_create(const char *name)
+int mefs_create_in(uint32_t parent, const char *name)
 {
     int i, len;
     if (name == 0)
@@ -299,7 +299,7 @@ int mefs_create(const char *name)
         len++;
     if (len == 0 || len > MEFS_NAME_LEN - 1)
         return -1;
-    if (mefs_size(name) >= 0)
+    if (mefs_lookup(parent, name) >= 0)
         return -1;
     i = find_free_slot();
     if (i < 0)
@@ -309,10 +309,15 @@ int mefs_create(const char *name)
     entries[i].size = 0;
     entries[i].lba  = 0;
     entries[i].flags = 0;
-    entries[i].parent = MEFS_ROOT;
+    entries[i].parent = parent;
     if (i >= file_count)
         file_count = i + 1;
     return 0;
+}
+
+int mefs_create(const char *name)
+{
+    return mefs_create_in(MEFS_ROOT, name);
 }
 
 int mefs_write(const char *name, const uint8_t *buf, uint32_t len)

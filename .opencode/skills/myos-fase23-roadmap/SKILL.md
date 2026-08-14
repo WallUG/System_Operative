@@ -111,21 +111,23 @@ investigar en una sub-fase posterior si rompe algo. Inyección sintética:
 
 ### A4. Instalador tipo Windows
 
-**Tarea**: una app Win32 real (p.ej. `installer.exe` o ELF nativo con
-diálogo) que copie archivos del FS a un directorio persistente con
-estructura (crear subdirectorios destino, copiar archivos con
-`mefs_read`/write vía syscalls, `flush` al final). Reutiliza: diálogo
-modal (si el modal real de B5 aún no existe, usar el modal de menús/
-messagebox), listado de directorios (SYS_DLISTDIR 33), persistencia
-(SYS_DWRITE + flush).
-
-**Requisitos previos útiles**: A2 (navegación), B5 (dialogo modal real)
-o el patrón de `GetSaveFileNameA` de comdlg32.
-
-**Validación**: instalar archivos, verificar en el disco persistente que
-la estructura de directorios y los bytes están correctos (leer el FS
-desde el host con el formato de makefs.py); reboot y navegar con el
-explorer al directorio instalado.
+**Estado: COMPLETADO.** El MEFS crea archivos solo en la raíz (mefs_create
+hardcodeaba parent=MEFS_ROOT) y no exponía mefs_mkdir. Se añadió:
+- kernel/fs/mefs.c: `mefs_create_in(parent, name)` (mefs_create lo usa con
+  ROOT); mefs_mkdir ya existía.
+- syscalls: `SYS_MKDIR 37` (name, parent) y `SYS_FCREATE_IN 38`
+  (parent, name); wrappers `sys_mkdir`/`sys_fcreate_in`/`sys_fwrite`/
+  `sys_flush` en winlib.h.
+- user/installer.c (`installer.elf`, en el FS): crea `installed/`, copia
+  `readme.txt` → `installed/readme_inst.txt` (SYS_DREAD + FCREATE_IN +
+  FWRITE), escribe `version.txt`, y hace `flush()`.
+Test `tools/test_fase23a4.py` **5/5 PASS**: el instalador corre y
+persiste; desde el HOST se parsea build/os-persist.bin (MEFS en LBA 129)
+y se verifica que installed/ es un dir con readme_inst.txt == readme.txt
+y version.txt; tras REBOOT el explorer navega a installed/ y lo lista.
+NOTA: el MEFS es de nombres planos (mefs_read/write buscan por nombre
+único global); los archivos "de un subdir" llevan parent = índice del
+dir y no deben colisionar de nombre con los de la raíz.
 
 ## Bloque B — Superficie Win32 (solo cuando A esté estable)
 

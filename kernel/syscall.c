@@ -367,6 +367,22 @@ void syscall_handler(registers_t *regs)
             regs->eax = (int32_t)mefs_create(name);
         break;
     }
+    case SYS_MKDIR: { /* ebx=nombre, ecx=parent: crea subdirectorio */
+        char name[32];
+        if (user_strcpy(name, sizeof(name), (const char *)regs->ebx, pd) != 0)
+            regs->eax = -1;
+        else
+            regs->eax = (int32_t)mefs_mkdir(name, regs->ecx);
+        break;
+    }
+    case SYS_FCREATE_IN: { /* ebx=parent, ecx=nombre: archivo en subdir */
+        char name[32];
+        if (user_strcpy(name, sizeof(name), (const char *)regs->ecx, pd) != 0)
+            regs->eax = -1;
+        else
+            regs->eax = (int32_t)mefs_create_in(regs->ebx, name);
+        break;
+    }
     case SYS_FWRITE: { /* ebx=nombre, ecx=buf, edx=len: sobrescribe */
         char name[32];
         void *tmp;
