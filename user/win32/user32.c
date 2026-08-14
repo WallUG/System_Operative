@@ -562,7 +562,7 @@ static menu_t loaded_menu;
 /* Carga un menu de los recursos del ejecutable (RT_MENU). lpMenuName
  * puede ser un MAKEINTRESOURCE (id en el low word) o un nombre (no
  * soportado aqui). Devuelve un HMENU opaco (puntero a la copia). */
-uint32_t LoadMenuA(uint32_t hinst, const char *name)
+uint32_t __attribute__((stdcall)) LoadMenuA(uint32_t hinst, const char *name)
 {
     const uint8_t *tpl;
     uint32_t size = 0, id, i, n;
@@ -649,7 +649,7 @@ static uint32_t *wnd_proc_fwd;      /* ref a wnd_proc[] (definida abajo) */
 
 static void msgq_push(uint32_t hwnd, uint32_t m, uint32_t wp, uint32_t lp);
 
-uint32_t LoadAcceleratorsA(uint32_t hinst, uint32_t name)
+uint32_t __attribute__((stdcall)) LoadAcceleratorsA(uint32_t hinst, uint32_t name)
 {
     const uint8_t *acc;
     uint32_t size = 0, i, n;
@@ -678,7 +678,7 @@ uint32_t LoadAcceleratorsA(uint32_t hinst, uint32_t name)
     return 1;
 }
 
-uint32_t TranslateAcceleratorA(uint32_t hwnd, uint32_t haccel, uint32_t m)
+uint32_t __attribute__((stdcall)) TranslateAcceleratorA(uint32_t hwnd, uint32_t haccel, uint32_t m)
 {
     const uint8_t *m8 = (const uint8_t *)(uint32_t)m;
     uint32_t msg = rd32u(m8 + 4);
@@ -725,15 +725,15 @@ uint32_t TranslateAcceleratorA(uint32_t hwnd, uint32_t haccel, uint32_t m)
  * el programa pueda llegar hasta LoadMenuA. Se implementaran de una
  * en una segun lo exija la escalera. */
 
-uint32_t CharLowerA(uint32_t s) { (void)s; return 0; }
-uint32_t CharLowerBuffA(uint32_t s, uint32_t n) { (void)s; (void)n; return 0; }
-uint32_t CharUpperBuffA(uint32_t s, uint32_t n) { (void)s; (void)n; return 0; }
-uint32_t CharToOemBuffA(uint32_t s, uint32_t d, uint32_t n) { (void)s; (void)d; (void)n; return 0; }
-uint32_t OemToCharBuffA(uint32_t s, uint32_t d, uint32_t n) { (void)s; (void)d; (void)n; return 0; }
-uint32_t IsCharAlphaA(uint32_t c) { (void)c; return 0; }
-uint32_t IsCharAlphaNumericA(uint32_t c) { (void)c; return 0; }
-uint32_t IsCharLowerA(uint32_t c) { (void)c; return 0; }
-uint32_t IsCharUpperA(uint32_t c) { (void)c; return 0; }
+uint32_t __attribute__((stdcall)) CharLowerA(uint32_t s) { (void)s; return 0; }
+uint32_t __attribute__((stdcall)) CharLowerBuffA(uint32_t s, uint32_t n) { (void)s; (void)n; return 0; }
+uint32_t __attribute__((stdcall)) CharUpperBuffA(uint32_t s, uint32_t n) { (void)s; (void)n; return 0; }
+uint32_t __attribute__((stdcall)) CharToOemBuffA(uint32_t s, uint32_t d, uint32_t n) { (void)s; (void)d; (void)n; return 0; }
+uint32_t __attribute__((stdcall)) OemToCharBuffA(uint32_t s, uint32_t d, uint32_t n) { (void)s; (void)d; (void)n; return 0; }
+uint32_t __attribute__((stdcall)) IsCharAlphaA(uint32_t c) { (void)c; return 0; }
+uint32_t __attribute__((stdcall)) IsCharAlphaNumericA(uint32_t c) { (void)c; return 0; }
+uint32_t __attribute__((stdcall)) IsCharLowerA(uint32_t c) { (void)c; return 0; }
+uint32_t __attribute__((stdcall)) IsCharUpperA(uint32_t c) { (void)c; return 0; }
 /* --- minimo WM (ventanas + bucle de mensajes) sobre el WM del kernel ---
  * Fase 18, slice 2: RegisterClassA/CreateWindowExA -> SYS_WINCREATE,
  * eventos SYS_EVENT traducidos a WM_* y dispatch al wndproc del .exe. */
@@ -750,7 +750,7 @@ static uint32_t class_count;
 
 static uint32_t wnd_proc[MAX_WNDPROCS];
 static uint32_t *wnd_proc_fwd = wnd_proc;
-uint32_t DefWindowProcA(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b);
+uint32_t __attribute__((stdcall)) DefWindowProcA(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b);
 
 /* --- estado por ventana (slice 2 del Hito B) ---
  * wnd_buf = buffer del cliente (formato LFB, px_disp) que el kernel
@@ -969,7 +969,7 @@ static void event_to_wm(const uint32_t *ev)
 
 static void event_to_wm(const uint32_t *ev); /* fwd: usa msgq_push */
 
-uint32_t RegisterClassA(uint32_t wc)
+uint32_t __attribute__((stdcall)) RegisterClassA(uint32_t wc)
 {
     uint32_t name, proc;
     char num[16];
@@ -994,7 +994,7 @@ uint32_t RegisterClassA(uint32_t wc)
     return 1;
 }
 
-uint32_t CreateWindowExA(uint32_t e, uint32_t cls, uint32_t name,
+uint32_t __attribute__((stdcall)) CreateWindowExA(uint32_t e, uint32_t cls, uint32_t name,
                          uint32_t style, int x, int y, int w, int h,
                          uint32_t parent, uint32_t menu, uint32_t inst,
                          uint32_t param)
@@ -1160,7 +1160,7 @@ static void wm_paint_window(uint32_t hwnd)
     }
 }
 
-uint32_t ShowWindow(uint32_t hwnd, int cmd)
+uint32_t __attribute__((stdcall)) ShowWindow(uint32_t hwnd, int cmd)
 {
     (void)cmd;
     if (hwnd < MAX_WNDPROCS && wnd_proc[hwnd])
@@ -1168,14 +1168,14 @@ uint32_t ShowWindow(uint32_t hwnd, int cmd)
     return 1;
 }
 
-uint32_t UpdateWindow(uint32_t hwnd)
+uint32_t __attribute__((stdcall)) UpdateWindow(uint32_t hwnd)
 {
     if (hwnd < MAX_WNDPROCS && wnd_proc[hwnd])
         wm_paint_window(hwnd);
     return 1;
 }
 
-uint32_t DestroyWindow(uint32_t hwnd)
+uint32_t __attribute__((stdcall)) DestroyWindow(uint32_t hwnd)
 {
     if (hwnd < MAX_WNDPROCS) {
         if (is_child(hwnd)) {
@@ -1193,12 +1193,12 @@ uint32_t DestroyWindow(uint32_t hwnd)
     return 1;
 }
 
-uint32_t IsWindow(uint32_t hwnd)
+uint32_t __attribute__((stdcall)) IsWindow(uint32_t hwnd)
 {
     return (hwnd < MAX_WNDPROCS && wnd_proc[hwnd]) ? 1 : 0;
 }
 
-uint32_t GetMessageA(uint32_t msg, uint32_t hwnd, uint32_t a, uint32_t b)
+uint32_t __attribute__((stdcall)) GetMessageA(uint32_t msg, uint32_t hwnd, uint32_t a, uint32_t b)
 {
     uint32_t ev[5];
     uint32_t out[4];
@@ -1221,7 +1221,7 @@ uint32_t GetMessageA(uint32_t msg, uint32_t hwnd, uint32_t a, uint32_t b)
     }
 }
 
-uint32_t PeekMessageA(uint32_t msg, uint32_t hwnd, uint32_t a, uint32_t b,
+uint32_t __attribute__((stdcall)) PeekMessageA(uint32_t msg, uint32_t hwnd, uint32_t a, uint32_t b,
                       uint32_t rm)
 {
     uint32_t ev[5];
@@ -1247,9 +1247,9 @@ uint32_t PeekMessageA(uint32_t msg, uint32_t hwnd, uint32_t a, uint32_t b,
     return 0;
 }
 
-uint32_t TranslateMessage(uint32_t msg) { (void)msg; return 0; }
+uint32_t __attribute__((stdcall)) TranslateMessage(uint32_t msg) { (void)msg; return 0; }
 
-uint32_t DispatchMessageA(uint32_t msg)
+uint32_t __attribute__((stdcall)) DispatchMessageA(uint32_t msg)
 {
     const uint8_t *m8 = (const uint8_t *)(uint32_t)msg;
     uint32_t hwnd = rd32u(m8);
@@ -1266,13 +1266,13 @@ uint32_t DispatchMessageA(uint32_t msg)
         (hwnd, m, wp, lp);
 }
 
-uint32_t PostMessageA(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
+uint32_t __attribute__((stdcall)) PostMessageA(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
 {
     msgq_push(hwnd, m, a, b);
     return 1;
 }
 
-uint32_t PostQuitMessage(int code)
+uint32_t __attribute__((stdcall)) PostQuitMessage(int code)
 {
     (void)code;
     quit_pending = 1;
@@ -1280,7 +1280,7 @@ uint32_t PostQuitMessage(int code)
     return 0;
 }
 
-uint32_t SendMessageA(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
+uint32_t __attribute__((stdcall)) SendMessageA(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
 {
     uint32_t p;
     if (hwnd >= MAX_WNDPROCS)
@@ -1292,11 +1292,11 @@ uint32_t SendMessageA(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
         (hwnd, m, a, b);
 }
 
-uint32_t SendDlgItemMessageA(uint32_t d, uint32_t i, uint32_t m,
+uint32_t __attribute__((stdcall)) SendDlgItemMessageA(uint32_t d, uint32_t i, uint32_t m,
                              uint32_t a, uint32_t b)
 { (void)d; (void)i; (void)m; (void)a; (void)b; return 0; }
 
-uint32_t DefWindowProcA(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
+uint32_t __attribute__((stdcall)) DefWindowProcA(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
 {
     (void)a; (void)b;
     if (m == WM_CLOSE) {
@@ -1323,7 +1323,7 @@ uint32_t DefWindowProcA(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
     return 0;
 }
 
-uint32_t CallWindowProcA(uint32_t p, uint32_t hwnd, uint32_t m,
+uint32_t __attribute__((stdcall)) CallWindowProcA(uint32_t p, uint32_t hwnd, uint32_t m,
                          uint32_t a, uint32_t b)
 {
     (void)p; (void)hwnd; (void)m; (void)a; (void)b;
@@ -1390,7 +1390,7 @@ static uint32_t dc_lookup(uint32_t hwnd, myos_dc_t **dc)
     return 1;
 }
 
-uint32_t GetDC(uint32_t hwnd)
+uint32_t __attribute__((stdcall)) GetDC(uint32_t hwnd)
 {
     myos_dc_t *dc;
     char num[16];
@@ -1404,7 +1404,7 @@ uint32_t GetDC(uint32_t hwnd)
     return (uint32_t)dc;
 }
 
-uint32_t ReleaseDC(uint32_t hwnd, uint32_t dc) {
+uint32_t __attribute__((stdcall)) ReleaseDC(uint32_t hwnd, uint32_t dc) {
     char num[16];
     console_print("[u32] RD hwnd=");
     console_print(itoa32(num, hwnd));
@@ -1436,7 +1436,7 @@ static uint32_t u32_brush_color(uint32_t h)
     }
 }
 
-uint32_t FillRect(uint32_t hdc, const int32_t *rc, uint32_t brush)
+uint32_t __attribute__((stdcall)) FillRect(uint32_t hdc, const int32_t *rc, uint32_t brush)
 {
     myos_dc_t *dc;
     uint32_t c;
@@ -1485,7 +1485,7 @@ typedef struct {
     uint32_t rgbReserved[32];
 } myos_paintstruct_t;
 
-uint32_t BeginPaint(uint32_t hwnd, myos_paintstruct_t *ps)
+uint32_t __attribute__((stdcall)) BeginPaint(uint32_t hwnd, myos_paintstruct_t *ps)
 {
     myos_dc_t *dc;
     char num[16];
@@ -1511,7 +1511,7 @@ uint32_t BeginPaint(uint32_t hwnd, myos_paintstruct_t *ps)
     return ps->hdc;
 }
 
-uint32_t EndPaint(uint32_t hwnd, const myos_paintstruct_t *ps)
+uint32_t __attribute__((stdcall)) EndPaint(uint32_t hwnd, const myos_paintstruct_t *ps)
 {
     char num[16];
     console_print("[u32] EP hwnd=");
@@ -1808,7 +1808,7 @@ uint32_t builtin_wndproc(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
     return DefWindowProcA(hwnd, m, a, 0);
 }
 
-uint32_t SetFocus(uint32_t hwnd) {
+uint32_t __attribute__((stdcall)) SetFocus(uint32_t hwnd) {
     uint32_t prev = focus_edit;
     if (is_child(hwnd) && child_edit[hwnd - CHILD_BASE]) {
         focus_edit = hwnd;
@@ -1817,7 +1817,7 @@ uint32_t SetFocus(uint32_t hwnd) {
     return prev;
 }
 uint32_t GetFocus(void) { return focus_edit; }
-uint32_t SetWindowTextA(uint32_t hwnd, uint32_t t)
+uint32_t __attribute__((stdcall)) SetWindowTextA(uint32_t hwnd, uint32_t t)
 {
     if (hwnd >= MAX_WNDPROCS || !wnd_proc[hwnd])
         return 0;
@@ -1839,7 +1839,7 @@ uint32_t SetWindowTextA(uint32_t hwnd, uint32_t t)
     return 1;
 }
 
-uint32_t GetWindowTextA(uint32_t hwnd, uint32_t b, int n)
+uint32_t __attribute__((stdcall)) GetWindowTextA(uint32_t hwnd, uint32_t b, int n)
 {
     if (is_child(hwnd)) {
         uint32_t i = hwnd - CHILD_BASE;
@@ -1858,7 +1858,7 @@ uint32_t GetWindowTextA(uint32_t hwnd, uint32_t b, int n)
     return 0;
 }
 
-uint32_t GetWindowTextLengthA(uint32_t hwnd)
+uint32_t __attribute__((stdcall)) GetWindowTextLengthA(uint32_t hwnd)
 {
     if (is_child(hwnd)) {
         uint32_t i = hwnd - CHILD_BASE;
@@ -1869,14 +1869,14 @@ uint32_t GetWindowTextLengthA(uint32_t hwnd)
     }
     return 0;
 }
-uint32_t GetWindowLongA(uint32_t hwnd, int idx) { (void)hwnd; (void)idx; return 0; }
-uint32_t SetWindowLongA(uint32_t hwnd, int idx, uint32_t v) { (void)hwnd; (void)idx; (void)v; return 0; }
-uint32_t SetClassLongA(uint32_t hwnd, int idx, uint32_t v) { (void)hwnd; (void)idx; (void)v; return 0; }
-uint32_t SetWindowPos(uint32_t hwnd, uint32_t after, int x, int y, int w,
+uint32_t __attribute__((stdcall)) GetWindowLongA(uint32_t hwnd, int idx) { (void)hwnd; (void)idx; return 0; }
+uint32_t __attribute__((stdcall)) SetWindowLongA(uint32_t hwnd, int idx, uint32_t v) { (void)hwnd; (void)idx; (void)v; return 0; }
+uint32_t __attribute__((stdcall)) SetClassLongA(uint32_t hwnd, int idx, uint32_t v) { (void)hwnd; (void)idx; (void)v; return 0; }
+uint32_t __attribute__((stdcall)) SetWindowPos(uint32_t hwnd, uint32_t after, int x, int y, int w,
                       int h, uint32_t f)
 { (void)hwnd; (void)after; (void)x; (void)y; (void)w; (void)h; (void)f; return 0; }
-uint32_t GetWindowRect(uint32_t hwnd, uint32_t r) { (void)hwnd; (void)r; return 0; }
-uint32_t GetClientRect(uint32_t hwnd, uint32_t r)
+uint32_t __attribute__((stdcall)) GetWindowRect(uint32_t hwnd, uint32_t r) { (void)hwnd; (void)r; return 0; }
+uint32_t __attribute__((stdcall)) GetClientRect(uint32_t hwnd, uint32_t r)
 {
     int *rc = (int *)r;
     if (rc == 0)
@@ -1894,19 +1894,19 @@ uint32_t GetClientRect(uint32_t hwnd, uint32_t r)
     }
     return 1;
 }
-uint32_t GetWindowPlacement(uint32_t hwnd, uint32_t p) { (void)hwnd; (void)p; return 0; }
-uint32_t GetCursorPos(uint32_t p) { (void)p; return 0; }
-uint32_t SetCursor(uint32_t c) { (void)c; return 0; }
-uint32_t GetParent(uint32_t hwnd) { (void)hwnd; return 0; }
-uint32_t EnableWindow(uint32_t hwnd, int en) { (void)hwnd; (void)en; return 0; }
-uint32_t GetKeyboardState(uint32_t s) { (void)s; return 0; }
-uint32_t SetKeyboardState(uint32_t s) { (void)s; return 0; }
-uint32_t IsDialogMessageA(uint32_t d, uint32_t m) { (void)d; (void)m; return 0; }
-uint32_t RegisterWindowMessageA(uint32_t s) { (void)s; return 0x0400; }
-uint32_t MessageBeep(uint32_t t) { (void)t; return 0; }
-uint32_t LoadIconA(uint32_t i, uint32_t n) { (void)i; (void)n; console_print("[user32] LoadIconA\n"); return 0; }
-uint32_t LoadCursorA(uint32_t i, uint32_t n) { (void)i; (void)n; console_print("[user32] LoadCursorA\n"); return 0; }
-uint32_t LoadStringA(uint32_t i, uint32_t id, uint32_t b, int n)
+uint32_t __attribute__((stdcall)) GetWindowPlacement(uint32_t hwnd, uint32_t p) { (void)hwnd; (void)p; return 0; }
+uint32_t __attribute__((stdcall)) GetCursorPos(uint32_t p) { (void)p; return 0; }
+uint32_t __attribute__((stdcall)) SetCursor(uint32_t c) { (void)c; return 0; }
+uint32_t __attribute__((stdcall)) GetParent(uint32_t hwnd) { (void)hwnd; return 0; }
+uint32_t __attribute__((stdcall)) EnableWindow(uint32_t hwnd, int en) { (void)hwnd; (void)en; return 0; }
+uint32_t __attribute__((stdcall)) GetKeyboardState(uint32_t s) { (void)s; return 0; }
+uint32_t __attribute__((stdcall)) SetKeyboardState(uint32_t s) { (void)s; return 0; }
+uint32_t __attribute__((stdcall)) IsDialogMessageA(uint32_t d, uint32_t m) { (void)d; (void)m; return 0; }
+uint32_t __attribute__((stdcall)) RegisterWindowMessageA(uint32_t s) { (void)s; return 0x0400; }
+uint32_t __attribute__((stdcall)) MessageBeep(uint32_t t) { (void)t; return 0; }
+uint32_t __attribute__((stdcall)) LoadIconA(uint32_t i, uint32_t n) { (void)i; (void)n; console_print("[user32] LoadIconA\n"); return 0; }
+uint32_t __attribute__((stdcall)) LoadCursorA(uint32_t i, uint32_t n) { (void)i; (void)n; console_print("[user32] LoadCursorA\n"); return 0; }
+uint32_t __attribute__((stdcall)) LoadStringA(uint32_t i, uint32_t id, uint32_t b, int n)
 {
     /* RT_STRING (tipo 6): el bloque es (id>>4)+1; dentro, 16 strings
      * [len u16][utf16]. Lanza mensaje al log si no existe. */
@@ -1974,7 +1974,7 @@ static void wsprint_uint(char *buf, uint32_t v, int base, int upper)
     *buf = 0;
 }
 
-uint32_t wsprintfA(uint32_t b, uint32_t f, ...)
+uint32_t __attribute__((stdcall)) wsprintfA(uint32_t b, uint32_t f, ...)
 {
     char *out = (char *)b;
     const char *fmt = (const char *)f;
@@ -2036,25 +2036,273 @@ uint32_t wsprintfA(uint32_t b, uint32_t f, ...)
     out[k] = 0;
     return (uint32_t)k;
 }
-uint32_t GetSysColor(int idx) { (void)idx; return 0x00FFFFFFu; }
-uint32_t GetSysColorBrush(int idx) { (void)idx; return 0; }
-uint32_t SystemParametersInfoA(uint32_t a, uint32_t b, uint32_t c, uint32_t d)
+uint32_t __attribute__((stdcall)) GetSysColor(int idx) { (void)idx; return 0x00FFFFFFu; }
+uint32_t __attribute__((stdcall)) GetSysColorBrush(int idx) { (void)idx; return 0; }
+uint32_t __attribute__((stdcall)) SystemParametersInfoA(uint32_t a, uint32_t b, uint32_t c, uint32_t d)
 { (void)a; (void)b; (void)c; (void)d; return 0; }
-uint32_t GetDialogBaseUnits(void) { return 0; }
-uint32_t GetDlgItem(uint32_t d, int id) { (void)d; (void)id; return 0; }
-uint32_t GetDlgItemTextA(uint32_t d, int id, uint32_t b, int n)
+uint32_t __attribute__((stdcall)) GetDialogBaseUnits(void) { return 0; }
+uint32_t __attribute__((stdcall)) GetDlgItem(uint32_t d, int id) { (void)d; (void)id; return 0; }
+uint32_t __attribute__((stdcall)) GetDlgItemTextA(uint32_t d, int id, uint32_t b, int n)
 { (void)d; (void)id; (void)b; (void)n; return 0; }
-uint32_t SetDlgItemTextA(uint32_t d, int id, uint32_t b)
+uint32_t __attribute__((stdcall)) SetDlgItemTextA(uint32_t d, int id, uint32_t b)
 { (void)d; (void)id; (void)b; return 0; }
-uint32_t DialogBoxParamA(uint32_t i, uint32_t t, uint32_t p, uint32_t f,
+/* --- Dialogos modales reales (Fase 23-B5) ---
+ * DialogBoxParamA/EndDialog sobre el patron de menu_modal (drenan
+ * sys_event). Parsea DLGTEMPLATE (32-bit, no extendido) del recurso
+ * RT_DIALOG, dibuja la ventana y los controles (BUTTON/STATIC/EDIT),
+ * envia WM_INITDIALOG al DlgProc y enruta WM_COMMAND/WM_CLOSE.
+ * EndDialog corta el bucle y devuelve el resultado. */
+
+#define RT_DIALOG 5
+#define WM_INITDIALOG 0x0110
+#define DLG_SCALE 2             /* dialog units -> px (aproximado) */
+
+typedef struct {
+    int      id;
+    int      x, y, w, h;        /* en px */
+    int      cls;               /* 0=BUTTON 1=STATIC 2=EDIT 3=otro */
+    int      is_btn;
+    int      is_default;        /* BS_DEFPUSHBUTTON */
+    char     text[48];
+    user32_button_t b;
+} dlgctl_t;
+
+static dlgctl_t dlg_ctls[16];
+static int dlg_nctl;
+static uint32_t dlg_proc;
+static uint32_t dlg_param;
+static int dlg_result;
+static int dlg_done;
+static uint32_t dlg_cur;
+
+typedef int (__attribute__((stdcall)) *dlgproc_t)(uint32_t, uint32_t,
+                                                  uint32_t, uint32_t);
+
+/* Los DlgProc de mingw son __stdcall (ret $0x10): el callee limpia sus
+ * 16 bytes de args. Se llama con 4 pushes y sin cleanup del caller
+ * (un call cdecl limpiaria 16 mas -> doble limpieza -> pila corrupta). */
+static int dlg_call(uint32_t fn, uint32_t hwnd, uint32_t msg, uint32_t wp,
+                    uint32_t lp)
+{
+    int ret;
+    __asm__ volatile(
+        "pushl %4\n\t"
+        "pushl %3\n\t"
+        "pushl %2\n\t"
+        "pushl %1\n\t"
+        "call *%5\n\t"
+        : "=a"(ret)
+        : "r"(hwnd), "r"(msg), "r"(wp), "r"(lp), "r"(fn)
+        : "ecx", "edx", "memory");
+    return ret;
+}
+
+/* Clase del control: ordinal 0xFFFF+0x80xx o string. */
+static int dlg_ctl_class(const uint8_t **pp, const uint8_t *end)
+{
+    uint16_t v;
+    if (*pp + 2 > end)
+        return 3;
+    v = rd16u(*pp); *pp += 2;
+    if (v == 0xFFFF) {
+        if (*pp + 2 > end)
+            return 3;
+        v = rd16u(*pp); *pp += 2;
+        switch (v & 0xFF) {
+        case 0x80: return 0;    /* BUTTON */
+        case 0x82: return 1;    /* STATIC */
+        case 0x81: return 2;    /* EDIT */
+        default:   return 3;
+        }
+    }
+    /* string: consumir el nombre */
+    while (rd16u(*pp)) *pp += 2;
+    *pp += 2;
+    return 3;
+}
+
+/* Texto del control: string o ordinal. */
+static void dlg_ctl_text(const uint8_t **pp, const uint8_t *end, char *buf,
+                         int max)
+{
+    uint16_t v;
+    if (*pp + 2 > end) {
+        buf[0] = 0;
+        return;
+    }
+    v = rd16u(*pp);
+    if (v == 0xFFFF) {           /* ordinal (id de recurso): sin texto */
+        *pp += 4;
+        buf[0] = 0;
+        return;
+    }
+    utf16_to_ascii(buf, *pp, max);
+    while (rd16u(*pp)) *pp += 2;
+    *pp += 2;
+}
+
+static uint32_t dialog_modal(const uint8_t *tpl, uint32_t size, uint32_t f,
+                             uint32_t a)
+{
+    uint32_t info[4];
+    uint32_t ev[5];
+    const uint8_t *p = tpl, *end = tpl + size;
+    uint32_t style, cdit;
+    int dlu_cx, dlu_cy, wx, wy, ww, wh, i;
+    char title[64];
+
+    if (sys_gfxinfo(info) != 0)
+        return 0xFFFFFFFFu;
+    lfb = (uint32_t *)info[0];
+    scr_w = info[1];
+    scr_h = info[2];
+    if (p + 18 > end)
+        return 0xFFFFFFFFu;
+
+    style = rd32u(p); p += 4;
+    p += 4;                      /* dwExtendedStyle */
+    cdit  = rd16u(p); p += 2;
+    p += 2;                      /* x */
+    p += 2;                      /* y */
+    dlu_cx = rd16u(p); p += 2;
+    dlu_cy = rd16u(p); p += 2;
+    p += 2;                      /* menu (ninguno) */
+    p += 2;                      /* clase (ninguna) */
+    utf16_to_ascii(title, p, 63);        /* titulo */
+    while (rd16u(p)) p += 2;
+    p += 2;
+    if (style & 0x00000040) {    /* DS_SETFONT: puntos + face */
+        p += 2;
+        while (rd16u(p)) p += 2;
+        p += 2;
+    }
+
+    dlg_nctl = 0;
+    dlg_proc = f;
+    dlg_param = a;
+    dlg_result = 0;
+    dlg_done = 0;
+    dlg_cur = 1;
+
+        ww = dlu_cx * DLG_SCALE;
+    wh = dlu_cy * DLG_SCALE;
+    wx = ((int)scr_w - ww) / 2;
+    wy = ((int)scr_h - wh) / 2;
+
+    fillrect(wx - 3, wy - 3, ww + 6, wh + 6, COLOR_FRAME);
+    fillrect(wx, wy, ww, wh, COLOR_BG);
+    fillrect(wx, wy, ww, 18, COLOR_TITLE);
+    drawtext(wx + 6, wy + 2, title, COLOR_TEXT);
+
+    for (i = 0; i < (int)cdit && dlg_nctl < 16; i++) {
+        dlgctl_t *c = &dlg_ctls[dlg_nctl];
+        uint32_t cstyle;
+        p = (const uint8_t *)(((uint32_t)p + 3) & ~3u);   /* alinear */
+        if (p + 20 > end)
+            break;
+        cstyle = rd32u(p); p += 4;
+        p += 4;                  /* extended style */
+        c->x = rd16u(p) * DLG_SCALE; p += 2;
+        c->y = rd16u(p) * DLG_SCALE; p += 2;
+        c->w = rd16u(p) * DLG_SCALE; p += 2;
+        c->h = rd16u(p) * DLG_SCALE; p += 2;
+        c->id = rd16u(p); p += 2;
+        c->cls = dlg_ctl_class(&p, end);
+        dlg_ctl_text(&p, end, c->text, 47);
+        /* creation data: WORD cb + cb bytes (alineado a WORD) */
+        if (p + 2 <= end) {
+            uint32_t cb = rd16u(p);
+            p += 2;
+            if (cb)
+                p += (cb + 1) & ~1u;
+        }
+        c->is_btn = (c->cls == 0);
+        c->is_default = (cstyle & 0x1) != 0;   /* BS_DEFPUSHBUTTON */
+        c->x += wx;
+        c->y += wy + 18;
+
+                if (c->is_btn) {
+            c->b.x = c->x; c->b.y = c->y; c->b.w = c->w; c->b.h = c->h;
+            c->b.label = c->text;
+            c->b.fg = COLOR_BTN_TX; c->b.bg = COLOR_BTN;
+            c->b.fg_p = COLOR_BTN; c->b.bg_p = COLOR_TEXT;
+            c->b.hovered = 0; c->b.pressed = 0;
+            user32_draw_button(&c->b);
+        } else {
+            drawtext(c->x + 4, c->y + 2, c->text, COLOR_TEXT);
+        }
+        dlg_nctl++;
+    }
+
+    /* WM_INITDIALOG */
+    if (dlg_proc)
+        dlg_call(dlg_proc, dlg_cur, WM_INITDIALOG, a, 0);
+
+    /* bucle modal */
+    for (;;) {
+        int handled = 0;
+        if (sys_event(ev) != 0)
+            continue;
+        for (i = 0; i < dlg_nctl; i++) {
+            dlgctl_t *c = &dlg_ctls[i];
+            if (c->is_btn && user32_button_feed(&c->b, ev)) {
+                if (dlg_proc)
+                    dlg_call(dlg_proc, dlg_cur, WM_COMMAND, c->id, 0);
+                handled = 1;
+                break;
+            }
+        }
+        if (handled)
+            continue;
+        if (ev[0] == EV_KEY) {
+            if (ev[4] == '\n') {         /* Enter: boton por defecto */
+                for (i = 0; i < dlg_nctl; i++)
+                    if (dlg_ctls[i].is_default) {
+                        if (dlg_proc)
+                            dlg_call(dlg_proc, dlg_cur, WM_COMMAND,
+                                           dlg_ctls[i].id, 0);
+                        break;
+                    }
+            } else if (ev[4] == 27) {    /* Esc: WM_CLOSE */
+                if (dlg_proc)
+                    dlg_call(dlg_proc, dlg_cur, WM_CLOSE, 0, 0);
+            }
+        }
+        if (dlg_done)
+            break;
+    }
+    return (uint32_t)dlg_result;
+}
+
+uint32_t __attribute__((stdcall)) DialogBoxParamA(uint32_t i, uint32_t t, uint32_t p, uint32_t f,
                          uint32_t a)
-{ (void)i; (void)t; (void)p; (void)f; (void)a; return 0; }
-uint32_t CreateDialogParamA(uint32_t i, uint32_t t, uint32_t p, uint32_t f,
+{
+    const uint8_t *tpl;
+    uint32_t size = 0, id;
+    (void)i; (void)p;
+    if (t < 0x10000)             /* MAKEINTRESOURCE */
+        id = t;
+    else                         /* nombre de recurso (no soportado) */
+        return 0xFFFFFFFFu;
+    tpl = find_resource(RT_DIALOG, id, &size);
+    if (tpl == 0)
+        return 0xFFFFFFFFu;
+    return dialog_modal(tpl, size, f, a);
+}
+
+uint32_t __attribute__((stdcall)) CreateDialogParamA(uint32_t i, uint32_t t, uint32_t p, uint32_t f,
                             uint32_t a)
 { (void)i; (void)t; (void)p; (void)f; (void)a; return 0; }
-uint32_t EndDialog(uint32_t d, int r) { (void)d; (void)r; return 0; }
-uint32_t CreateMenu(void) { return 0; }
-uint32_t GetMenu(uint32_t hwnd) { (void)hwnd; return 0; }
+
+uint32_t __attribute__((stdcall)) EndDialog(uint32_t d, int r)
+{
+    (void)d;
+    dlg_result = r;
+    dlg_done = 1;
+    return 0;
+}
+uint32_t __attribute__((stdcall)) CreateMenu(void) { return 0; }
+uint32_t __attribute__((stdcall)) GetMenu(uint32_t hwnd) { (void)hwnd; return 0; }
 
 /* --- barra de menu de ventana (Fase D) ---
  * SetMenu activa la barra en el kernel (SYS_MENUBAR: franja gris +
@@ -2083,7 +2331,7 @@ static void menu_build_flat(char *flat, uint32_t max)
     flat[k] = 0;
 }
 
-uint32_t SetMenu(uint32_t hwnd, uint32_t menu)
+uint32_t __attribute__((stdcall)) SetMenu(uint32_t hwnd, uint32_t menu)
 {
     char flat[200];
 
@@ -2096,7 +2344,7 @@ uint32_t SetMenu(uint32_t hwnd, uint32_t menu)
     return 1;
 }
 
-uint32_t DrawMenuBar(uint32_t hwnd)
+uint32_t __attribute__((stdcall)) DrawMenuBar(uint32_t hwnd)
 {
     if (hwnd == 0 || loaded_menu.count == 0)
         return 0;
@@ -2470,42 +2718,42 @@ out:
         msgq_push(hwnd, WM_COMMAND, id, 0);
     return id;
 }
-uint32_t DestroyMenu(uint32_t menu) { (void)menu; return 0; }
-uint32_t GetSubMenu(uint32_t menu, int pos) { (void)menu; (void)pos; return 0; }
-uint32_t GetMenuItemCount(uint32_t menu) { (void)menu; return 0; }
-uint32_t GetMenuItemInfoA(uint32_t menu, uint32_t item, uint32_t bypos,
+uint32_t __attribute__((stdcall)) DestroyMenu(uint32_t menu) { (void)menu; return 0; }
+uint32_t __attribute__((stdcall)) GetSubMenu(uint32_t menu, int pos) { (void)menu; (void)pos; return 0; }
+uint32_t __attribute__((stdcall)) GetMenuItemCount(uint32_t menu) { (void)menu; return 0; }
+uint32_t __attribute__((stdcall)) GetMenuItemInfoA(uint32_t menu, uint32_t item, uint32_t bypos,
                           uint32_t info)
 { (void)menu; (void)item; (void)bypos; (void)info; return 0; }
-uint32_t SetMenuItemInfoA(uint32_t menu, uint32_t item, uint32_t bypos,
+uint32_t __attribute__((stdcall)) SetMenuItemInfoA(uint32_t menu, uint32_t item, uint32_t bypos,
                           uint32_t info)
 { (void)menu; (void)item; (void)bypos; (void)info; return 0; }
-uint32_t InsertMenuItemA(uint32_t menu, uint32_t item, uint32_t bypos,
+uint32_t __attribute__((stdcall)) InsertMenuItemA(uint32_t menu, uint32_t item, uint32_t bypos,
                          uint32_t info)
 { (void)menu; (void)item; (void)bypos; (void)info; return 0; }
-uint32_t DeleteMenu(uint32_t menu, uint32_t item, uint32_t bypos)
+uint32_t __attribute__((stdcall)) DeleteMenu(uint32_t menu, uint32_t item, uint32_t bypos)
 { (void)menu; (void)item; (void)bypos; return 0; }
-uint32_t EnableMenuItem(uint32_t menu, uint32_t item, uint32_t f)
+uint32_t __attribute__((stdcall)) EnableMenuItem(uint32_t menu, uint32_t item, uint32_t f)
 { (void)menu; (void)item; (void)f; return 0; }
-uint32_t CheckMenuRadioItem(uint32_t menu, uint32_t a, uint32_t b,
+uint32_t __attribute__((stdcall)) CheckMenuRadioItem(uint32_t menu, uint32_t a, uint32_t b,
                             uint32_t c, uint32_t f)
 { (void)menu; (void)a; (void)b; (void)c; (void)f; return 0; }
-uint32_t TrackPopupMenuEx(uint32_t menu, uint32_t f, int x, int y,
+uint32_t __attribute__((stdcall)) TrackPopupMenuEx(uint32_t menu, uint32_t f, int x, int y,
                           uint32_t h, uint32_t r)
 { (void)menu; (void)f; (void)x; (void)y; (void)h; (void)r; return 0; }
-uint32_t InvalidateRect(uint32_t hwnd, uint32_t r, uint32_t e)
+uint32_t __attribute__((stdcall)) InvalidateRect(uint32_t hwnd, uint32_t r, uint32_t e)
 { (void)hwnd; (void)r; (void)e; return 0; }
-uint32_t RedrawWindow(uint32_t hwnd, uint32_t r, uint32_t u, uint32_t f)
+uint32_t __attribute__((stdcall)) RedrawWindow(uint32_t hwnd, uint32_t r, uint32_t u, uint32_t f)
 { (void)hwnd; (void)r; (void)u; (void)f; return 0; }
-uint32_t EnableScrollBar(uint32_t hwnd, uint32_t a, uint32_t b)
+uint32_t __attribute__((stdcall)) EnableScrollBar(uint32_t hwnd, uint32_t a, uint32_t b)
 { (void)hwnd; (void)a; (void)b; return 0; }
-uint32_t GetScrollInfo(uint32_t hwnd, uint32_t a, uint32_t b)
+uint32_t __attribute__((stdcall)) GetScrollInfo(uint32_t hwnd, uint32_t a, uint32_t b)
 { (void)hwnd; (void)a; (void)b; return 0; }
-uint32_t GetClipboardData(uint32_t f) { (void)f; return 0; }
-uint32_t SetClipboardData(uint32_t f, uint32_t h) { (void)f; (void)h; return 0; }
-uint32_t OpenClipboard(uint32_t hwnd) { (void)hwnd; return 0; }
-uint32_t CloseClipboard(void) { return 0; }
-uint32_t EmptyClipboard(void) { return 0; }
-uint32_t IsClipboardFormatAvailable(uint32_t f) { (void)f; return 0; }
+uint32_t __attribute__((stdcall)) GetClipboardData(uint32_t f) { (void)f; return 0; }
+uint32_t __attribute__((stdcall)) SetClipboardData(uint32_t f, uint32_t h) { (void)f; (void)h; return 0; }
+uint32_t __attribute__((stdcall)) OpenClipboard(uint32_t hwnd) { (void)hwnd; return 0; }
+uint32_t __attribute__((stdcall)) CloseClipboard(void) { return 0; }
+uint32_t __attribute__((stdcall)) EmptyClipboard(void) { return 0; }
+uint32_t __attribute__((stdcall)) IsClipboardFormatAvailable(uint32_t f) { (void)f; return 0; }
 
 /* --- MessageBoxA --- */
 
@@ -2513,7 +2761,7 @@ uint32_t IsClipboardFormatAvailable(uint32_t f) { (void)f; return 0; }
  * MB_YESNO (0x4): botones "Si"/"No" -> IDYES (6) / IDNO (7); teclas
  * y/Y=Si, n/N=No, Enter=Si, Esc=No. Metapad comprueba eax==6 (IDYES)
  * para continuar una carga de archivo. */
-int MessageBoxA(void *h, const char *text, const char *caption, uint32_t type)
+int __attribute__((stdcall)) MessageBoxA(void *h, const char *text, const char *caption, uint32_t type)
 {
     uint32_t info[4];
     uint32_t ev[5];

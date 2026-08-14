@@ -8,7 +8,7 @@
 
 /* ShellExecuteA: HINSTANCE > 32 = exito. No hay procesos externos:
  * devuelve exito para que el llamador no muestre error. */
-uint32_t ShellExecuteA(uint32_t hwnd, const char *op, const char *file,
+uint32_t __attribute__((stdcall)) ShellExecuteA(uint32_t hwnd, const char *op, const char *file,
                        const char *params, const char *dir, int show)
 {
     (void)hwnd; (void)op; (void)file; (void)params; (void)dir;
@@ -17,14 +17,14 @@ uint32_t ShellExecuteA(uint32_t hwnd, const char *op, const char *file,
 }
 
 /* DragQueryFileA: 0 archivos arrastrados. */
-uint32_t DragQueryFileA(uint32_t hdrop, uint32_t i, char *buf,
+uint32_t __attribute__((stdcall)) DragQueryFileA(uint32_t hdrop, uint32_t i, char *buf,
                         uint32_t size)
 {
     (void)hdrop; (void)i; (void)buf; (void)size;
     return 0;
 }
 
-void DragFinish(uint32_t hdrop)
+void __attribute__((stdcall)) DragFinish(uint32_t hdrop)
 {
     (void)hdrop;
 }

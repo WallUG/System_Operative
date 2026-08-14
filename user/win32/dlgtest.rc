@@ -1,0 +1,9 @@
+#define IDD_DLG     101
+#define IDC_TEXT    102
+
+IDD_DLG DIALOG 0, 0, 200, 90
+CAPTION "Dialogo de prueba"
+BEGIN
+    LTEXT "Hola desde DialogBoxParamA", IDC_TEXT, 10, 12, 180, 12
+    DEFPUSHBUTTON "OK", 1, 70, 60, 60, 16
+END

@@ -192,7 +192,7 @@ static void dc_dirty(myos_dc_t *dc, int x, int y, int w, int h)
 
 /* --- stock objects --- */
 
-uint32_t GetStockObject(int index)
+uint32_t __attribute__((stdcall)) GetStockObject(int index)
 {
     switch (index) {
     case WHITE_BRUSH: case LTGRAY_BRUSH: case GRAY_BRUSH:
@@ -260,25 +260,25 @@ static uint32_t pen_color(uint32_t h, int *draw)
 
 /* --- objetos --- */
 
-uint32_t CreateSolidBrush(uint32_t color)
+uint32_t __attribute__((stdcall)) CreateSolidBrush(uint32_t color)
 {
     return obj_alloc(GDI_OBJ_TYPE_BRUSH, color, PS_SOLID);
 }
 
-uint32_t CreatePen(int style, int width, uint32_t color)
+uint32_t __attribute__((stdcall)) CreatePen(int style, int width, uint32_t color)
 {
     (void)width;
     return obj_alloc(GDI_OBJ_TYPE_PEN, color,
                      (uint32_t)(style == PS_NULL ? PS_NULL : PS_SOLID));
 }
 
-uint32_t CreateFontIndirectA(const void *logfont)
+uint32_t __attribute__((stdcall)) CreateFontIndirectA(const void *logfont)
 {
     (void)logfont;
     return obj_alloc(GDI_OBJ_TYPE_FONT, 0, 0);
 }
 
-uint32_t SelectObject(uint32_t hdc, uint32_t obj)
+uint32_t __attribute__((stdcall)) SelectObject(uint32_t hdc, uint32_t obj)
 {
     myos_dc_t *dc = dc_check(hdc);
     gdi_obj_t *o;
@@ -322,7 +322,7 @@ uint32_t SelectObject(uint32_t hdc, uint32_t obj)
     return prev ? prev : STOCK_HANDLE(SYSTEM_FONT);
 }
 
-uint32_t DeleteObject(uint32_t obj)
+uint32_t __attribute__((stdcall)) DeleteObject(uint32_t obj)
 {
     gdi_obj_t *o = obj_lookup(obj);
     if (obj < 0x1000)
@@ -335,7 +335,7 @@ uint32_t DeleteObject(uint32_t obj)
 
 /* --- atributos del DC --- */
 
-uint32_t SetTextColor(uint32_t hdc, uint32_t c)
+uint32_t __attribute__((stdcall)) SetTextColor(uint32_t hdc, uint32_t c)
 {
     myos_dc_t *dc = dc_check(hdc);
     if (dc == 0)
@@ -344,13 +344,13 @@ uint32_t SetTextColor(uint32_t hdc, uint32_t c)
     return c;
 }
 
-uint32_t GetTextColor(uint32_t hdc)
+uint32_t __attribute__((stdcall)) GetTextColor(uint32_t hdc)
 {
     myos_dc_t *dc = dc_check(hdc);
     return dc ? dc->fg : 0;
 }
 
-uint32_t SetBkColor(uint32_t hdc, uint32_t c)
+uint32_t __attribute__((stdcall)) SetBkColor(uint32_t hdc, uint32_t c)
 {
     myos_dc_t *dc = dc_check(hdc);
     if (dc == 0)
@@ -359,13 +359,13 @@ uint32_t SetBkColor(uint32_t hdc, uint32_t c)
     return c;
 }
 
-uint32_t GetBkColor(uint32_t hdc)
+uint32_t __attribute__((stdcall)) GetBkColor(uint32_t hdc)
 {
     myos_dc_t *dc = dc_check(hdc);
     return dc ? dc->bg : 0;
 }
 
-uint32_t SetBkMode(uint32_t hdc, uint32_t mode)
+uint32_t __attribute__((stdcall)) SetBkMode(uint32_t hdc, uint32_t mode)
 {
     myos_dc_t *dc = dc_check(hdc);
     if (dc == 0)
@@ -374,13 +374,13 @@ uint32_t SetBkMode(uint32_t hdc, uint32_t mode)
     return mode;
 }
 
-uint32_t GetBkMode(uint32_t hdc)
+uint32_t __attribute__((stdcall)) GetBkMode(uint32_t hdc)
 {
     myos_dc_t *dc = dc_check(hdc);
     return dc ? dc->bk_mode : 0;
 }
 
-uint32_t SetMapMode(uint32_t hdc, uint32_t mode)
+uint32_t __attribute__((stdcall)) SetMapMode(uint32_t hdc, uint32_t mode)
 {
     (void)hdc;
     (void)mode;
@@ -389,7 +389,7 @@ uint32_t SetMapMode(uint32_t hdc, uint32_t mode)
 
 /* --- texto --- */
 
-uint32_t TextOutA(uint32_t hdc, int x, int y, const char *s, int n)
+uint32_t __attribute__((stdcall)) TextOutA(uint32_t hdc, int x, int y, const char *s, int n)
 {
     myos_dc_t *dc = dc_check(hdc);
     int i, k;
@@ -416,7 +416,7 @@ uint32_t TextOutA(uint32_t hdc, int x, int y, const char *s, int n)
     return 1;
 }
 
-uint32_t GetTextExtentPoint32A(uint32_t hdc, const char *s, int n, int32_t *sz)
+uint32_t __attribute__((stdcall)) GetTextExtentPoint32A(uint32_t hdc, const char *s, int n, int32_t *sz)
 {
     (void)hdc;
     (void)s;
@@ -429,7 +429,7 @@ uint32_t GetTextExtentPoint32A(uint32_t hdc, const char *s, int n, int32_t *sz)
 
 /* --- figuras --- */
 
-uint32_t FillRect(uint32_t hdc, const int32_t *rc, uint32_t brush)
+uint32_t __attribute__((stdcall)) FillRect(uint32_t hdc, const int32_t *rc, uint32_t brush)
 {
     myos_dc_t *dc = dc_check(hdc);
     uint32_t c;
@@ -447,7 +447,7 @@ uint32_t FillRect(uint32_t hdc, const int32_t *rc, uint32_t brush)
     return 1;
 }
 
-uint32_t PatBlt(uint32_t hdc, int x, int y, int w, int h, uint32_t rop)
+uint32_t __attribute__((stdcall)) PatBlt(uint32_t hdc, int x, int y, int w, int h, uint32_t rop)
 {
     myos_dc_t *dc = dc_check(hdc);
     (void)rop;
@@ -457,7 +457,7 @@ uint32_t PatBlt(uint32_t hdc, int x, int y, int w, int h, uint32_t rop)
     return 1;
 }
 
-uint32_t Rectangle(uint32_t hdc, int l, int t, int r, int b)
+uint32_t __attribute__((stdcall)) Rectangle(uint32_t hdc, int l, int t, int r, int b)
 {
     myos_dc_t *dc = dc_check(hdc);
     int draw;
@@ -499,7 +499,7 @@ static void dc_line(myos_dc_t *dc, int x0, int y0, int x1, int y1, uint32_t c)
     }
 }
 
-uint32_t MoveToEx(uint32_t hdc, int x, int y, uint32_t old)
+uint32_t __attribute__((stdcall)) MoveToEx(uint32_t hdc, int x, int y, uint32_t old)
 {
     myos_dc_t *dc = dc_check(hdc);
     if (dc == 0)
@@ -511,7 +511,7 @@ uint32_t MoveToEx(uint32_t hdc, int x, int y, uint32_t old)
     return 1;
 }
 
-uint32_t LineTo(uint32_t hdc, int x, int y)
+uint32_t __attribute__((stdcall)) LineTo(uint32_t hdc, int x, int y)
 {
     myos_dc_t *dc = dc_check(hdc);
     int draw;
@@ -536,7 +536,7 @@ typedef struct {
     int32_t tmCharSet, tmOverhang, tmDigitizedAspectX, tmDigitizedAspectY;
 } TEXTMETRICA;
 
-uint32_t GetTextMetricsA(uint32_t hdc, TEXTMETRICA *tm)
+uint32_t __attribute__((stdcall)) GetTextMetricsA(uint32_t hdc, TEXTMETRICA *tm)
 {
     (void)hdc;
     if (tm == 0)
@@ -564,7 +564,7 @@ uint32_t GetTextMetricsA(uint32_t hdc, TEXTMETRICA *tm)
     return 1;
 }
 
-uint32_t GetTextFaceA(uint32_t hdc, uint32_t count, char *buf)
+uint32_t __attribute__((stdcall)) GetTextFaceA(uint32_t hdc, uint32_t count, char *buf)
 {
     static const char face[] = "MyOS Terminal";
     uint32_t i;
@@ -577,7 +577,7 @@ uint32_t GetTextFaceA(uint32_t hdc, uint32_t count, char *buf)
     return i;
 }
 
-uint32_t GetCharWidthA(uint32_t hdc, uint32_t first, uint32_t last,
+uint32_t __attribute__((stdcall)) GetCharWidthA(uint32_t hdc, uint32_t first, uint32_t last,
                        int32_t *widths)
 {
     uint32_t i;
@@ -590,7 +590,7 @@ uint32_t GetCharWidthA(uint32_t hdc, uint32_t first, uint32_t last,
 }
 
 /* GetDeviceCaps: un display VBE 800x600x32 (o el modo real del LFB). */
-uint32_t GetDeviceCaps(uint32_t hdc, uint32_t index)
+uint32_t __attribute__((stdcall)) GetDeviceCaps(uint32_t hdc, uint32_t index)
 {
     uint32_t info[4];
     (void)hdc;
@@ -619,7 +619,7 @@ uint32_t GetDeviceCaps(uint32_t hdc, uint32_t index)
     return 0;
 }
 
-uint32_t DeleteDC(uint32_t hdc)
+uint32_t __attribute__((stdcall)) DeleteDC(uint32_t hdc)
 {
     myos_dc_t *dc = dc_check(hdc);
     if (dc)
@@ -632,38 +632,38 @@ uint32_t DeleteDC(uint32_t hdc)
 /* --- impresion: stubs que devuelven exito (PrintDlgA de comdlg32
  * devuelve 0, asi que metapad no llega a imprimir). --- */
 
-uint32_t StartDocA(uint32_t hdc, const void *docinfo)
+uint32_t __attribute__((stdcall)) StartDocA(uint32_t hdc, const void *docinfo)
 {
     (void)hdc;
     (void)docinfo;
     return 1;
 }
 
-uint32_t EndDoc(uint32_t hdc)
+uint32_t __attribute__((stdcall)) EndDoc(uint32_t hdc)
 {
     (void)hdc;
     return 1;
 }
 
-uint32_t StartPage(uint32_t hdc)
+uint32_t __attribute__((stdcall)) StartPage(uint32_t hdc)
 {
     (void)hdc;
     return 1;
 }
 
-uint32_t EndPage(uint32_t hdc)
+uint32_t __attribute__((stdcall)) EndPage(uint32_t hdc)
 {
     (void)hdc;
     return 1;
 }
 
-uint32_t AbortDoc(uint32_t hdc)
+uint32_t __attribute__((stdcall)) AbortDoc(uint32_t hdc)
 {
     (void)hdc;
     return 1;
 }
 
-uint32_t SetAbortProc(uint32_t hdc, uint32_t proc)
+uint32_t __attribute__((stdcall)) SetAbortProc(uint32_t hdc, uint32_t proc)
 {
     (void)hdc;
     (void)proc;

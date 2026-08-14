@@ -23,11 +23,11 @@ static int sys_toolbar(uint32_t id, uint32_t on, const char *flat)
     return r;
 }
 
-void InitCommonControls(void)
+void __attribute__((stdcall)) InitCommonControls(void)
 {
 }
 
-uint32_t InitCommonControlsEx(const void *icc)
+uint32_t __attribute__((stdcall)) InitCommonControlsEx(const void *icc)
 {
     (void)icc;
     return 1;
@@ -38,7 +38,7 @@ uint32_t InitCommonControlsEx(const void *icc)
  * una barra con los botones habituales de un editor. */
 #define TB_BTN_N  8
 
-uint32_t CreateToolbarEx(uint32_t hwnd, uint32_t ws, uint32_t wID,
+uint32_t __attribute__((stdcall)) CreateToolbarEx(uint32_t hwnd, uint32_t ws, uint32_t wID,
                          int nBitmaps, uint32_t hBMInst, uint32_t wBMID,
                          const void *lpButtons, int nButtons,
                          int dxButton, int dyButton, uint32_t dxBitmap,
@@ -69,7 +69,7 @@ uint32_t CreateToolbarEx(uint32_t hwnd, uint32_t ws, uint32_t wID,
     return 0x300;
 }
 
-uint32_t PropertySheetA(const void *psh)
+uint32_t __attribute__((stdcall)) PropertySheetA(const void *psh)
 {
     (void)psh;
     return 0;

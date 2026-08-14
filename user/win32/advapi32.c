@@ -31,7 +31,7 @@
 /* hKey ficticio que "abre" RegCreateKeyExA. */
 #define FAKE_KEY         1
 
-uint32_t RegCreateKeyExA(uint32_t hkey, const char *subkey, uint32_t res,
+uint32_t __attribute__((stdcall)) RegCreateKeyExA(uint32_t hkey, const char *subkey, uint32_t res,
                          const char *cls, uint32_t opt, uint32_t access,
                          const void *sa, uint32_t *out, uint32_t *disp)
 {
@@ -44,7 +44,7 @@ uint32_t RegCreateKeyExA(uint32_t hkey, const char *subkey, uint32_t res,
     return ERROR_SUCCESS;
 }
 
-uint32_t RegOpenKeyExA(uint32_t hkey, const char *subkey, uint32_t opt,
+uint32_t __attribute__((stdcall)) RegOpenKeyExA(uint32_t hkey, const char *subkey, uint32_t opt,
                        uint32_t access, uint32_t *out)
 {
     (void)hkey; (void)subkey; (void)opt; (void)access; (void)out;
@@ -52,28 +52,28 @@ uint32_t RegOpenKeyExA(uint32_t hkey, const char *subkey, uint32_t opt,
 }
 
 /* La clave nunca tiene valores: "no configurado" = defaults. */
-uint32_t RegQueryValueExA(uint32_t hkey, const char *name, uint32_t *res,
+uint32_t __attribute__((stdcall)) RegQueryValueExA(uint32_t hkey, const char *name, uint32_t *res,
                           uint32_t *type, void *data, uint32_t *size)
 {
     (void)hkey; (void)name; (void)res; (void)type; (void)data; (void)size;
     return ERROR_FILE_NOT_FOUND;
 }
 
-uint32_t RegSetValueExA(uint32_t hkey, const char *name, uint32_t res,
+uint32_t __attribute__((stdcall)) RegSetValueExA(uint32_t hkey, const char *name, uint32_t res,
                         uint32_t type, const void *data, uint32_t size)
 {
     (void)hkey; (void)name; (void)res; (void)type; (void)data; (void)size;
     return ERROR_SUCCESS;
 }
 
-uint32_t RegCloseKey(uint32_t hkey)
+uint32_t __attribute__((stdcall)) RegCloseKey(uint32_t hkey)
 {
     (void)hkey;
     return ERROR_SUCCESS;
 }
 
 /* IsTextUnicode: heuristica de deteccion de UTF-16; siempre "no". */
-uint32_t IsTextUnicode(const void *buf, int len, uint32_t *result)
+uint32_t __attribute__((stdcall)) IsTextUnicode(const void *buf, int len, uint32_t *result)
 {
     (void)buf; (void)len;
     if (result)

@@ -752,55 +752,55 @@ static uint32_t dlg_run(const void *ofn, int is_save)
     return (uint32_t)result;
 }
 
-uint32_t GetOpenFileNameA(const void *ofn)
+uint32_t __attribute__((stdcall)) GetOpenFileNameA(const void *ofn)
 {
     return dlg_run(ofn, 0);
 }
 
-uint32_t GetSaveFileNameA(const void *ofn)
+uint32_t __attribute__((stdcall)) GetSaveFileNameA(const void *ofn)
 {
     return dlg_run(ofn, 1);
 }
 
 /* FindTextA/ReplaceTextA devuelven HWND del dialogo modelo (0 = no
  * abierto). */
-uint32_t FindTextA(const void *fr)
+uint32_t __attribute__((stdcall)) FindTextA(const void *fr)
 {
     (void)fr;
     return 0;
 }
 
-uint32_t ReplaceTextA(const void *fr)
+uint32_t __attribute__((stdcall)) ReplaceTextA(const void *fr)
 {
     (void)fr;
     return 0;
 }
 
-uint32_t ChooseFontA(const void *cf)
+uint32_t __attribute__((stdcall)) ChooseFontA(const void *cf)
 {
     (void)cf;
     return 0;
 }
 
-uint32_t ChooseColorA(const void *cc)
+uint32_t __attribute__((stdcall)) ChooseColorA(const void *cc)
 {
     (void)cc;
     return 0;
 }
 
-uint32_t PrintDlgA(const void *pd)
+uint32_t __attribute__((stdcall)) PrintDlgA(const void *pd)
 {
     (void)pd;
     return 0;
 }
 
-uint32_t PageSetupDlgA(const void *psd)
+uint32_t __attribute__((stdcall)) PageSetupDlgA(const void *psd)
 {
     (void)psd;
     return 0;
 }
 
-uint32_t CommDlgExtendedError(void)
+uint32_t __attribute__((stdcall)) CommDlgExtendedError(void)
 {
     return 0;
 }

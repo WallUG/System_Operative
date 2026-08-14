@@ -127,6 +127,7 @@ WIN_APPS  += $(BUILD)/user/win32/messagebox.exe
 WIN_APPS  += $(BUILD)/user/win32/gdidemo.exe
 # writetest.exe: escritura Win32 (CreateFileA WRITE + WriteFile), Fase E.
 WIN_APPS  += $(BUILD)/user/win32/writetest.exe
+WIN_APPS  += $(BUILD)/user/win32/dlgtest.exe
 
 $(BUILD)/user/win32/%.exe: user/win32/%.c
 	@mkdir -p $(dir $@)
@@ -137,6 +138,14 @@ $(BUILD)/user/win32/messagebox.exe: user/win32/messagebox.c
 	@mkdir -p $(dir $@)
 	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
 	           -Wl,--subsystem,console -s -o $@ $< -luser32
+
+# dlgtest.exe: DialogBoxParamA/EndDialog con recurso RT_DIALOG (Fase 23-B5).
+$(BUILD)/user/win32/dlgtest.exe: user/win32/dlgtest.c user/win32/dlgtest.rc
+	@mkdir -p $(dir $@)
+	$(MINGW32)-windres user/win32/dlgtest.rc -O coff -o build/dlgtest.res.o || \
+	i686-w64-mingw32-windres user/win32/dlgtest.rc -O coff -o build/dlgtest.res.o
+	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
+	           -Wl,--subsystem,console -s -o $@ $< build/dlgtest.res.o -luser32
 
 $(BUILD)/user/win32/gdidemo.exe: user/win32/gdi_demo.c
 	@mkdir -p $(dir $@)

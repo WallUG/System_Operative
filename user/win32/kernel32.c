@@ -126,16 +126,17 @@ static void *win_malloc(uint32_t size)
 
 #define STD_OUTPUT_HANDLE 1
 
-uint32_t GetStdHandle(uint32_t which)
+uint32_t __attribute__((stdcall)) GetStdHandle(uint32_t which)
 {
     (void)which;
     return STD_OUTPUT_HANDLE;
 }
 
-uint32_t WriteFile(uint32_t h, const void *buf, uint32_t n,
-                   uint32_t *written)
+uint32_t __attribute__((stdcall)) WriteFile(uint32_t h, const void *buf,
+                   uint32_t n, uint32_t *written, void *overlapped)
 {
     int r;
+    (void)overlapped;
     /* Fase E: handle de archivo abierto para escritura -> acumular en
      * wbuf; el contenido se escribe al FS en CloseHandle (o SetEndOfFile). */
     if (h != STD_OUTPUT_HANDLE) {
@@ -160,9 +161,9 @@ uint32_t WriteFile(uint32_t h, const void *buf, uint32_t n,
     return (uint32_t)(r > 0 ? 1 : 0);
 }
 
-void ExitProcess(uint32_t code)     { trace("[k32] ExitProcess\n"); sys_exit(code); }
-void TerminateProcess(uint32_t h, uint32_t code) { (void)h; sys_exit(code); }
-uint32_t GetCurrentProcess(void)    { return (uint32_t)-1; }
+void __attribute__((stdcall)) ExitProcess(uint32_t code)     { trace("[k32] ExitProcess\n"); sys_exit(code); }
+void __attribute__((stdcall)) TerminateProcess(uint32_t h, uint32_t code) { (void)h; sys_exit(code); }
+uint32_t __attribute__((stdcall)) GetCurrentProcess(void)    { return (uint32_t)-1; }
 
 static uint32_t sys_getpid(void)
 {
@@ -171,7 +172,7 @@ static uint32_t sys_getpid(void)
     return r;
 }
 
-uint32_t GetCurrentProcessId(void)  { return sys_getpid(); }
+uint32_t __attribute__((stdcall)) GetCurrentProcessId(void)  { return sys_getpid(); }
 
 static uint32_t sys_selfname(char *buf, uint32_t max)
 {
@@ -187,7 +188,7 @@ static uint32_t sys_selfname(char *buf, uint32_t max)
  * da ruta, se sintetiza "C:\MyOS\<nombre>" para que los .exe que
  * hacen strrchr(...,'\\') encuentren una barra y puedan derivar su
  * directorio de trabajo. */
-uint32_t GetModuleFileNameA(uint32_t hmodule, char *buf, uint32_t max)
+uint32_t __attribute__((stdcall)) GetModuleFileNameA(uint32_t hmodule, char *buf, uint32_t max)
 {
     const char prefix[] = "C:\\MyOS\\";
     uint32_t n, i, plen = sizeof(prefix) - 1;
@@ -213,7 +214,7 @@ uint32_t GetModuleFileNameA(uint32_t hmodule, char *buf, uint32_t max)
 #define WIN32_TIB_VA          0x84000000u
 #define WIN32_TIB_CMDLINE_OFF 0x100u
 
-char *GetCommandLineA(void)
+char *__attribute__((stdcall)) GetCommandLineA(void)
 {
     trace("[k32] GetCommandLineA\n");
     uint32_t tib = 0;
@@ -223,27 +224,27 @@ char *GetCommandLineA(void)
 
 static char *env_block[] = { (char *)"PATH=.\0HOME=.\0", 0 };
 
-char **GetEnvironmentStringsA(void) { return env_block; }
-void  FreeEnvironmentStringsA(char **p) { (void)p; }
+char **__attribute__((stdcall)) GetEnvironmentStringsA(void) { return env_block; }
+void  __attribute__((stdcall)) FreeEnvironmentStringsA(char **p) { (void)p; }
 
 /* --- errores --- */
 
 static uint32_t last_error;
 
-uint32_t GetLastError(void)       { return last_error; }
-void     SetLastError(uint32_t e) { last_error = e; }
+uint32_t __attribute__((stdcall)) GetLastError(void)       { return last_error; }
+void     __attribute__((stdcall)) SetLastError(uint32_t e) { last_error = e; }
 
 /* --- secciones criticas (RTL_CRITICAL_SECTION vista como int32) --- */
 
 typedef struct { volatile int32_t lock; } cs_t;
 
-void InitializeCriticalSection(void *lp)
+void __attribute__((stdcall)) InitializeCriticalSection(void *lp)
 {
     cs_t *c = (cs_t *)lp;
     c->lock = 0;
 }
 
-void EnterCriticalSection(void *lp)
+void __attribute__((stdcall)) EnterCriticalSection(void *lp)
 {
     cs_t *c = (cs_t *)lp;
     for (;;) {
@@ -254,26 +255,26 @@ void EnterCriticalSection(void *lp)
     }
 }
 
-void LeaveCriticalSection(void *lp)
+void __attribute__((stdcall)) LeaveCriticalSection(void *lp)
 {
     cs_t *c = (cs_t *)lp;
     __asm__ volatile("lock btrl $0, %0" : "+m"(c->lock) : : "cc");
 }
 
-void DeleteCriticalSection(void *lp) { (void)lp; }
+void __attribute__((stdcall)) DeleteCriticalSection(void *lp) { (void)lp; }
 
 /* IsDBCSLeadByte: 0 con codepage de un byte (CP1252, el unico que
  * soportamos); el CRT mingw lo usa en mbstowcs. */
-int IsDBCSLeadByte(int b) { (void)b; return 0; }
+int __attribute__((stdcall)) IsDBCSLeadByte(int b) { (void)b; return 0; }
 
 /* --- TLS --- */
 
 static uint32_t tls_slots[64];
 
-void *   TlsGetValue(uint32_t s) { return (s < 64) ? (void *)tls_slots[s] : 0; }
-void     TlsSetValue(uint32_t s, void *v) { if (s < 64) tls_slots[s] = (uint32_t)v; }
-uint32_t TlsAlloc(void) { return 1; }
-void     TlsFree(uint32_t s) { (void)s; }
+void *   __attribute__((stdcall)) TlsGetValue(uint32_t s) { return (s < 64) ? (void *)tls_slots[s] : 0; }
+void     __attribute__((stdcall)) TlsSetValue(uint32_t s, void *v) { if (s < 64) tls_slots[s] = (uint32_t)v; }
+uint32_t __attribute__((stdcall)) TlsAlloc(void) { return 1; }
+void     __attribute__((stdcall)) TlsFree(uint32_t s) { (void)s; }
 
 /* --- modulos / GetProcAddress --- */
 
@@ -318,7 +319,7 @@ static uint32_t sys_dllbase(const char *name)
     return r;
 }
 
-uint32_t GetModuleHandleA(const char *name)
+uint32_t __attribute__((stdcall)) GetModuleHandleA(const char *name)
 {
     const mod_desc_t *m;
     uint32_t i, base;
@@ -336,7 +337,7 @@ uint32_t GetModuleHandleA(const char *name)
 
 #define SYS_GETPROC 32
 
-uint32_t GetProcAddress(uint32_t hmod, const char *name)
+uint32_t __attribute__((stdcall)) GetProcAddress(uint32_t hmod, const char *name)
 {
     trace("[k32] GetProcAddress\n");
     uint32_t i, r;
@@ -355,7 +356,7 @@ uint32_t GetProcAddress(uint32_t hmod, const char *name)
     return r;
 }
 
-uint32_t LoadLibraryA(const char *name)
+uint32_t __attribute__((stdcall)) LoadLibraryA(const char *name)
 {
     uint32_t h;
     trace("[k32] LoadLibraryA\n");
@@ -365,7 +366,7 @@ uint32_t LoadLibraryA(const char *name)
     return h != 0 ? h : 0;
 }
 
-uint32_t FreeLibrary(uint32_t h) { (void)h; return 1; }
+uint32_t __attribute__((stdcall)) FreeLibrary(uint32_t h) { (void)h; return 1; }
 
 /* --- codepage ASCII (CP_ACP/CP_OEM/MB para el CRT) --- */
 
@@ -375,7 +376,7 @@ typedef struct {
     uint8_t  lead[12];
 } CPINFO;
 
-uint32_t MultiByteToWideChar(uint32_t cp, uint32_t flags,
+uint32_t __attribute__((stdcall)) MultiByteToWideChar(uint32_t cp, uint32_t flags,
                              const char *mbs, int mbs_len,
                              void *wbs, int wb_max)
 {
@@ -392,7 +393,7 @@ uint32_t MultiByteToWideChar(uint32_t cp, uint32_t flags,
     return (uint32_t)n;
 }
 
-uint32_t WideCharToMultiByte(uint32_t cp, uint32_t flags,
+uint32_t __attribute__((stdcall)) WideCharToMultiByte(uint32_t cp, uint32_t flags,
                              const void *wcs, int wbs_len,
                              char *mbs, int mb_max,
                              const char *def, int *used)
@@ -414,7 +415,7 @@ uint32_t WideCharToMultiByte(uint32_t cp, uint32_t flags,
     return (uint32_t)n;
 }
 
-uint32_t GetCPInfo(uint32_t cp, CPINFO *info)
+uint32_t __attribute__((stdcall)) GetCPInfo(uint32_t cp, CPINFO *info)
 {
     int i;
     (void)cp;
@@ -431,27 +432,27 @@ uint32_t GetCPInfo(uint32_t cp, CPINFO *info)
 
 static uint32_t unhandled_filter;
 
-uint32_t SetUnhandledExceptionFilter(uint32_t fn)
+uint32_t __attribute__((stdcall)) SetUnhandledExceptionFilter(uint32_t fn)
 {
     uint32_t old = unhandled_filter;
     unhandled_filter = fn;
     return old;
 }
 
-uint32_t UnhandledExceptionFilter(uint32_t ei) { (void)ei; return 1; }
-int IsDebuggerPresent(void) { return 0; }
+uint32_t __attribute__((stdcall)) UnhandledExceptionFilter(uint32_t ei) { (void)ei; return 1; }
+int __attribute__((stdcall)) IsDebuggerPresent(void) { return 0; }
 
-void Sleep(uint32_t ms)
+void __attribute__((stdcall)) Sleep(uint32_t ms)
 {
     (void)ms;
     for (volatile uint32_t i = 0; i < 100000; i++) ;
 }
 
-uint32_t GetTickCount(void) { return 0; }
+uint32_t __attribute__((stdcall)) GetTickCount(void) { return 0; }
 
-void GetSystemTimeAsFileTime(uint32_t *t) { if (t) { t[0] = 0; t[1] = 0; } }
+void __attribute__((stdcall)) GetSystemTimeAsFileTime(uint32_t *t) { if (t) { t[0] = 0; t[1] = 0; } }
 uint32_t QueryPerformanceCounter(void *c) { if (c) *(uint64_t *)c = 0; return 1; }
-uint32_t QueryPerformanceFrequency(void *c) { if (c) *(uint64_t *)c = 1000; return 1; }
+uint32_t __attribute__((stdcall)) QueryPerformanceFrequency(void *c) { if (c) *(uint64_t *)c = 1000; return 1; }
 
 uint32_t GetSystemTime(uint32_t *t)
 {
@@ -479,7 +480,7 @@ typedef struct {
     uint32_t type;
 } MEMORY_BASIC_INFORMATION;
 
-uint32_t VirtualProtect(void *addr, uint32_t size, uint32_t prot,
+uint32_t __attribute__((stdcall)) VirtualProtect(void *addr, uint32_t size, uint32_t prot,
                         uint32_t *old)
 {
     (void)addr; (void)size; (void)prot;
@@ -487,7 +488,7 @@ uint32_t VirtualProtect(void *addr, uint32_t size, uint32_t prot,
     return 1;
 }
 
-uint32_t VirtualQuery(const void *addr, MEMORY_BASIC_INFORMATION *mbi,
+uint32_t __attribute__((stdcall)) VirtualQuery(const void *addr, MEMORY_BASIC_INFORMATION *mbi,
                       uint32_t len)
 {
     if (mbi == 0 || len < sizeof(*mbi))
@@ -501,13 +502,13 @@ uint32_t VirtualQuery(const void *addr, MEMORY_BASIC_INFORMATION *mbi,
     return sizeof(*mbi);
 }
 
-void *VirtualAlloc(void *addr, uint32_t size, uint32_t type, uint32_t prot)
+void *__attribute__((stdcall)) VirtualAlloc(void *addr, uint32_t size, uint32_t type, uint32_t prot)
 {
     (void)addr; (void)type; (void)prot;
     return win_malloc(size);
 }
 
-uint32_t VirtualFree(void *p, uint32_t size, uint32_t type)
+uint32_t __attribute__((stdcall)) VirtualFree(void *p, uint32_t size, uint32_t type)
 {
     (void)p; (void)size; (void)type;
     return 1;
@@ -523,34 +524,34 @@ static void win_free(void *p)
     (void)r;
 }
 
-uint32_t GetProcessHeap(void) { return 1; }
+uint32_t __attribute__((stdcall)) GetProcessHeap(void) { return 1; }
 
-void *HeapAlloc(uint32_t heap, uint32_t flags, uint32_t size)
+void *__attribute__((stdcall)) HeapAlloc(uint32_t heap, uint32_t flags, uint32_t size)
 {
     (void)heap; (void)flags;
     return win_malloc(size);
 }
 
-uint32_t HeapFree(uint32_t heap, uint32_t flags, void *p)
+uint32_t __attribute__((stdcall)) HeapFree(uint32_t heap, uint32_t flags, void *p)
 {
     (void)heap; (void)flags;
     win_free(p);
     return 1;
 }
 
-void *HeapReAlloc(uint32_t heap, uint32_t flags, void *p, uint32_t size)
+void *__attribute__((stdcall)) HeapReAlloc(uint32_t heap, uint32_t flags, void *p, uint32_t size)
 {
     (void)heap; (void)flags; (void)p;
     return win_malloc(size);
 }
 
-uint32_t HeapSize(uint32_t heap, uint32_t flags, const void *p)
+uint32_t __attribute__((stdcall)) HeapSize(uint32_t heap, uint32_t flags, const void *p)
 {
     (void)heap; (void)flags; (void)p;
     return 0x1000;
 }
 
-void GetStartupInfo(void *si)
+void __attribute__((stdcall)) GetStartupInfo(void *si)
 {
     trace("[k32] GetStartupInfo\n");
     if (si) {
@@ -630,7 +631,7 @@ static int sys_flush(void)
 }
 
 /* Abre un archivo del FS. Devuelve HANDLE (0x100+slot) o -1. */
-void *CreateFileA(const char *name, uint32_t access, uint32_t share,
+void *__attribute__((stdcall)) CreateFileA(const char *name, uint32_t access, uint32_t share,
                   uint32_t sec_attrs, uint32_t creation, uint32_t flags,
                   uint32_t tmpl)
 {
@@ -674,7 +675,7 @@ void *CreateFileA(const char *name, uint32_t access, uint32_t share,
 }
 
 /* Lee 'n' bytes desde la posicion del handle. */
-uint32_t ReadFile(void *h, void *buf, uint32_t n, uint32_t *read,
+uint32_t __attribute__((stdcall)) ReadFile(void *h, void *buf, uint32_t n, uint32_t *read,
                   uint32_t ovl)
 {
     int i = (int)(uint32_t)h - 0x100;
@@ -694,7 +695,7 @@ uint32_t ReadFile(void *h, void *buf, uint32_t n, uint32_t *read,
     return 1;
 }
 
-uint32_t GetFileSize(void *h, uint32_t *high)
+uint32_t __attribute__((stdcall)) GetFileSize(void *h, uint32_t *high)
 {
     int i = (uint32_t)h - 0x100;
     if (i < 0 || i >= 16 || open_files[i].name[0] == 0)
@@ -703,7 +704,7 @@ uint32_t GetFileSize(void *h, uint32_t *high)
     return open_files[i].size;
 }
 
-uint32_t CloseHandle(void *h)
+uint32_t __attribute__((stdcall)) CloseHandle(void *h)
 {
     int i = (uint32_t)h - 0x100;
     if (i >= 0 && i < 16) {
@@ -790,7 +791,7 @@ static int find_next_entry(find_state_t *st, const char *pat,
     return 0;
 }
 
-void *FindFirstFileA(const char *pat, WIN32_FIND_DATAA *fd)
+void *__attribute__((stdcall)) FindFirstFileA(const char *pat, WIN32_FIND_DATAA *fd)
 {
     find_state_t *st;
     if (find_st_n >= 4)
@@ -811,7 +812,7 @@ void *FindFirstFileA(const char *pat, WIN32_FIND_DATAA *fd)
     return (void *)INVALID_HANDLE_VALUE;
 }
 
-int FindNextFileA(void *h, WIN32_FIND_DATAA *fd)
+int __attribute__((stdcall)) FindNextFileA(void *h, WIN32_FIND_DATAA *fd)
 {
     int i = (uint32_t)h - 0x200;
     if (i < 0 || i >= find_st_n)
@@ -819,7 +820,7 @@ int FindNextFileA(void *h, WIN32_FIND_DATAA *fd)
     return find_next_entry(&find_st[i], find_st[i].pat, fd);
 }
 
-uint32_t FindClose(void *h)
+uint32_t __attribute__((stdcall)) FindClose(void *h)
 {
     int i = (uint32_t)h - 0x200;
     if (i >= 0 && i < find_st_n)
@@ -827,7 +828,7 @@ uint32_t FindClose(void *h)
     return 1;
 }
 
-void GetCurrentDirectoryA(uint32_t n, char *buf)
+void __attribute__((stdcall)) GetCurrentDirectoryA(uint32_t n, char *buf)
 {
     trace("[k32] GetCurrentDirectoryA n=");
     trace_hex(n);
@@ -837,14 +838,14 @@ void GetCurrentDirectoryA(uint32_t n, char *buf)
         buf[0] = 0;
 }
 
-void GetCurrentDirectoryW(uint32_t n, uint16_t *buf)
+void __attribute__((stdcall)) GetCurrentDirectoryW(uint32_t n, uint16_t *buf)
 {
     (void)n;
     if (buf)
         buf[0] = 0;
 }
 
-void SetCurrentDirectoryA(const char *d)
+void __attribute__((stdcall)) SetCurrentDirectoryA(const char *d)
 {
     trace("[k32] SetCurrentDirectoryA '");
     if (d)
@@ -852,11 +853,11 @@ void SetCurrentDirectoryA(const char *d)
     trace("'\n");
 }
 
-void SetCurrentDirectoryW(const uint16_t *d) { (void)d; }
+void __attribute__((stdcall)) SetCurrentDirectoryW(const uint16_t *d) { (void)d; }
 
 /* --- Global*: memoria global = el heap del proceso (no movible) --- */
 
-void *GlobalAlloc(uint32_t flags, uint32_t size)
+void *__attribute__((stdcall)) GlobalAlloc(uint32_t flags, uint32_t size)
 {
     (void)flags;
     if (size == 0)
@@ -864,25 +865,25 @@ void *GlobalAlloc(uint32_t flags, uint32_t size)
     return win_malloc(size);
 }
 
-void *GlobalLock(void *h)
+void *__attribute__((stdcall)) GlobalLock(void *h)
 {
     return h;                   /* GMEM_FIXED: el handle ES el puntero */
 }
 
-uint32_t GlobalUnlock(void *h)
+uint32_t __attribute__((stdcall)) GlobalUnlock(void *h)
 {
     (void)h;
     return 1;
 }
 
-void *GlobalFree(void *h)
+void *__attribute__((stdcall)) GlobalFree(void *h)
 {
     win_free(h);
     return 0;                   /* NULL = exito */
 }
 
 /* LocalFree/LocalAlloc: el heap del proceso. */
-void *LocalFree(void *h)
+void *__attribute__((stdcall)) LocalFree(void *h)
 {
     win_free(h);
     return 0;
@@ -890,7 +891,7 @@ void *LocalFree(void *h)
 
 /* --- lstr*: strings ANSI --- */
 
-uint32_t lstrlenA(const char *s)
+uint32_t __attribute__((stdcall)) lstrlenA(const char *s)
 {
     trace("[k32] lstrlenA '");
     if (s) trace(s);
@@ -898,14 +899,14 @@ uint32_t lstrlenA(const char *s)
     return strlen_u(s);
 }
 
-char *lstrcpyA(char *dst, const char *src)
+char *__attribute__((stdcall)) lstrcpyA(char *dst, const char *src)
 {
     uint32_t i = 0;
     do { dst[i] = src[i]; } while (src[i++]);
     return dst;
 }
 
-char *lstrcpynA(char *dst, const char *src, uint32_t n)
+char *__attribute__((stdcall)) lstrcpynA(char *dst, const char *src, uint32_t n)
 {
     uint32_t i;
     if (n == 0)
@@ -916,7 +917,7 @@ char *lstrcpynA(char *dst, const char *src, uint32_t n)
     return dst;
 }
 
-char *lstrcatA(char *dst, const char *src)
+char *__attribute__((stdcall)) lstrcatA(char *dst, const char *src)
 {
     uint32_t d = 0, i = 0;
     while (dst[d]) d++;
@@ -925,13 +926,13 @@ char *lstrcatA(char *dst, const char *src)
     return dst;
 }
 
-int32_t lstrcmpA(const char *a, const char *b)
+int32_t __attribute__((stdcall)) lstrcmpA(const char *a, const char *b)
 {
     while (*a && *b && *a == *b) { a++; b++; }
     return (int32_t)(uint8_t)*a - (int32_t)(uint8_t)*b;
 }
 
-int32_t lstrcmpiA(const char *a, const char *b)
+int32_t __attribute__((stdcall)) lstrcmpiA(const char *a, const char *b)
 {
     for (;;) {
         char ca = *a, cb = *b;
@@ -952,7 +953,7 @@ int32_t lstrcmpiA(const char *a, const char *b)
 #define FILE_CURRENT 1
 #define FILE_END 2
 
-uint32_t GetFileAttributesA(const char *name)
+uint32_t __attribute__((stdcall)) GetFileAttributesA(const char *name)
 {
     if (name == 0)
         return 0xFFFFFFFFu;
@@ -971,13 +972,13 @@ uint32_t GetFileAttributesA(const char *name)
     return FILE_ATTRIBUTE_NORMAL;
 }
 
-uint32_t SetFileAttributesA(const char *name, uint32_t attrs)
+uint32_t __attribute__((stdcall)) SetFileAttributesA(const char *name, uint32_t attrs)
 {
     (void)name; (void)attrs;
     return 1;
 }
 
-uint32_t SetFilePointer(void *h, int32_t dist_low, int32_t *dist_high,
+uint32_t __attribute__((stdcall)) SetFilePointer(void *h, int32_t dist_low, int32_t *dist_high,
                         uint32_t method)
 {
     int i = (uint32_t)h - 0x100;
@@ -1000,7 +1001,7 @@ uint32_t SetFilePointer(void *h, int32_t dist_low, int32_t *dist_high,
     return open_files[i].pos;
 }
 
-uint32_t SetEndOfFile(void *h)
+uint32_t __attribute__((stdcall)) SetEndOfFile(void *h)
 {
     int i = (uint32_t)h - 0x100;
     if (i >= 0 && i < 16 && open_files[i].writable && open_files[i].name[0]) {
@@ -1011,7 +1012,7 @@ uint32_t SetEndOfFile(void *h)
     return 1;
 }
 
-uint32_t GetFullPathNameA(const char *name, uint32_t n, char *buf,
+uint32_t __attribute__((stdcall)) GetFullPathNameA(const char *name, uint32_t n, char *buf,
                           char **filepart)
 {
     uint32_t len = 0, last = 0, i;
@@ -1044,7 +1045,7 @@ uint32_t GetFullPathNameA(const char *name, uint32_t n, char *buf,
 
 typedef void (*thread_fn)(void *);
 
-void *CreateThread(uint32_t attrs, uint32_t stack_size, void *start,
+void *__attribute__((stdcall)) CreateThread(uint32_t attrs, uint32_t stack_size, void *start,
                    void *param, uint32_t flags, uint32_t *tid)
 {
     thread_fn fn = (thread_fn)start;
@@ -1063,7 +1064,7 @@ void *CreateThread(uint32_t attrs, uint32_t stack_size, void *start,
  * sin multitarea Win32 devolvemos FALSE y el llamador muestra error o
  * no hace nada. --- */
 
-uint32_t CreateProcessA(const char *app, char *cmd, uint32_t p1,
+uint32_t __attribute__((stdcall)) CreateProcessA(const char *app, char *cmd, uint32_t p1,
                         uint32_t p2, uint32_t inherit, uint32_t flags,
                         void *env, const char *cwd, const void *si,
                         void *pi)
@@ -1076,7 +1077,7 @@ uint32_t CreateProcessA(const char *app, char *cmd, uint32_t p1,
 /* --- aritmetica: MulDiv sin int64 (los modulos no ligan libgcc).
  * Valores tipicos (puntos por linea de impresion): |a*b| << 2^31. --- */
 
-int32_t MulDiv(int32_t a, int32_t b, int32_t c)
+int32_t __attribute__((stdcall)) MulDiv(int32_t a, int32_t b, int32_t c)
 {
     int32_t p, rem, r;
     if (c == 0)
@@ -1217,7 +1218,7 @@ static void str_cpy_default(const char *def, char *out, uint32_t size)
     out[i] = 0;
 }
 
-uint32_t GetPrivateProfileStringA(const char *sec, const char *key,
+uint32_t __attribute__((stdcall)) GetPrivateProfileStringA(const char *sec, const char *key,
                                   const char *def, char *out,
                                   uint32_t size, const char *file)
 {
@@ -1241,7 +1242,7 @@ uint32_t GetPrivateProfileStringA(const char *sec, const char *key,
 }
 
 /* WritePrivateProfileStringA: FS readonly, finge guardar. */
-uint32_t WritePrivateProfileStringA(const char *sec, const char *key,
+uint32_t __attribute__((stdcall)) WritePrivateProfileStringA(const char *sec, const char *key,
                                     const char *value, const char *file)
 {
     (void)sec; (void)key; (void)value; (void)file;
@@ -1374,7 +1375,7 @@ static uint32_t fmt_tokens(const char *fmt, char *out, uint32_t size,
     return o;
 }
 
-uint32_t GetDateFormatA(uint32_t locale, uint32_t flags, const void *st,
+uint32_t __attribute__((stdcall)) GetDateFormatA(uint32_t locale, uint32_t flags, const void *st,
                         const char *fmt, char *buf, uint32_t size)
 {
     const char *def = "M/d/yyyy";
@@ -1384,7 +1385,7 @@ uint32_t GetDateFormatA(uint32_t locale, uint32_t flags, const void *st,
     return fmt_tokens(fmt ? fmt : def, buf, size, 1);
 }
 
-uint32_t GetTimeFormatA(uint32_t locale, uint32_t flags, const void *st,
+uint32_t __attribute__((stdcall)) GetTimeFormatA(uint32_t locale, uint32_t flags, const void *st,
                         const char *fmt, char *buf, uint32_t size)
 {
     const char *def = "h:mm tt";
@@ -1395,7 +1396,7 @@ uint32_t GetTimeFormatA(uint32_t locale, uint32_t flags, const void *st,
 }
 
 /* GetLocaleInfoA: valores de ingles (EE. UU.), idioma 9 (en-US). */
-uint32_t GetLocaleInfoA(uint32_t locale, uint32_t type, char *buf,
+uint32_t __attribute__((stdcall)) GetLocaleInfoA(uint32_t locale, uint32_t type, char *buf,
                         uint32_t size)
 {
     const char *v = "";
@@ -1442,7 +1443,7 @@ uint32_t GetLocaleInfoA(uint32_t locale, uint32_t type, char *buf,
 
 /* FormatMessageA: solo FROM_STRING (0x400) y FROM_SYSTEM (0x1000) con
  * una tabla de mensajes fija. Sustituye %1..%9 por args[]. */
-uint32_t FormatMessageA(uint32_t flags, const void *src, uint32_t msgid,
+uint32_t __attribute__((stdcall)) FormatMessageA(uint32_t flags, const void *src, uint32_t msgid,
                         uint32_t lang, char *buf, uint32_t size,
                         uint32_t *args)
 {
