@@ -93,7 +93,7 @@ $(BUILD)/task/switch.o: kernel/task/switch.asm
 # la region WIN32_REGION_BASE (0xB0000000, tools/dll32.ld) y el
 # programa de prueba con imports (user/winapi.c).
 USER_TEXT = 0x80000000
-USER_SRCS = user/hello.c user/fork.c user/exec.c user/console.c user/winapi.c user/quick.c user/desktop.c user/explorer.c user/inject.c user/installer.c
+USER_SRCS = user/hello.c user/fork.c user/exec.c user/console.c user/winapi.c user/quick.c user/desktop.c user/explorer.c user/inject.c user/installer.c user/b6inj.c
 USER_ELFS = $(patsubst user/%.c,$(BUILD)/user/%.elf,$(USER_SRCS))
 USER_EXES = $(patsubst user/%.c,$(BUILD)/user/%.exe,$(USER_SRCS))
 
@@ -104,7 +104,8 @@ FS_USER_ELFS = $(BUILD)/user/hello.elf $(BUILD)/user/mouseinfo.elf \
                $(BUILD)/user/win_demo.elf $(BUILD)/user/win_two.elf \
                $(BUILD)/user/desktop.elf $(BUILD)/user/explorer.elf \
                $(BUILD)/user/inject.elf \
-               $(BUILD)/user/installer.elf
+               $(BUILD)/user/installer.elf \
+               $(BUILD)/user/b6inj.elf
 FS_USER_EXES = $(filter %quick.exe %winapi.exe %fork.exe %exec.exe %console.exe,\
                        $(USER_EXES))
 
@@ -128,6 +129,7 @@ WIN_APPS  += $(BUILD)/user/win32/gdidemo.exe
 # writetest.exe: escritura Win32 (CreateFileA WRITE + WriteFile), Fase E.
 WIN_APPS  += $(BUILD)/user/win32/writetest.exe
 WIN_APPS  += $(BUILD)/user/win32/dlgtest.exe
+WIN_APPS  += $(BUILD)/user/win32/wintwo.exe
 
 $(BUILD)/user/win32/%.exe: user/win32/%.c
 	@mkdir -p $(dir $@)
@@ -135,6 +137,12 @@ $(BUILD)/user/win32/%.exe: user/win32/%.c
 	           -Wl,--subsystem,console -s -o $@ $<
 
 $(BUILD)/user/win32/messagebox.exe: user/win32/messagebox.c
+	@mkdir -p $(dir $@)
+	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
+	           -Wl,--subsystem,console -s -o $@ $< -luser32
+
+# wintwo.exe: message loop real con 2 ventanas top-level (Fase 23-B6).
+$(BUILD)/user/win32/wintwo.exe: user/win32/wintwo.c
 	@mkdir -p $(dir $@)
 	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
 	           -Wl,--subsystem,console -s -o $@ $< -luser32

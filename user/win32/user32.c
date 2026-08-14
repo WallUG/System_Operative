@@ -773,6 +773,7 @@ static char     child_text[CHILD_MAX][CHILD_TXTLEN];
 static int      child_cur[CHILD_MAX];   /* caret (indice en child_text)  */
 static int      child_edit[CHILD_MAX];  /* 1 = control editable (EDIT/RichEdit) */
 static uint32_t focus_edit;             /* control de edicion enfocado  */
+static uint32_t wm_focus_win = 1;       /* Fase 23-B6: foco por ventana */
 
 /* DCs de gdi32: uno por hwnd (pool estatico). */
 static myos_dc_t dc_pool[MAX_WNDPROCS];
@@ -893,6 +894,22 @@ static int menu_bar_top_at(uint32_t hwnd, int x);
 static int menu_bar_top_letter(uint32_t hwnd, char c);
 static uint32_t menu_modal(uint32_t hwnd, int top, int x);
 
+static void event_to_wm(const uint32_t *ev); /* fwd */
+static uint32_t wm_hit_hwnd(int mx, int my)
+{
+    uint32_t info[8];
+    int i;
+    for (i = MAX_WNDPROCS - 1; i >= 1; i--) {
+        if (!wnd_proc[i] || is_child((uint32_t)i))
+            continue;
+        if (sys_wininfo((uint32_t)i, info) != 0)
+            continue;
+        if (mx >= (int)info[0] && mx < (int)info[0] + (int)info[2] &&
+            my >= (int)info[1] && my < (int)info[1] + (int)info[3])
+            return (uint32_t)i;
+    }
+    return 0;
+}
 static void event_to_wm(const uint32_t *ev)
 {
     uint32_t hwnd = 1, buttons = ev[3], key = ev[4];
@@ -902,6 +919,24 @@ static void event_to_wm(const uint32_t *ev)
             hwnd = i;
             break;
         }
+
+    /* Fase 23-B6: routing por ventana. El kernel entrega los eventos al
+     * proceso, no a la ventana; aqui se hace hit-testing (ventana bajo
+     * el raton, topmost primero) para el raton y se usa el foco
+     * (ultima ventana clicada) para el teclado. */
+    {
+        uint32_t hit = wm_hit_hwnd((int)ev[1], (int)ev[2]);
+        if (ev[0] == EV_BUTTON_DOWN && hit)
+            wm_focus_win = hit;
+        if (hit)
+            hwnd = hit;
+        else if (ev[0] == EV_KEY || ev[0] == EV_MOVE || ev[0] == EV_WINCLOSE) {
+            if (wm_focus_win && wm_focus_win < MAX_WNDPROCS &&
+                wnd_proc[wm_focus_win])
+                hwnd = wm_focus_win;
+        }
+    }
+
     switch (ev[0]) {
     case EV_MOVE:
         msgq_push(hwnd, WM_MOUSEMOVE, buttons, (ev[2] << 16) | ev[1]);
@@ -967,7 +1002,8 @@ static void event_to_wm(const uint32_t *ev)
     }
 }
 
-static void event_to_wm(const uint32_t *ev); /* fwd: usa msgq_push */
+
+
 
 uint32_t __attribute__((stdcall)) RegisterClassA(uint32_t wc)
 {
