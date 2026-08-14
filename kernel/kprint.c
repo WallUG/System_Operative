@@ -1,11 +1,14 @@
 /* MyOS - kernel/kprint.c
  * Utilidades de impresion compartidas: VGA + COM1 simultaneos.
- * (Division inline de i386; sin helpers de libgcc.) */
+ * (Division inline de i386; sin helpers de libgcc.)
+ * Fase 22-fix: mientras el bootscreen cubre el LFB, kprint solo escribe
+ * al serial (el log sigue para debug/tests pero no pisa la animacion). */
 
 #include <stdint.h>
 #include "kprint.h"
 #include "drivers/vga.h"
 #include "drivers/serial.h"
+#include "bootscreen.h"
 
 void kprint_uint(uint32_t n)
 {
@@ -17,14 +20,16 @@ void kprint_uint(uint32_t n)
     } while (n > 0);
     while (k > 0) {
         k--;
-        vga_putc(tmp[k]);
+        if (!bootscreen_active())
+            vga_putc(tmp[k]);
         serial_putc(tmp[k]);
     }
 }
 
 void kprint(const char *s)
 {
-    vga_puts(s);
+    if (!bootscreen_active())
+        vga_puts(s);
     serial_puts(s);
 }
 
@@ -38,6 +43,7 @@ void kprint_hex32(uint32_t n)
     for (int s = 28; s >= 0; s -= 4)
         buf[p++] = digits[(n >> s) & 0xF];
     buf[p] = '\0';
-    vga_puts(buf);
+    if (!bootscreen_active())
+        vga_puts(buf);
     serial_puts(buf);
 }

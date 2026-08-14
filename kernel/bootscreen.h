@@ -7,5 +7,8 @@
 void bootscreen_start(void);
 void bootscreen_status(const char *fase, int pct);
 void bootscreen_done(void);
+/* 1 mientras la pantalla de carga cubre el LFB: kprint solo va al
+ * serial para no pisar la animacion (Fase 22-fix). */
+int bootscreen_active(void);
 
 #endif

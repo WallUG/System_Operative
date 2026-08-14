@@ -49,7 +49,7 @@ def waitstr(s, t=15):
     return False
 
 # --- 1) barra de carga: screendump temprano (durante el boot) ---
-time.sleep(1.6)
+time.sleep(0.3)
 hmp('screendump /tmp/opencode/f22_bar.ppm', 0.8)
 print("barra capturada", flush=True)
 
@@ -70,7 +70,7 @@ def sendline(s):
     for ch in s:
         hmp({' ':'sendkey spc','\n':'sendkey ret','.':'sendkey dot'}.get(ch, f'sendkey {ch}'), 0.2)
 waitstr('esc: fin del escritorio', 6)
-time.sleep(1.5)                  # espera a que la shell vuelva al read_line
+time.sleep(2.5)                  # espera a que la shell vuelva al read_line
 sendline('bootgui off\n'); time.sleep(1)
 sendline('flush\n'); time.sleep(2)
 check('bootgui off persistido', 'OFF' in ''.join(acc[-400:]))

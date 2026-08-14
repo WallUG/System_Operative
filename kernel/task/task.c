@@ -271,16 +271,25 @@ void sched_kill_current(void)
     list_remove(current);
     current->state = TASK_FREE;
     task_count--;
+    /* La tarea muerta queda fuera de la lista pero current sigue
+     * apuntandole (el iret la deja en el bucle task_stub_exit). El
+     * proximo sched_tick detecta current->state == TASK_FREE y rota a
+     * la siguiente tarea viva (la idle -> la shell reanuda). */
 }
 
 void sched_tick(registers_t *regs)
 {
     task_t *prev;
 
-    if (!sched_enabled || task_count < 2) {
-        /* Sin multitarea: volver al epilogo normal del stub (iret
-         * con el marco actual). Equivale a no hacer nada. */
+    /* Sin multitarea: si la tarea actual esta viva, volver al epilogo
+     * normal (iret con el marco actual). Si esta muerta (la mato
+     * sys_exit/#PF y quedo en el bucle task_stub_exit), rotar a la
+     * siguiente tarea lista: si solo queda la idle, es ella. */
+    if (!sched_enabled)
         return;
+    if (task_count < 2) {
+        if (current->state == TASK_READY || current->state == TASK_RUNNING)
+            return;
     }
 
     prev = current;

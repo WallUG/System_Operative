@@ -120,3 +120,8 @@ void bootscreen_done(void)
     bs_active = 0;
     vgafx_clear();
 }
+
+int bootscreen_active(void)
+{
+    return bs_active;
+}

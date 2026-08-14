@@ -18,9 +18,13 @@ model):
   "MyOS 0.4.0" title, phase text and green progress bar drawn straight to
   the LFB. `kmain` calls `bootscreen_status(fase, pct)` at each stage
   (drivers → memory → pagination → interrupts → MEFS → Win32 DLLs →
-  multitasking → shell) with short delays so it is visible; the serial log
-  keeps flowing for headless tests. `bootscreen_done()` clears to the vgafx
-  console.
+  multitasking → shell) with short delays so it is visible. During the
+  splash, `kprint` only writes to the serial (`bootscreen_active()` check in
+  kprint.c): the boot log stays available for headless tests but does NOT
+  paint over the animation (fix: text used to overlap the progress bar).
+  The Fase 3/5 boot demos were removed for a clean boot: PIT 1 s check,
+  the 3 s keyboard window, and the T-A/T-B scheduler demo tasks.
+  `bootscreen_done()` clears to the vgafx console.
 - **Autoboot of the desktop**: `shell_autoboot()` runs before the prompt;
   if the MEFS superblock flag `boot_gui` is set and `desktop.elf` exists it
   prints "Autoboot: escritorio en 3 s" and waits 3 s polling keyboard+serial
@@ -33,6 +37,11 @@ model):
   (+ `flush` to persist), written by `tools/makefs.py` (`-b 1` default).
 - **Fix**: `keyboard_flush()` in `wm_recompute` when the last window closes
   — the key that closed the window no longer leaks into the shell's line.
+- **Fix (scheduler)**: `sched_kill_current` leaves `current` pointing at the
+  dead task and `sched_tick` returned early when `task_count<2`, so without
+  the demo tasks the CPU stayed in the dead task's `task_stub_exit` loop and
+  the shell never resumed. Now `sched_tick` rotates when `current` is
+  `TASK_FREE` even with a single live task (the idle → shell read_line).
 - **Tests**: `tools/test_fase22.py` 7/7 PASS; all previous test scripts got
   a `cancel_autoboot()` helper (waits for "Autoboot:" and sends a key that
   is discarded). test_faseE also waits for `exit:0` before launching the

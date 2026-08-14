@@ -37,48 +37,10 @@ static void bs_delay(void)
         ;
 }
 
-/* --- Fase 5: tareas de prueba del scheduler round-robin --- */
-static volatile uint32_t cnt_a, cnt_b;
-/* Las tareas demo imprimen solas durante la ventana de demostracion; al
- * arrancar el shell se silencian para no invadir la consola. */
-static volatile int demo_print = 1;
-
-static void task_print_line(const char *name, uint32_t v)
-{
-    if (!demo_print)
-        return;
-    /* print atomico (IF off): evita intercalar caracteres entre tareas */
-    __asm__ volatile("cli");
-    kprint(name);
-    kprint(": ");
-    kprint_uint(v);
-    kprint("\n");
-    __asm__ volatile("sti");
-}
-
-static void task_a(void)
-{
-    uint32_t last = timer_get_ticks();
-    for (;;) {
-        cnt_a++;
-        if (timer_get_ticks() - last >= 10) {
-            last = timer_get_ticks();
-            task_print_line("T-A", cnt_a);
-        }
-    }
-}
-
-static void task_b(void)
-{
-    uint32_t last = timer_get_ticks();
-    for (;;) {
-        cnt_b++;
-        if (timer_get_ticks() - last >= 10) {
-            last = timer_get_ticks();
-            task_print_line("T-B", cnt_b);
-        }
-    }
-}
+/* --- Fase 5 (historial): tareas demo del scheduler round-robin. ---
+ * Se eliminaron en la Fase 22 (limpieza del boot): solo ensuciaban la
+ * consola con T-A/T-B. El scheduler funciona igual con la shell como
+ * tarea idle. */
 
 void kmain(uint32_t boot_info_ptr)
 {
@@ -201,35 +163,6 @@ void kmain(uint32_t boot_info_ptr)
 
     sti();                      /* solo ahora: IDT y PIC listos */
 
-    {
-        uint32_t start = timer_get_ticks();
-        while (timer_get_ticks() - start < 100)
-            halt();             /* las IRQ despiertan el hlt */
-        kprint("PIT OK: 100 ticks en 1 s. ticks=");
-        kprint_uint(timer_get_ticks());
-        kprint("\n");
-    }
-
-    {
-        uint32_t start = timer_get_ticks();
-        int keys = 0;
-        kprint("Ventana de teclado (3 s) - pulsa algo...\n");
-        while (timer_get_ticks() - start < 300) {
-            int c = keyboard_read();
-            if (c < 0)
-                c = serial_read_char();     /* entrada alternativa por COM1 */
-            if (c >= 0) {
-                vga_putc((char)c);
-                serial_putc((char)c);
-                keys++;
-            }
-            halt();
-        }
-        kprint("\nTeclas recibidas: ");
-        kprint_uint((uint32_t)keys);
-        kprint("\n");
-    }
-
     /* --- Fase 6: GDT+TSS (ring 3), syscalls, FS y shell --- */
     gdt_init();                     /* segmentos de usuario + TSS */
     syscall_init();                 /* gate int 0x80 con DPL=3 */
@@ -267,28 +200,12 @@ void kmain(uint32_t boot_info_ptr)
     win32_init();
 
     /* --- Fase 5: multitarea round-robin (IRQ0) ---
-     * kmain continua como tarea idle (hlt); A y B son contadores que
-     * imprimen cada ~10 ticks (100 ms). El scheduler cambia de tarea en
-     * cada tick del PIT, alternando A/B/idle visiblemente. */
+     * kmain continua como tarea idle (hlt); las apps de usuario corren
+     * como tareas ring 3 con su PD. */
     bootscreen_status("Iniciando multitarea...", 95);
     bs_delay();
     sched_init();
-    task_create("A", task_a);
-    task_create("B", task_b);
     sched_start();
-
-    {
-        /* idle: dejar correr las tareas ~3 s, luego la shell */
-        uint32_t start = timer_get_ticks();
-        while (timer_get_ticks() - start < 300)
-            halt();
-    }
-
-    /* --- Shell interactiva (tarea idle) ---
-     * kmain ya no termina: lee teclado y ejecuta comandos. El demo de
-     * #PF intencional ahora es el comando 'pf'. Las tareas demo quedan
-     * calladas (demo_print=0) para no ensuciar la consola. */
-    demo_print = 0;
     bootscreen_status("Listo. Iniciando shell...", 100);
     bs_delay();
     bootscreen_done();
