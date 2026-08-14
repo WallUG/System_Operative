@@ -36,7 +36,9 @@ MEFS_ROOT = 0xFFFFFFFF
 FLAG_DIR = 1
 
 
-def build(files, out, capacity, boot_gui=True):
+def build(files, out, capacity, boot_gui=True, dirs=None):
+    """dirs: lista de (nombre_dir, [rutas de archivo]) -> subdirectorio
+    en la raiz (Fase 23-A2: soporte de subdirectorios en la imagen)."""
     # layout: superbloque, directorio (fijo MAX_FILES entradas), bitmap, datos
     dir_size = MAX_FILES * 32
     dir_sectors = (dir_size + 511) // 512
@@ -47,21 +49,40 @@ def build(files, out, capacity, boot_gui=True):
     data_start = bitmap_lba + bitmap_sectors
 
     # asigna bloques de datos (contiguos, uno por archivo)
-    n = len(files)
     entries = []          # (name, size, lba, flags, parent)
     block = 0
-    for path in files:
+    src = []              # (name_bytes, path) para volcar los datos luego
+
+    def add_file(path, parent):
+        nonlocal block
         name = os.path.basename(path).encode()
         if len(name) > 15:
             name = name[:15]
         size = os.path.getsize(path)
         nb = (size + 511) // 512
-        entries.append((name, size, data_start + block, 0, MEFS_ROOT))
+        entries.append((name, size, data_start + block, 0, parent))
+        src.append((name, path))
         block += nb
+
+    for path in files:
+        add_file(path, MEFS_ROOT)
+
+    # subdirectorios: el dir es una entrada (size=0, lba=0, IS_DIR,
+    # parent=MEFS_ROOT); sus archivos llevan parent = indice del dir.
+    for dname, dpaths in (dirs or []):
+        dname = dname.encode()
+        if len(dname) > 15:
+            dname = dname[:15]
+        dir_idx = len(entries)
+        entries.append((dname, 0, 0, FLAG_DIR, MEFS_ROOT))
+        for path in dpaths:
+            add_file(path, dir_idx)
 
     # bitmap: marca usados los bloques de los archivos
     bitmap = bytearray((capacity + 7) // 8)
     for name, size, lba, flags, parent in entries:
+        if flags & FLAG_DIR:
+            continue
         nb = (size + 511) // 512
         base = lba - data_start
         for i in range(base, base + nb):
@@ -74,7 +95,7 @@ def build(files, out, capacity, boot_gui=True):
 
     sb = (MAGIC +
           struct.pack("<IIIIIII",
-                      n,                       # num_files
+                      len(entries),            # num_files
                       LBA_FS_START + 1,        # dir_lba
                       dir_size,                # dir_size
                       bitmap_lba,              # bitmap_lba
@@ -89,7 +110,7 @@ def build(files, out, capacity, boot_gui=True):
     bitmap_bytes = bytes(bitmap).ljust(bitmap_sectors * 512, b"\0")
 
     data = b""
-    for path in files:
+    for name, path in src:
         with open(path, "rb") as f:
             blob = f.read()
         data += blob.ljust(((len(blob) + 511) // 512) * 512, b"\0")
@@ -100,7 +121,7 @@ def build(files, out, capacity, boot_gui=True):
         f.write(bitmap_bytes)
         f.write(data)
     total = len(sb) + len(dir_bytes) + len(bitmap_bytes) + len(data)
-    print(f"MEFS: {n} archivo(s) -> {out} "
+    print(f"MEFS: {len(entries)} entrada(s) -> {out} "
           f"(fs_capacity={capacity} sectores, data_start={data_start}, "
           f"bitmap {bitmap_sectors} sectores, {total} bytes)")
 
@@ -112,8 +133,14 @@ def main():
     ap.add_argument("-c", type=int, default=1400, help="fs_capacity (sectores)")
     ap.add_argument("-b", type=int, default=1,
                     help="boot_gui (1 = autoboot escritorio, 0 = consola)")
+    ap.add_argument("--dir", action="append", default=[],
+                    help="subdirectorio: NAME:p1,p2,... (Fase 23-A2)")
     args = ap.parse_args()
-    build(args.files, args.o, args.c, bool(args.b))
+    dirs = []
+    for spec in args.dir:
+        name, _, files = spec.partition(":")
+        dirs.append((name, files.split(",") if files else []))
+    build(args.files, args.o, args.c, bool(args.b), dirs)
 
 
 if __name__ == "__main__":

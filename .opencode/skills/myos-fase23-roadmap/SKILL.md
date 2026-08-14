@@ -72,19 +72,21 @@ en ráfaga durante crear/cerrar/mover).
 
 ### A2. Scrollbar del explorer + Home/End
 
-**Estado**: explorer.c tiene scroll (`scroll_off` sigue a `sel`) pero sin
-barra visible ni teclas Home/End/PgUp/PgDn.
-
-**Tarea**:
-- Teclas: `VK_SPECIAL_HOME` 0x104, `VK_SPECIAL_END` 0x105, `VK_SPECIAL_PGUP`
-  0x106, `VK_SPECIAL_PGDN` 0x107 → `sel` al inicio/fin/página (vis filas).
-- Scrollbar visual: franja a la derecha del cliente con thumb proporcional
-  a `vis/nfiles` y posición según `scroll_off`; click en la franja = PgUp/
-  PgDn (EV_BUTTON_DOWN/UP en la columna del scrollbar).
-- Mantener el click de selección en las filas.
-
-**Test**: 25× down + Home/End y verificar con screendump que el thumb y
-la selección se mueven (contar px del color del thumb en el PPM).
+**Estado: COMPLETADO.** `user/explorer.c`: teclas `VK_SPECIAL_HOME` 0x104
+→ sel=0, `END` 0x105 → sel=nfiles-1, `PGUP` 0x106 / `PGDN` 0x107 →
+sel ± vis (página). Scrollbar visual: franja SB_W=12 px a la derecha
+del cliente (solo si nfiles > vis) con thumb proporcional a vis/nfiles
+(`sb_thumb()`: th = track*vis/nfiles, ty = HDR_Y + (track-th)*scroll_off/
+(nfiles-vis)); clic en la franja: encima del thumb = PgUp, debajo =
+PgDn, en el thumb = salto proporcional (scroll_off = (y-ty)*(nfiles-vis)/
+(track-th)); el hit de filas excluye la franja. `tools/makefs.py` ampliado
+con `--dir NAME:p1,p2,...` (subdirectorios con parent=índice, formato del
+kernel) para generar FS de prueba con muchos archivos. Test
+`tools/test_fase23a2.py` **9/9 PASS**: thumb visible y posicionado en la
+raíz, End baja/Home sube, navegación a subdir con 35 entradas,
+25×down, PgDn/PgUp. Nota: con nfiles≈vis el PgUp desde el fondo casi no
+mueve el thumb (pocas líneas de overflow) — es comportamiento real.
+Colores en PPM: thumb=0x80A080, track=0x305030 (bytes LE del LFB).
 
 ### A3. Foco y eventos entre apps
 

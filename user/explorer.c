@@ -18,6 +18,7 @@
 #define MAXF    64              /* entradas de directorio */
 #define HDR_Y   20              /* fila inicial de los items */
 #define ROW_H   16
+#define SB_W    12              /* ancho del scrollbar (Fase 23-A2) */
 
 #define COLOR_CL  0x00202040u   /* cliente */
 #define COLOR_ROW 0x00505090u   /* fila seleccionada */
@@ -27,6 +28,9 @@
 #define COLOR_HDR 0x00E0E0FFu
 #define COLOR_ERR 0x00FF9090u
 #define COLOR_DIR 0x00A0E0FFu
+#define COLOR_SB    0x00303050u /* track del scrollbar */
+#define COLOR_THUMB 0x008080A0u /* thumb del scrollbar */
+#define COLOR_SBED  0x00606080u /* borde del thumb */
 
 typedef struct {
     char     name[16];
@@ -59,10 +63,32 @@ static void load_dir(uint32_t parent)
     }
 }
 
+/* Fase 23-A2: rect del thumb del scrollbar (coords de cliente).
+ * track = HDR_Y..ch; el thumb es proporcional a vis/nfiles y su
+ * posicion refleja scroll_off. */
+static void sb_thumb(int cw, int ch, int *ty, int *th)
+{
+    int vis = (ch - HDR_Y) / ROW_H;
+    int track = ch - HDR_Y;
+
+    if (nfiles <= vis || track <= 0) {
+        *ty = HDR_Y;
+        *th = track > 0 ? track : 1;
+        return;
+    }
+    *th = track * vis / nfiles;
+    if (*th < 10)
+        *th = 10;
+    if (*th > track)
+        *th = track;
+    *ty = HDR_Y + (track - *th) * scroll_off / (nfiles - vis);
+}
+
 static void paint_list(uint32_t *buf, int cw, int ch, int sel,
                        uint32_t cwd)
 {
     int i, first, vis = (ch - HDR_Y) / ROW_H;
+    int listw = cw;             /* ancho util (sin el scrollbar) */
 
     /* Fase 22-fix: scroll. La vista muestra las filas [scroll_off,
      * scroll_off+vis); la seleccion siempre queda visible. */
@@ -75,6 +101,8 @@ static void paint_list(uint32_t *buf, int cw, int ch, int sel,
     if (scroll_off < 0)
         scroll_off = 0;
     first = scroll_off;
+    if (nfiles > vis)
+        listw = cw - SB_W;
 
     wl_fillrect(buf, cw, ch, 0, 0, cw, ch, COLOR_CL);
     wl_drawtext(buf, cw, ch, 4, 2,
@@ -86,7 +114,7 @@ static void paint_list(uint32_t *buf, int cw, int ch, int sel,
         uint32_t col = (files[i].flags & 1) ? COLOR_DIR : COLOR_TX;
 
         if (i == sel)
-            wl_fillrect(buf, cw, ch, 0, y, cw, ROW_H, COLOR_ROW);
+            wl_fillrect(buf, cw, ch, 0, y, listw, ROW_H, COLOR_ROW);
         wl_drawtext(buf, cw, ch, 4, y + 1, files[i].name,
                     i == sel ? COLOR_LBL : col);
         if (files[i].flags & 1) {
@@ -95,6 +123,15 @@ static void paint_list(uint32_t *buf, int cw, int ch, int sel,
             wl_dec(sz, files[i].size);
             wl_drawtext(buf, cw, ch, 272, y + 1, sz, COLOR_SZ);
         }
+    }
+    /* Fase 23-A2: scrollbar a la derecha (solo si hay scroll). */
+    if (nfiles > vis) {
+        int sx = cw - SB_W, track = ch - HDR_Y, ty, th;
+        wl_fillrect(buf, cw, ch, sx, HDR_Y, SB_W, track, COLOR_SB);
+        sb_thumb(cw, ch, &ty, &th);
+        wl_fillrect(buf, cw, ch, sx, ty, SB_W, th, COLOR_THUMB);
+        wl_fillrect(buf, cw, ch, sx, ty, 1, th, COLOR_SBED);
+        wl_fillrect(buf, cw, ch, sx + SB_W - 1, ty, 1, th, COLOR_SBED);
     }
     (void)cwd;
 }
@@ -284,6 +321,40 @@ int _start(void)
                 sys_winupdate(id);
                 break;
             }
+            /* Fase 23-A2: Home/End/PgUp/PgDn (VK especiales 0x104-0x107) */
+            if (ev[4] == 0x104 /*home*/) {
+                sel = 0;
+                paint_list(buf, (int)cw, (int)ch, sel, cwd);
+                sys_winupdate(id);
+                break;
+            }
+            if (ev[4] == 0x105 /*end*/) {
+                if (nfiles > 0)
+                    sel = nfiles - 1;
+                paint_list(buf, (int)cw, (int)ch, sel, cwd);
+                sys_winupdate(id);
+                break;
+            }
+            if (ev[4] == 0x106 /*pgup*/) {
+                int vis = ((int)ch - HDR_Y) / ROW_H;
+                if (sel > vis)
+                    sel -= vis;
+                else
+                    sel = 0;
+                paint_list(buf, (int)cw, (int)ch, sel, cwd);
+                sys_winupdate(id);
+                break;
+            }
+            if (ev[4] == 0x107 /*pgdn*/) {
+                int vis = ((int)ch - HDR_Y) / ROW_H;
+                if (sel + vis < nfiles - 1)
+                    sel += vis;
+                else if (nfiles > 0)
+                    sel = nfiles - 1;
+                paint_list(buf, (int)cw, (int)ch, sel, cwd);
+                sys_winupdate(id);
+                break;
+            }
             if (ev[4] == '\n' && nfiles > 0) {
                 const char *nm = files[sel].name;
                 if (files[sel].flags & 1) {
@@ -321,10 +392,48 @@ int _start(void)
             }
             break;
         case EV_BUTTON_DOWN:
+            if (!visor && nfiles > ((int)ch - HDR_Y) / ROW_H &&
+                (int)ev[1] >= (int)cx + (int)cw - SB_W &&
+                (int)ev[1] < (int)cx + (int)cw) {
+                /* Fase 23-A2: clic en la franja del scrollbar.
+                 * encima del thumb = PgUp, debajo = PgDn, en el thumb
+                 * = saltar la vista a la posicion del cursor. */
+                int y = (int)ev[2] - (int)cy;
+                int ty, th, vis = ((int)ch - HDR_Y) / ROW_H;
+                sb_thumb((int)cw, (int)ch, &ty, &th);
+                if (y >= ty && y < ty + th) {
+                    int track = (int)ch - HDR_Y;
+                    if (track > th) {
+                        scroll_off = (y - ty) * (nfiles - vis)
+                                     / (track - th);
+                        if (scroll_off < 0)
+                            scroll_off = 0;
+                        if (scroll_off > nfiles - vis)
+                            scroll_off = nfiles - vis;
+                    }
+                    if (sel < scroll_off)
+                        sel = scroll_off;
+                    else if (sel >= scroll_off + vis)
+                        sel = scroll_off + vis - 1;
+                } else if (y < ty) {
+                    sel -= vis;
+                    if (sel < 0)
+                        sel = 0;
+                } else {
+                    sel += vis;
+                    if (sel > nfiles - 1)
+                        sel = nfiles - 1;
+                }
+                paint_list(buf, (int)cw, (int)ch, sel, cwd);
+                sys_winupdate(id);
+                break;
+            }
             item = (int)((int)ev[2] - (int)cy - HDR_Y) / ROW_H;
             if (item >= 0 && item < nfiles &&
                 wl_point_in((int)ev[1], (int)ev[2],
-                            (int)cx, (int)cy + HDR_Y, (int)cw,
+                            (int)cx, (int)cy + HDR_Y,
+                            (int)cw - (nfiles > ((int)ch - HDR_Y) / ROW_H
+                                       ? SB_W : 0),
                             nfiles * ROW_H)) {
                 pressed = 1;
             }
@@ -334,7 +443,9 @@ int _start(void)
                 item = (int)((int)ev[2] - (int)cy - HDR_Y) / ROW_H;
                 if (item >= 0 && item < nfiles &&
                     wl_point_in((int)ev[1], (int)ev[2],
-                                (int)cx, (int)cy + HDR_Y, (int)cw,
+                                (int)cx, (int)cy + HDR_Y,
+                                (int)cw - (nfiles > ((int)ch - HDR_Y) / ROW_H
+                                           ? SB_W : 0),
                                 nfiles * ROW_H)) {
                     sel = item;
                 }
