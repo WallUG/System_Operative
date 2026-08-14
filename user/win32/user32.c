@@ -910,7 +910,7 @@ static void event_to_wm(const uint32_t *ev)
         /* Fase D: clic en la barra de menu de la ventana principal ->
          * abre el desplegable (modal); no se encola WM_LBUTTONDOWN. */
         uint32_t info[8];
-        if (menu_win_hwnd && wnd_proc[1] &&
+        if (menu_win_hwnd && wnd_proc[menu_win_hwnd] &&
             sys_wininfo(menu_win_hwnd, info) == 0 &&
             (int)ev[2] >= (int)info[1] + WM_TITLE_H + WM_FRAME &&
             (int)ev[2] < (int)info[1] + WM_TITLE_H + WM_MENU_H +
@@ -939,8 +939,8 @@ static void event_to_wm(const uint32_t *ev)
         break;
     case EV_KEY: {
         /* Fase D: Alt+mnemonico de un top-level abre su desplegable. */
-        if ((ev[3] & 2) && key >= 32 && key <= 126 && wnd_proc[1] &&
-            menu_win_hwnd) {
+        if ((ev[3] & 2) && key >= 32 && key <= 126 &&
+            menu_win_hwnd && wnd_proc[menu_win_hwnd]) {
             int t = menu_bar_top_letter(menu_win_hwnd, (char)key);
             if (t >= 0) {
                 menu_modal(menu_win_hwnd, t, 0);
