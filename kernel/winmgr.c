@@ -22,6 +22,7 @@
 #include "mem/paging.h"
 #include "drivers/vbe.h"
 #include "drivers/mouse.h"
+#include "drivers/keyboard.h"
 #include "kprint.h"
 
 #define C_FRAME     0x00C0C0C0u
@@ -477,6 +478,8 @@ static void wm_recompute(void)
             wm_background = NULL;
         }
         wm_focus_pd = 0;
+        keyboard_flush();       /* Fase 22: la tecla que cerro la ultima
+                                 * ventana no debe llegar a la consola */
         return;
     }
     if (wm_focus_pd == 0 || wm_find_by_pd(wm_focus_pd) == NULL) {

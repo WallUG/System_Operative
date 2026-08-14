@@ -36,7 +36,7 @@ MEFS_ROOT = 0xFFFFFFFF
 FLAG_DIR = 1
 
 
-def build(files, out, capacity):
+def build(files, out, capacity, boot_gui=True):
     # layout: superbloque, directorio (fijo MAX_FILES entradas), bitmap, datos
     dir_size = MAX_FILES * 32
     dir_sectors = (dir_size + 511) // 512
@@ -82,6 +82,9 @@ def build(files, out, capacity):
                       data_start,              # data_start
                       capacity))               # fs_capacity
     sb = sb.ljust(512, b"\0")
+    sb = bytearray(sb)
+    sb[36] = 1 if boot_gui else 0          # Fase 22: autoboot del escritorio
+    sb = bytes(sb)
 
     bitmap_bytes = bytes(bitmap).ljust(bitmap_sectors * 512, b"\0")
 
@@ -107,8 +110,10 @@ def main():
     ap.add_argument("files", nargs="+")
     ap.add_argument("-o", required=True)
     ap.add_argument("-c", type=int, default=1400, help="fs_capacity (sectores)")
+    ap.add_argument("-b", type=int, default=1,
+                    help="boot_gui (1 = autoboot escritorio, 0 = consola)")
     args = ap.parse_args()
-    build(args.files, args.o, args.c)
+    build(args.files, args.o, args.c, bool(args.b))
 
 
 if __name__ == "__main__":

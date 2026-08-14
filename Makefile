@@ -37,6 +37,7 @@ OBJS      = $(BUILD)/entry.o \
             $(BUILD)/elf.o \
             $(BUILD)/pe.o \
             $(BUILD)/win32.o \
+            $(BUILD)/bootscreen.o \
             $(BUILD)/shell.o \
             $(BUILD)/fs/mefs.o \
             $(BUILD)/drivers/vga.o \

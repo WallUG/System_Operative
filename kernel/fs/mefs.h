@@ -43,6 +43,7 @@
 #define MEFS_SB_BITMAPSZ 24
 #define MEFS_SB_DATA     28
 #define MEFS_SB_CAP      32
+#define MEFS_SB_BOOTGUI  36   /* byte: 1 = autoboot del escritorio (F22) */
 
 typedef struct {
     char     name[MEFS_NAME_LEN];
@@ -73,6 +74,12 @@ int  mefs_write(const char *name, const uint8_t *buf, uint32_t len);
 int  mefs_delete(const char *name);
 int  mefs_flush(void);
 int  mefs_writable(void);
+
+/* --- config de arranque (Fase 22) --- */
+/* Flag persistido en el superbloque: 1 = al boot la shell autolanza el
+ * escritorio (desktop.elf); 0 = consola directa. */
+int  mefs_boot_gui(void);
+int  mefs_set_boot_gui(int on);
 
 /* --- subdirectorios / formato (Fase 20-A) --- */
 /* Enumerar un directorio (parent = indice de entrada dir, MEFS_ROOT para

@@ -27,6 +27,15 @@
 #include "fs/mefs.h"
 #include "shell.h"
 #include "win32.h"
+#include "bootscreen.h"
+
+/* Fase 22: pequena espera para que la barra de carga sea visible. */
+static void bs_delay(void)
+{
+    volatile uint32_t n;
+    for (n = 0; n < 12000000u; n++)
+        ;
+}
 
 /* --- Fase 5: tareas de prueba del scheduler round-robin --- */
 static volatile uint32_t cnt_a, cnt_b;
@@ -87,9 +96,16 @@ void kmain(uint32_t boot_info_ptr)
     if (vbe_graphics_active)
         mouse_draw_cursor();
 
+    /* --- Fase 22: pantalla de carga (barra de progreso) --- */
+    bootscreen_start();
+    bootscreen_status("Cargando drivers (video, raton, teclado)...", 15);
+    bs_delay();
+
     kprint("MyOS 0.4.0 - gestion de memoria\n");
 
     /* --- Memoria fisica: E820 -> PMM bitmap -> heap --- */
+    bootscreen_status("Configurando memoria (E820, PMM, heap)...", 30);
+    bs_delay();
     mmap_init();
     pmm_init();
     heap_init();
@@ -126,6 +142,8 @@ void kmain(uint32_t boot_info_ptr)
     }
 
     /* --- Paginacion: PSE, identity map 0-1 GiB con paginas de 4 MiB --- */
+    bootscreen_status("Activando paginacion...", 45);
+    bs_delay();
     paging_init();
     /* Mapear el LFB (0xFD000000, fuera del identity de 1 GiB) antes de
      * imprimir: con VBE activo la consola grafica escribe en el LFB. */
@@ -174,6 +192,8 @@ void kmain(uint32_t boot_info_ptr)
     }
 
     /* --- Interrupciones (Fase 3): PIT + teclado --- */
+    bootscreen_status("Inicializando interrupciones (PIT, IRQs)...", 60);
+    bs_delay();
     idt_init();
     pic_remap();
     timer_init(100);            /* 100 ticks/segundo */
@@ -217,6 +237,8 @@ void kmain(uint32_t boot_info_ptr)
     /* --- Fase 6/7: FS. Origen segun boot_info: ATA (disco) o imagen
      * en RAM (CD; mefs_init_mem). Sin boot_info valido: ATA (fallback
      * para lanzar el kernel desnudo desde el depurador). */
+    bootscreen_status("Inicializando filesystem MEFS...", 75);
+    bs_delay();
     {
         int ok = 0;
         if (bi && bi->magic == BOOTINFO_MAGIC && bi->mode == BOOTINFO_MODE_CD)
@@ -240,12 +262,16 @@ void kmain(uint32_t boot_info_ptr)
     }
 
     /* --- Soporte Windows: modulos Win32 ring 3 fijos (Fase 8) --- */
+    bootscreen_status("Cargando DLLs Win32 (kernel32, user32, gdi32)...", 88);
+    bs_delay();
     win32_init();
 
     /* --- Fase 5: multitarea round-robin (IRQ0) ---
      * kmain continua como tarea idle (hlt); A y B son contadores que
      * imprimen cada ~10 ticks (100 ms). El scheduler cambia de tarea en
      * cada tick del PIT, alternando A/B/idle visiblemente. */
+    bootscreen_status("Iniciando multitarea...", 95);
+    bs_delay();
     sched_init();
     task_create("A", task_a);
     task_create("B", task_b);
@@ -263,5 +289,8 @@ void kmain(uint32_t boot_info_ptr)
      * #PF intencional ahora es el comando 'pf'. Las tareas demo quedan
      * calladas (demo_print=0) para no ensuciar la consola. */
     demo_print = 0;
+    bootscreen_status("Listo. Iniciando shell...", 100);
+    bs_delay();
+    bootscreen_done();
     shell_loop();
 }

@@ -42,6 +42,21 @@ def hmp(c, dt=0.35):
 
 def wait_prompt(timeout=120):
     d = time.time()+timeout
+
+def cancel_autoboot():
+    """Fase 22: si hay autoboot del escritorio, lo cancela con una tecla
+    (la tecla se descarta en el kernel, no ensucia el buffer)."""
+    d = time.time()+8
+    while time.time() < d:
+        if 'Autoboot:' in ''.join(acc): break
+        time.sleep(0.2)
+    if 'Autoboot:' in ''.join(acc):
+        hmp('sendkey x', 0.3)
+        d = time.time()+4
+        while time.time() < d:
+            if 'Autoboot cancelado' in ''.join(acc): break
+            time.sleep(0.2)
+
     while time.time() < d:
         if 'myos>' in ''.join(acc[-200:]): return True
         time.sleep(0.3)
@@ -54,6 +69,10 @@ def check(name, cond):
 
 if not wait_prompt():
     print("NO PROMPT")
+    time.sleep(3)
+    cancel_autoboot()
+else:
+    cancel_autoboot()
     time.sleep(3)   # deja que el arranque termine igualmente
 time.sleep(1)
 
@@ -74,6 +93,13 @@ for ch in 'run writetest.exe\n':
     hmp({' ':'sendkey spc','\n':'sendkey ret','.':'sendkey dot'}.get(ch, f'sendkey {ch}'))
 time.sleep(4)
 check('writetest escribe saved.txt', 'saved.txt' in ''.join(acc) or 'escribi' in ''.join(acc))
+# espera a que writetest termine (exit) antes de lanzar metapad: la shell
+# no lee teclado mientras corre una tarea de usuario (sched_user_busy)
+d = time.time()+15
+while time.time() < d:
+    if 'exit:0' in ''.join(acc[-200:]): break
+    time.sleep(0.3)
+time.sleep(1)
 
 # 3) metapad: editar + Guardar Como
 print("== metapad Guardar Como ==", flush=True)

@@ -17,6 +17,7 @@
 
 static mefs_entry_t entries[MEFS_MAX_FILES];
 static int file_count;
+static int boot_gui = 1;        /* Fase 22: autoboot del escritorio */
 
 /* parametros del superbloque (v2) */
 static uint32_t bitmap_lba;
@@ -130,6 +131,7 @@ static int mefs_load(void)
     bitmap_sectors= *(uint32_t *)(sb + MEFS_SB_BITMAPSZ);
     data_start    = *(uint32_t *)(sb + MEFS_SB_DATA);
     fs_capacity   = *(uint32_t *)(sb + MEFS_SB_CAP);
+    boot_gui      = sb[MEFS_SB_BOOTGUI] ? 1 : 0;
 
     dir_lba  = *(uint32_t *)(sb + MEFS_SB_DIRLBA);
     dir_size = *(uint32_t *)(sb + MEFS_SB_DIRSIZE);
@@ -400,6 +402,7 @@ int mefs_flush(void)
     *(uint32_t *)(sb + MEFS_SB_BITMAPSZ) = bitmap_sectors;
     *(uint32_t *)(sb + MEFS_SB_DATA)     = data_start;
     *(uint32_t *)(sb + MEFS_SB_CAP)      = fs_capacity;
+    sb[MEFS_SB_BOOTGUI] = (uint8_t)(boot_gui ? 1 : 0);
 
     for (s = 0; s < (uint32_t)(file_count * 32); s++)
         dir[s] = 0;
@@ -538,6 +541,7 @@ int mefs_format(uint32_t capacity)
     *(uint32_t *)(sb + MEFS_SB_BITMAPSZ) = bitmap_sz;
     *(uint32_t *)(sb + MEFS_SB_DATA)     = data_start;
     *(uint32_t *)(sb + MEFS_SB_CAP)      = cap_blocks;
+    sb[MEFS_SB_BOOTGUI] = (uint8_t)(boot_gui ? 1 : 0);
 
     if (fs_write_sector(MEFS_FS_START, sb) != 0)
         return -1;
@@ -550,5 +554,18 @@ int mefs_format(uint32_t capacity)
     bitmap_sectors = bitmap_sz;
     data_start = *(uint32_t *)(sb + MEFS_SB_DATA);
     fs_capacity = cap_blocks;
+    return 0;
+}
+
+/* --- config de arranque (Fase 22) --- */
+
+int mefs_boot_gui(void)
+{
+    return boot_gui;
+}
+
+int mefs_set_boot_gui(int on)
+{
+    boot_gui = on ? 1 : 0;
     return 0;
 }

@@ -1,6 +1,6 @@
 ---
 name: win32-compat-roadmap
-description: "Use when planning or implementing MyOS Fase 20 (the 12-item Windows compatibility roadmap grouped into four phases A-D). Covers: (A) MEFS bitmap of blocks + format command + subdirectories, (B) real comctl32 (listview/toolbar) + GetSaveFileNameA overwrite confirmation, (C) PE relocations for variable-address DLLs, (D) real font metrics / text measurement. Also documents the historical Fase 19 (metapad phases A-E). Trigger words: Fase 20, roadmap, comctl32, OLE32, SHLWAPI, WINSPOOL, reloc, relocations, bitmap de bloques, format, subdirectorios, TrueType, GDI+, GetTextMetrics, blit por regiones, heap por proceso."
+description: "Use when planning or implementing MyOS Fase 20 (the 12-item Windows compatibility roadmap grouped into four phases A-D). Covers: (A) MEFS bitmap of blocks + format command + subdirectories, (B) real comctl32 (listview/toolbar) + GetSaveFileNameA overwrite confirmation, (C) PE relocations for variable-address DLLs, (D) real font metrics / text measurement. Also documents the historical Fase 19 (metapad phases A-E), Fase 21 (escritorio lanzador + explorador con subdirectorios) y Fase 22 (arranque tipo Windows: bootscreen con barra de carga, autoboot del escritorio, flag bootgui, shell viva por debajo). Trigger words: Fase 20-22, roadmap, comctl32, OLE32, SHLWAPI, WINSPOOL, reloc, relocations, bitmap de bloques, format, subdirectorios, TrueType, GDI+, GetTextMetrics, blit por regiones, heap por proceso, bootscreen, barra de carga, autoboot, bootgui, escritorio."
 ---
 
 # Win32 Compatibility Roadmap (Fase 20)
@@ -8,6 +8,35 @@ description: "Use when planning or implementing MyOS Fase 20 (the 12-item Window
 This skill captures the full roadmap for extending MyOS Windows compatibility,
 grouped into four implementation phases (A-D). It exists so the plan does not
 get lost between sessions. Use it whenever work on any of these areas begins.
+
+## Historical context: Fase 22 (arranque tipo Windows)
+
+After Fase 21, MyOS got a Windows-style boot experience (the "system.exe"
+model):
+
+- **Boot splash + progress bar** (`kernel/bootscreen.c/h`): azure background,
+  "MyOS 0.4.0" title, phase text and green progress bar drawn straight to
+  the LFB. `kmain` calls `bootscreen_status(fase, pct)` at each stage
+  (drivers → memory → pagination → interrupts → MEFS → Win32 DLLs →
+  multitasking → shell) with short delays so it is visible; the serial log
+  keeps flowing for headless tests. `bootscreen_done()` clears to the vgafx
+  console.
+- **Autoboot of the desktop**: `shell_autoboot()` runs before the prompt;
+  if the MEFS superblock flag `boot_gui` is set and `desktop.elf` exists it
+  prints "Autoboot: escritorio en 3 s" and waits 3 s polling keyboard+serial
+  without blocking. Any key cancels (key is discarded) → console. Otherwise
+  it calls `shell_run_file("desktop.elf")` (refactored core of the `run`
+  command) and the shell keeps living underneath: closing the desktop with
+  'q' restores the console and the prompt is back.
+- **Persisted flag**: `MEFS_SB_BOOTGUI` (superblock byte at offset 36),
+  `mefs_boot_gui()` / `mefs_set_boot_gui()`, `bootgui on|off` shell command
+  (+ `flush` to persist), written by `tools/makefs.py` (`-b 1` default).
+- **Fix**: `keyboard_flush()` in `wm_recompute` when the last window closes
+  — the key that closed the window no longer leaks into the shell's line.
+- **Tests**: `tools/test_fase22.py` 7/7 PASS; all previous test scripts got
+  a `cancel_autoboot()` helper (waits for "Autoboot:" and sends a key that
+  is discarded). test_faseE also waits for `exit:0` before launching the
+  next app (the shell does not read keys while a user task runs).
 
 ## Historical context: Fase 21 (escritorio lanzador + explorador con subdirs)
 
@@ -154,13 +183,16 @@ host emulation.
       rect del hijo; `tools/test_fase20d.py` 6/6 PASS)
 
 **Fase 20 completa (A-D).** **Fase 21 completada** (escritorio lanzador de
-apps Win32/ELF + explorador con subdirectorios, ver arriba). Quedan en
-backlog los items 1 (mas shims OLE32/SHLWAPI/WINSPOOL), 4-6 (message loop,
-CreateWindowEx extendido, dialogos modales), 9 (modos binario/texto) y 12
-(per-process heap). Siguiente paso natural propuesto: instalador tipo
-Windows (dialogo que copia archivos del FS a un disco persistente con
-estructura de directorios) una vez exista un concepto de "disco de
-instalacion".
+apps Win32/ELF + explorador con subdirectorios). **Fase 22 completada**
+(arranque tipo Windows: bootscreen con barra de carga, autoboot del
+escritorio con cuenta atras cancelable, flag persistido `bootgui on|off`,
+shell viva por debajo como system.exe). Quedan en backlog los items 1 (mas
+shims OLE32/SHLWAPI/WINSPOOL), 4-6 (message loop, CreateWindowEx
+extendido, dialogos modales), 9 (modos binario/texto) y 12 (per-process
+heap). Siguiente paso natural propuesto: instalador tipo Windows (dialogo
+que copia archivos del FS a un disco persistente con estructura de
+directorios), ahora viable porque ya hay navegacion de directorios,
+persistencia y arranque GUI.
 
 ## Validation notes
 - Metapad is the reference app (already runs: editing, menus, save). Each

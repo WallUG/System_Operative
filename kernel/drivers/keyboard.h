@@ -9,5 +9,7 @@ void keyboard_init(void);
 void keyboard_irq(void);
 /* Lee el siguiente caracter; -1 si el buffer esta vacio. */
 int keyboard_read(void);
+/* Descarta las teclas pendientes (Fase 22: al volver a la consola). */
+void keyboard_flush(void);
 
 #endif

@@ -279,3 +279,8 @@ int keyboard_read(void)
     kbd_tail = (kbd_tail + 1) % KBD_BUF;
     return c;
 }
+
+void keyboard_flush(void)
+{
+    kbd_tail = kbd_head;
+}

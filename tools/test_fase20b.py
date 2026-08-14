@@ -36,6 +36,19 @@ def hmp(c, dt=0.3):
 def sendcmd(cmd):
     for ch in cmd+'\n':
         hmp({' ':'sendkey spc','\n':'sendkey ret','.':'sendkey dot'}.get(ch, f'sendkey {ch}'), 0.15)
+
+def cancel_autoboot():
+    """Fase 22: si hay autoboot, lo cancela con una tecla (se descarta)."""
+    d = time.time()+8
+    while time.time() < d:
+        if 'Autoboot:' in ''.join(acc): break
+        time.sleep(0.2)
+    if 'Autoboot:' in ''.join(acc):
+        hmp('sendkey x', 0.3)
+        d = time.time()+4
+        while time.time() < d:
+            if 'Autoboot cancelado' in ''.join(acc): break
+            time.sleep(0.2)
 def waitstr(s, t=8):
     d=time.time()+t
     while time.time()<d:
@@ -44,6 +57,8 @@ def waitstr(s, t=8):
     return False
 d=time.time()+60
 while time.time()<d:
+
+    cancel_autoboot()
     if 'myos>' in ''.join(acc[-200:]): break
     time.sleep(0.3)
 time.sleep(1)
