@@ -195,13 +195,66 @@ host emulation.
 apps Win32/ELF + explorador con subdirectorios). **Fase 22 completada**
 (arranque tipo Windows: bootscreen con barra de carga, autoboot del
 escritorio con cuenta atras cancelable, flag persistido `bootgui on|off`,
-shell viva por debajo como system.exe). Quedan en backlog los items 1 (mas
-shims OLE32/SHLWAPI/WINSPOOL), 4-6 (message loop, CreateWindowEx
-extendido, dialogos modales), 9 (modos binario/texto) y 12 (per-process
-heap). Siguiente paso natural propuesto: instalador tipo Windows (dialogo
-que copia archivos del FS a un disco persistente con estructura de
-directorios), ahora viable porque ya hay navegacion de directorios,
-persistencia y arranque GUI.
+shell viva por debajo como system.exe). Fixes recientes: explorer con
+scroll de lista por teclado + `wm_update` por regiones (sin parpadeo) +
+`mouse_event_flush` al crear ventana (sin teclas fantasma). Quedan en
+backlog los items 1 (mas shims OLE32/SHLWAPI/WINSPOOL), 4-6 (message
+loop, CreateWindowEx extendido, dialogos modales), 9 (modos binario/
+texto) y 12 (per-process heap). Siguiente paso natural propuesto:
+instalador tipo Windows (dialogo que copia archivos del FS a un disco
+persistente con estructura de directorios), ahora viable porque ya hay
+navegacion de directorios, persistencia y arranque GUI.
+
+## Fase 23 roadmap propuesta: compatibilidad sin sacrificar estabilidad
+
+Prioridad: primero consolidar lo que ya corre (metapad, desktop, explorer,
+persistencia) y solo entonces abrir nuevas superficies Win32. Cada item
+incluye su test de regresion (metapad sigue funcionando).
+
+**A. Estabilidad y pulido del sistema base (hacer ANTES de tocar más Win32)**
+1. **Rendimiento del renderizado**: `wm_update` por regiones ya no
+   parpadea, pero `wm_compose` completo sigue usandose en wincreate/
+   winclose/drag. Medir fps con QEMU y optimizar: composicion de solo el
+   rect de la ventana que cambia, redibujar solo marcos sucios. Target:
+   metapad a 30+ fps con el caret parpadeando.
+2. **Explorer**: barra de desplazamiento visible (scrollbar) y `End/Home`
+   saltan al final/inicio; doble buffer si el parpadeo reaparece con el
+   caret.
+3. **Foco y eventos**: prueba sistematica de eventos fantasma con 2 apps
+   (desktop + explorer + metapad) — ya hay flush en wincreate, verificar
+   que el cambio de foco por clic entre ventanas no pierda teclas.
+4. **Instalador tipo Windows** (dialogo Win32 real): copia archivos del
+   FS a un directorio persistente con estructura; valida la persistencia
+   real y da una app nueva para testear (dialogo + listview).
+
+**B. Superficie Win32 (se abre SOLO cuando A este estable)**
+5. **Dialogos modales reales**: `DialogBoxParamA`/`EndDialog` sobre el
+   modal de menues existente (ya hay `menu_modal`); reutiliza
+   `TrackPopupMenuEx` + `WM_COMMAND`. Abre la puerta a mas apps.
+6. **Message loop real**: `GetMessageA`/`DispatchMessageA` con traduccion
+   de acelers; hoy el loop es manual. Sin esto muchos .exe cuelgan.
+7. **CreateWindowExA extendido**: estilos WS_OVERLAPPEDWINDOW/WS_CHILD/
+   WS_VISIBLE, `WM_CREATE`, `WM_SIZE`/`WM_MOVE` reales, controles
+   STATIC/BUTTON con WM_NOTIFY. Base para apps con mas de una ventana.
+8. **mas DLLs**: stubs de OLE32 (`CoCreateInstance`→COM simplificado),
+   SHLWAPI (`StrStrI`/`PathFileExists`), WINSPOOL (impresion en .txt).
+   Solo lo que metapad u otras apps de referencia importen de verdad.
+
+**C. Datos y persistencia**
+9. **Modos binario/texto en archivos** (`_O_BINARY/_O_TEXT`): los archivos
+   de Windows con CRLF vs LF; `SYS_DREAD/DWRITE` sin traduccion hoy.
+10. **Per-process heap**: `HeapCreate/HeapAlloc/HeapFree` reales por
+    proceso (hoy bump allocator global). Desbloquea apps con free() real.
+11. **Explorer Win32**: reescribir explorer.c como .exe Win32 (listview
+    comctl32 real) una vez el listview/toolbar este probado.
+
+**D. Presupuesto de riesgo (regla de oro)**
+- Cada item: compilar + test QEMU headless + regresion completa (20a-d,
+  faseE, fase22) + commit por item.
+- No tocar el boot/autoboot/bootscreen salvo que un item lo exija (ya es
+  estable).
+- Si un item de B/C rompe metapad o el escritorio, revertir y rehacer con
+  menor alcance.
 
 ## Validation notes
 - Metapad is the reference app (already runs: editing, menus, save). Each
