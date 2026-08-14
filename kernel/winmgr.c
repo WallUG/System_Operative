@@ -76,6 +76,10 @@ static int wm_next_id = 1;
 static uint32_t *wm_background;   /* snapshot del LFB (kmalloc)         */
 static int wm_active = 0;         /* hay alguna ventana visible         */
 
+/* Fase 23-A1: redibuja un rect en coordenadas de pantalla (fondo +
+ * ventanas en orden z). Nucleo del blit por regiones. */
+static void wm_redraw_rect(int rx, int ry, int rw, int rh);
+
 /* Fase 17: cola de eventos por app (PD). Cada app solo recibe los
  * eventos de sus ventanas (y del foco); el escritorio es otra app mas. */
 #define WM_MAX_CLIENTS 4
@@ -529,18 +533,23 @@ int wm_create(const char *title, int x, int y, int w, int h,
     mouse_event_flush();
     wm_raise(win);
     wm_active = 1;
-    wm_compose();
+    /* Fase 23-A1: redibujar solo el rect de la ventana nueva (antes:
+     * wm_compose completo -> parpadeo con varias ventanas). */
+    wm_redraw_rect(win->x, win->y, win->w, win->h);
     return win->id;
 }
 
 int wm_close(int id, uint32_t pd)
 {
     win_t *w = wm_find(id);
+    int x, y, ww, hh;
     if (!w || w->pd != pd)
         return -1;
+    x = w->x; y = w->y; ww = w->w; hh = w->h;
     wm_remove_window(w);
     wm_recompute();
-    wm_compose();
+    /* Fase 23-A1: redibujar solo donde estaba la ventana cerrada. */
+    wm_redraw_rect(x, y, ww, hh);
     return 0;
 }
 
@@ -553,7 +562,11 @@ void wm_cleanup_pd(uint32_t pd)
         return;
     for (i = 0; i < WM_MAX_WINS; i++)
         if (wins[i].visible && wins[i].pd == pd) {
+            int x = wins[i].x, y = wins[i].y;
+            int ww = wins[i].w, hh = wins[i].h;
             wm_remove_window(&wins[i]);
+            /* Fase 23-A1: redibujar solo el rect de la ventana muerta. */
+            wm_redraw_rect(x, y, ww, hh);
         }
     for (i = 0; i < WM_MAX_CLIENTS; i++)
         if (wm_clients[i].used && wm_clients[i].pd == pd) {
@@ -561,19 +574,28 @@ void wm_cleanup_pd(uint32_t pd)
             wm_clients[i].head = wm_clients[i].tail = 0;
         }
     wm_recompute();
-    if (wm_active)
-        wm_compose();
 }
 
 int wm_move(int id, int dx, int dy)
 {
     win_t *w = wm_find(id);
+    int x0, y0;
     if (!w)
         return -1;
+    x0 = w->x; y0 = w->y;
     w->x += dx;
     w->y += dy;
     wm_layout(w);
-    wm_compose();
+    /* Fase 23-A1: redibujar el rect union (posicion vieja + nueva). */
+    {
+        int ux = x0 < w->x ? x0 : w->x;
+        int uy = y0 < w->y ? y0 : w->y;
+        int ux2 = (x0 + w->w) > (w->x + w->w) ? (x0 + w->w)
+                                              : (w->x + w->w);
+        int uy2 = (y0 + w->h) > (w->y + w->h) ? (y0 + w->h)
+                                              : (w->y + w->h);
+        wm_redraw_rect(ux, uy, ux2 - ux, uy2 - uy);
+    }
     return 0;
 }
 
@@ -601,9 +623,8 @@ int wm_update(int id)
  * su cliente). Devuelve 0 o -1. */
 int wm_update_rect(int id, const int32_t *rect)
 {
-    volatile uint32_t *lfb = (volatile uint32_t *)vbe_lfb_phys;
     win_t *w = wm_find(id);
-    int rx, ry, rw, rh, zz, i;
+    int rx, ry, rw, rh;
 
     if (!w || !rect)
         return -1;
@@ -617,6 +638,30 @@ int wm_update_rect(int id, const int32_t *rect)
     if (ry < w->cy) { rh += ry - w->cy; ry = w->cy; }
     if (rw < 0 || rh < 0)
         return 0;
+    wm_redraw_rect(rx, ry, rw, rh);
+    return 0;
+}
+
+/* Fase 23-A1: redibuja un rect en COORDENADAS DE PANTALLA: restaura
+ * ese rect del fondo snapshot y repinta las ventanas que lo
+ * intersectan en orden z (las fijas al final). Es el nucleo del blit
+ * por regiones que evita recomponer toda la pantalla (y el parpadeo).
+ * clip a la pantalla. */
+static void wm_redraw_rect(int rx, int ry, int rw, int rh)
+{
+    volatile uint32_t *lfb = (volatile uint32_t *)vbe_lfb_phys;
+    int zz, i;
+
+    if (!vbe_graphics_active)
+        return;
+    if (rx < 0) { rw += rx; rx = 0; }
+    if (ry < 0) { rh += ry; ry = 0; }
+    if (rx >= VBE_SCREEN_W || ry >= VBE_SCREEN_H || rw <= 0 || rh <= 0)
+        return;
+    if (rx + rw > VBE_SCREEN_W)
+        rw = VBE_SCREEN_W - rx;
+    if (ry + rh > VBE_SCREEN_H)
+        rh = VBE_SCREEN_H - ry;
 
     /* 1) restaura el rect del fondo snapshot */
     if (wm_background) {
@@ -625,10 +670,8 @@ int wm_update_rect(int id, const int32_t *rect)
         for (y = ry; y < ry + rh; y++) {
             uint32_t *d = (uint32_t *)lfb +
                           (uint32_t)y * VBE_SCREEN_W + (uint32_t)rx;
-            if (y >= 0 && y < VBE_SCREEN_H && rx >= 0 &&
-                rx + rw <= VBE_SCREEN_W)
-                memcpy(d, bg + (uint32_t)y * VBE_SCREEN_W + (uint32_t)rx,
-                       (uint32_t)rw * 4);
+            memcpy(d, bg + (uint32_t)y * VBE_SCREEN_W + (uint32_t)rx,
+                   (uint32_t)rw * 4);
         }
     }
 
@@ -636,7 +679,6 @@ int wm_update_rect(int id, const int32_t *rect)
     for (zz = 0; zz < WM_MAX_WINS; zz++) {
         for (i = 0; i < WM_MAX_WINS; i++) {
             win_t *o = &wins[i];
-            int ox2 = o->x + o->w, oy2 = o->y + o->h;
             int rx2 = rx + rw, ry2 = ry + rh;
             if (!o->visible || o->z != zz || rx2 <= o->x || o->x >= rx2 ||
                 ry2 <= o->y || o->y >= ry2)
@@ -654,7 +696,6 @@ int wm_update_rect(int id, const int32_t *rect)
     /* 3) las ventanas fijas (taskbar) siempre encima */
     for (i = 0; i < WM_MAX_WINS; i++) {
         win_t *o = &wins[i];
-        int ox2 = o->x + o->w, oy2 = o->y + o->h;
         int rx2 = rx + rw, ry2 = ry + rh;
         if (!o->visible || !(o->flags & WM_FLAG_FIXED) || rx2 <= o->x ||
             o->x >= rx2 || ry2 <= o->y || o->y >= ry2)
@@ -669,7 +710,6 @@ int wm_update_rect(int id, const int32_t *rect)
     }
     mouse_cursor_invalidate();
     mouse_draw_cursor();
-    return 0;
 }
 
 /* Cambia el titulo de la barra (SetWindowTextA de top-levels). */
@@ -683,7 +723,8 @@ int wm_set_title(int id, const char *title)
     for (i = 0; title && title[i] && i < (int)sizeof(w->title) - 1; i++)
         w->title[i] = title[i];
     w->title[i] = 0;
-    wm_compose();
+    /* Fase 23-A1: solo la franja del titulo. */
+    wm_redraw_rect(w->x, w->y, w->w, WM_TITLE_H + WM_FRAME);
     return 0;
 }
 
@@ -716,7 +757,9 @@ int wm_set_menu(int id, int on, const char *flat)
         w->has_menu = on;
         wm_layout(w);
     }
-    wm_compose();
+    /* Fase 23-A1: redibujar solo la ventana (el layout del cliente
+     * pudo cambiar con la barra de menu). */
+    wm_redraw_rect(w->x, w->y, w->w, w->h);
     return 0;
 }
 
@@ -747,7 +790,8 @@ int wm_set_toolbar(int id, int on, const char *flat)
         w->has_toolbar = on;
         wm_layout(w);
     }
-    wm_compose();
+    /* Fase 23-A1: redibujar solo la ventana. */
+    wm_redraw_rect(w->x, w->y, w->w, w->h);
     return 0;
 }
 
@@ -870,10 +914,20 @@ int wm_route(mouse_event_t *ev)
             int nx = ev->x - w->drag_dx;
             int ny = ev->y - w->drag_dy;
             if (nx != w->x || ny != w->y) {
+                int x0 = w->x, y0 = w->y;
                 w->x = nx;
                 w->y = ny;
                 wm_layout(w);
-                wm_compose();
+                /* Fase 23-A1: rect union de la posicion vieja + nueva */
+                {
+                    int ux = x0 < w->x ? x0 : w->x;
+                    int uy = y0 < w->y ? y0 : w->y;
+                    int ux2 = (x0 + w->w) > (w->x + w->w)
+                                  ? (x0 + w->w) : (w->x + w->w);
+                    int uy2 = (y0 + w->h) > (w->y + w->h)
+                                  ? (y0 + w->h) : (w->y + w->h);
+                    wm_redraw_rect(ux, uy, ux2 - ux, uy2 - uy);
+                }
             }
             return WM_ROUTE_CONSUMED;
         }
