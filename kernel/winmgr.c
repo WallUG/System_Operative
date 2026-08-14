@@ -523,6 +523,10 @@ int wm_create(const char *title, int x, int y, int w, int h,
     win->pd = pd;
     win->visible = 1;
     wm_focus_pd = pd;               /* la app que crea gana el foco    */
+    /* Fase 22-fix: el input tecleado antes de crear la ventana (p.ej.
+     * el comando 'run x.elf' de la shell) quedo en la cola global y
+     * llegaria a la app nueva como eventos fantasma. Se descarta. */
+    mouse_event_flush();
     wm_raise(win);
     wm_active = 1;
     wm_compose();
@@ -576,10 +580,19 @@ int wm_move(int id, int dx, int dy)
 int wm_update(int id)
 {
     win_t *w = wm_find(id);
+    int32_t rect[4];
     if (!w)
         return -1;
-    wm_compose();
-    return 0;
+    /* Fase 22-fix (parpadeo): actualizar solo el area del cliente de
+     * esta ventana (fondo + ventanas que la intersectan en orden z),
+     * no recomponer toda la pantalla. Antes se hacia wm_compose()
+     * completo (1.9 MB de fondo + todas las ventanas) -> el fondo
+     * parpadeaba en cada tecla. */
+    rect[0] = 0;
+    rect[1] = 0;
+    rect[2] = w->cw;
+    rect[3] = w->ch;
+    return wm_update_rect(id, rect);
 }
 
 /* Fase 20-D: blit por regiones. Actualiza SOLO el rect dado (en

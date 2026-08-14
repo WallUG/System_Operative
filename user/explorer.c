@@ -36,6 +36,7 @@ typedef struct {
 
 static fent_t files[MAXF];
 static int nfiles;
+static int scroll_off = 0;      /* primera fila visible (Fase 22-fix) */
 
 static void log_line(const char *s)
 {
@@ -61,15 +62,27 @@ static void load_dir(uint32_t parent)
 static void paint_list(uint32_t *buf, int cw, int ch, int sel,
                        uint32_t cwd)
 {
-    int i;
+    int i, first, vis = (ch - HDR_Y) / ROW_H;
+
+    /* Fase 22-fix: scroll. La vista muestra las filas [scroll_off,
+     * scroll_off+vis); la seleccion siempre queda visible. */
+    if (sel < scroll_off)
+        scroll_off = sel;
+    else if (sel >= scroll_off + vis && vis > 0)
+        scroll_off = sel - vis + 1;
+    if (scroll_off > nfiles - vis && nfiles > vis)
+        scroll_off = nfiles - vis;
+    if (scroll_off < 0)
+        scroll_off = 0;
+    first = scroll_off;
 
     wl_fillrect(buf, cw, ch, 0, 0, cw, ch, COLOR_CL);
     wl_drawtext(buf, cw, ch, 4, 2,
                 "MEFS (Enter: abrir/cd, b: subir, q: cerrar)", COLOR_HDR);
     wl_fillrect(buf, cw, ch, 2, HDR_Y - 2, cw - 4, 1, COLOR_HDR);
-    for (i = 0; i < nfiles; i++) {
+    for (i = first; i < nfiles && i < first + vis; i++) {
         char sz[16];
-        int y = HDR_Y + i * ROW_H;
+        int y = HDR_Y + (i - first) * ROW_H;
         uint32_t col = (files[i].flags & 1) ? COLOR_DIR : COLOR_TX;
 
         if (i == sel)
@@ -250,6 +263,7 @@ int _start(void)
                 if (p2 != cwd || cwd == MEFS_ROOT) {
                     cwd = p2;
                     sel = 0;
+                    scroll_off = 0;
                     load_dir(cwd);
                     paint_list(buf, (int)cw, (int)ch, sel, cwd);
                     sys_winupdate(id);
@@ -276,6 +290,7 @@ int _start(void)
                     /* subdirectorio: navegar */
                     cwd = (uint32_t)sys_dlookup(cwd, nm);
                     sel = 0;
+                    scroll_off = 0;
                     load_dir(cwd);
                     paint_list(buf, (int)cw, (int)ch, sel, cwd);
                     sys_winupdate(id);

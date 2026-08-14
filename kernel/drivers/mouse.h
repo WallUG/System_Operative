@@ -30,5 +30,8 @@ int  mouse_read(int *x, int *y, int *buttons);
 void mouse_event_push_key(int key);
 void mouse_event_push_key_ext(int key, int mods);  /* mods: 1=ctrl 2=alt 4=shift */
 int  mouse_event_dequeue(mouse_event_t *ev);
+/* Descarta los eventos pendientes de la cola global (Fase 22-fix: al
+ * crear una ventana, el input de antes no debe llegar a la app nueva). */
+void mouse_event_flush(void);
 
 #endif

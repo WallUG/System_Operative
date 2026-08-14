@@ -238,3 +238,8 @@ int mouse_event_dequeue(mouse_event_t *ev)
     ev_tail = (ev_tail + 1) % EV_QUEUE_MAX;
     return 0;
 }
+
+void mouse_event_flush(void)
+{
+    ev_tail = ev_head;
+}
