@@ -136,9 +136,16 @@ round-trip + persistencia al reiniciar.
 
 ### P1.4. kernel32 de arranque (directorios + versión)
 
-**Estado**: faltan GetTempPathA, GetWindowsDirectoryA,
-GetSystemDirectoryA, GetVersionExA, GetFileInformationByHandle,
-CreateProcessA completo.
+**Estado: COMPLETADO.** Añadidos en kernel32:
+- `GetTempPathA`/`GetWindowsDirectoryA`/`GetSystemDirectoryA` → rutas
+  virtuales fijas del FS (`C:\\TEMP`, `C:\\WINDOWS`,
+  `C:\\WINDOWS\\System32`; la raíz MEFS se mapea a `C:\`).
+- `GetVersionExA` → OSVERSIONINFOA 6.1 (Win7) + `GetVersion`.
+- `GetFileInformationByHandle` → BY_HANDLE_FILE_INFORMATION con el
+  tamaño del handle abierto (open_files), volumen "MYOS".
+Test `tools/test_fase24p14.py` (bootpaths.exe) 6/6. NOTA: orden de args
+de GetWindows/SystemDirectoryA es `(buf, n)` (buffer primero); GetTemp
+es `(n, buf)`.
 
 **Tarea**: añadir a kernel32:
 - `GetTempPathA`/`GetWindowsDirectoryA`/`GetSystemDirectoryA` → rutas

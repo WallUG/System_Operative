@@ -961,6 +961,104 @@ void __attribute__((stdcall)) SetCurrentDirectoryA(const char *d)
 
 void __attribute__((stdcall)) SetCurrentDirectoryW(const uint16_t *d) { (void)d; }
 
+/* --- Fase 24-P1.4: directorios y version de arranque ---
+ * La raiz del MEFS se mapea a "C:\" (paths virtuales fijos). */
+static uint32_t copy_str_n(char *dst, uint32_t n, const char *src)
+{
+    uint32_t i, len = (uint32_t)strlen_u(src);
+    if (n == 0)
+        return len;
+    for (i = 0; i + 1 < n && src[i]; i++)
+        dst[i] = src[i];
+    dst[i] = 0;
+    return len;
+}
+
+uint32_t __attribute__((stdcall)) GetTempPathA(uint32_t n, char *buf)
+{
+    trace("[k32] GetTempPathA\n");
+    return copy_str_n(buf, n, "C:\\TEMP");
+}
+
+uint32_t __attribute__((stdcall)) GetWindowsDirectoryA(char *buf, uint32_t n)
+{
+    trace("[k32] GetWindowsDirectoryA\n");
+    return copy_str_n(buf, n, "C:\\WINDOWS");
+}
+
+uint32_t __attribute__((stdcall)) GetSystemDirectoryA(char *buf, uint32_t n)
+{
+    trace("[k32] GetSystemDirectoryA\n");
+    return copy_str_n(buf, n, "C:\\WINDOWS\\System32");
+}
+
+/* OSVERSIONINFOA: version 6.1 (Win7) para no romper apps que la
+ * comprueban. */
+typedef struct {
+    uint32_t dwOSVersionInfoSize;
+    uint32_t dwMajorVersion;
+    uint32_t dwMinorVersion;
+    uint32_t dwBuildNumber;
+    uint32_t dwPlatformId;
+    char     szCSDVersion[128];
+} my_OSVERSIONINFOA;
+
+uint32_t __attribute__((stdcall)) GetVersionExA(my_OSVERSIONINFOA *vi)
+{
+    trace("[k32] GetVersionExA\n");
+    if (vi == 0)
+        return 0;
+    vi->dwOSVersionInfoSize = sizeof(my_OSVERSIONINFOA);
+    vi->dwMajorVersion = 6;
+    vi->dwMinorVersion = 1;
+    vi->dwBuildNumber  = 7601;
+    vi->dwPlatformId   = 2;     /* VER_PLATFORM_WIN32_NT */
+    vi->szCSDVersion[0] = 0;
+    return 1;
+}
+
+uint32_t __attribute__((stdcall)) GetVersion(void)
+{
+    return (6 << 16) | 1;       /* major << 16 | minor */
+}
+
+/* BY_HANDLE_FILE_INFORMATION (Windows): 5 dword + 3 FILETIME (8 c/u). */
+typedef struct {
+    uint32_t dwFileAttributes;
+    uint32_t ftCreationTime[2];
+    uint32_t ftLastAccessTime[2];
+    uint32_t ftLastWriteTime[2];
+    uint32_t dwVolumeSerialNumber;
+    uint32_t nFileSizeHigh;
+    uint32_t nFileSizeLow;
+    uint32_t nNumberOfLinks;
+    uint32_t nFileIndexHigh;
+    uint32_t nFileIndexLow;
+} my_BY_HANDLE_FILE_INFORMATION;
+
+uint32_t __attribute__((stdcall)) GetFileInformationByHandle(uint32_t h,
+                          my_BY_HANDLE_FILE_INFORMATION *info)
+{
+    struct win32_file_s *f = win32_file_of(h);
+    trace("[k32] GetFileInformationByHandle\n");
+    if (f == 0 || info == 0)
+        return 0;
+    info->dwFileAttributes   = 0x80;      /* FILE_ATTRIBUTE_NORMAL */
+    info->ftCreationTime[0]  = 0;
+    info->ftCreationTime[1]  = 0;
+    info->ftLastAccessTime[0] = 0;
+    info->ftLastAccessTime[1] = 0;
+    info->ftLastWriteTime[0] = 0;
+    info->ftLastWriteTime[1] = 0;
+    info->dwVolumeSerialNumber = 0x4D594F53u;   /* "MYOS" */
+    info->nFileSizeHigh      = 0;
+    info->nFileSizeLow       = f->size;
+    info->nNumberOfLinks     = 1;
+    info->nFileIndexHigh     = 0;
+    info->nFileIndexLow      = (uint32_t)(h - 0x100);
+    return 1;
+}
+
 /* --- Global*: memoria global = el heap del proceso (no movible) --- */
 
 void *__attribute__((stdcall)) GlobalAlloc(uint32_t flags, uint32_t size)
@@ -1676,8 +1774,14 @@ win32_export_t __exports[] __attribute__((section(".exports"))) = {
     { "GetCurrentDirectoryA",  (uint32_t)&GetCurrentDirectoryA },
     { "GetCurrentDirectoryW",  (uint32_t)&GetCurrentDirectoryW },
     { "SetCurrentDirectoryA",  (uint32_t)&SetCurrentDirectoryA },
-    { "SetCurrentDirectoryW",  (uint32_t)&SetCurrentDirectoryW },
-    { "GlobalAlloc",           (uint32_t)&GlobalAlloc },
+{ "SetCurrentDirectoryW",  (uint32_t)&SetCurrentDirectoryW },
+     { "GetTempPathA",          (uint32_t)&GetTempPathA },
+     { "GetWindowsDirectoryA",  (uint32_t)&GetWindowsDirectoryA },
+     { "GetSystemDirectoryA",   (uint32_t)&GetSystemDirectoryA },
+     { "GetVersionExA",         (uint32_t)&GetVersionExA },
+     { "GetVersion",            (uint32_t)&GetVersion },
+     { "GetFileInformationByHandle", (uint32_t)&GetFileInformationByHandle },
+     { "GlobalAlloc",           (uint32_t)&GlobalAlloc },
     { "GlobalLock",            (uint32_t)&GlobalLock },
     { "GlobalUnlock",          (uint32_t)&GlobalUnlock },
     { "GlobalFree",            (uint32_t)&GlobalFree },
