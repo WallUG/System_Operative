@@ -540,12 +540,27 @@ uint32_t __attribute__((stdcall)) VirtualFree(void *p, uint32_t size, uint32_t t
 static void win_free(void *p)
 {
     int r;
-    (void)p;
-    __asm__ volatile("int $0x80" : "=a"(r) : "a"(SYS_FREE) : "memory");
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_FREE), "b"(p)
+                     : "memory");
     (void)r;
 }
 
 uint32_t __attribute__((stdcall)) GetProcessHeap(void) { return 1; }
+uint32_t __attribute__((stdcall)) HeapSize(uint32_t h, uint32_t f, const void *p);
+
+uint32_t __attribute__((stdcall)) HeapCreate(uint32_t flags, uint32_t init,
+                     uint32_t max)
+{
+    (void)flags; (void)init; (void)max;
+    return 1;                       /* el heap del proceso */
+}
+
+uint32_t __attribute__((stdcall)) HeapDestroy(uint32_t heap)
+{
+    (void)heap;
+    return 1;
+}
 
 void *__attribute__((stdcall)) HeapAlloc(uint32_t heap, uint32_t flags, uint32_t size)
 {
@@ -562,14 +577,34 @@ uint32_t __attribute__((stdcall)) HeapFree(uint32_t heap, uint32_t flags, void *
 
 void *__attribute__((stdcall)) HeapReAlloc(uint32_t heap, uint32_t flags, void *p, uint32_t size)
 {
-    (void)heap; (void)flags; (void)p;
-    return win_malloc(size);
+    void *n;
+    uint32_t old, i;
+    (void)heap; (void)flags;
+    n = win_malloc(size);
+    if (n == 0)
+        return 0;
+    old = HeapSize(0, 0, p);
+    if (old > size)
+        old = size;
+    {
+        const uint8_t *s = (const uint8_t *)p;
+        uint8_t *d = (uint8_t *)n;
+        for (i = 0; i < old; i++)
+            d[i] = s[i];
+    }
+    win_free(p);
+    return n;
 }
 
 uint32_t __attribute__((stdcall)) HeapSize(uint32_t heap, uint32_t flags, const void *p)
 {
-    (void)heap; (void)flags; (void)p;
-    return 0x1000;
+    uint32_t sz;
+    (void)heap; (void)flags;
+    if (p == 0)
+        return 0;
+    /* el header de 16 B del bloque vive en el heap de usuario */
+    sz = ((const uint32_t *)p)[-3];     /* offset +4 del header: size */
+    return sz;
 }
 
 void __attribute__((stdcall)) GetStartupInfo(void *si)

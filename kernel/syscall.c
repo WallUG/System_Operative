@@ -22,6 +22,7 @@
 #include "task/task.h"
 #include "mem/paging.h"
 #include "mem/heap.h"
+#include "mem/uheap.h"
 #include "elf.h"
 #include "pe.h"
 #include "win32.h"
@@ -158,7 +159,8 @@ static void sys_exec(const char *name, registers_t *regs)
     win32_tib_set_cmdline(sched_current_cr3(), name);
     regs->esp = USER_ESP0_INIT;
     regs->user_esp = USER_ESP0_INIT;
-    sched_user_heap_set(USER_HEAP_BASE);    /* heap nuevo (bump en 0) */
+    sched_user_heap_set(USER_HEAP_BASE);    /* heap nuevo por proceso */
+    uheap_reset();
 
     /* exec reescribio las tablas de pagina del CR3 actual (paging_free_user_
      * space + elf_load_into + win32_map_all) sin cambiar de tarea: el fetch
@@ -304,29 +306,14 @@ void syscall_handler(registers_t *regs)
         break;
     }
     case SYS_MALLOC: {
-        /* bump allocator sobre [USER_HEAP_BASE, USER_HEAP_END) con
-         * paginas USER mapeadas bajo demanda. Sin free (SYS_FREE no-op),
-         * pero suficiente para consola/archivos por ahora. */
-        uint32_t size = regs->ebx;
-        uint32_t cur = sched_user_heap();
-        uint32_t next;
-        if (size == 0)
-            size = 16;
-        next = PAGE_ALIGN(cur + size);
-        if (next > USER_HEAP_END) {
-            regs->eax = 0;
-            break;
-        }
-        if (paging_is_user(pd, cur) == 0 &&
-            paging_user_map(pd, cur, next - cur) != 0) {
-            regs->eax = 0;
-            break;
-        }
-        sched_user_heap_set(next);
-        regs->eax = cur;
+        /* Fase 23-C10: heap first-fit por proceso sobre
+         * [USER_HEAP_BASE, USER_HEAP_END) con split/coalesce y
+         * expansion por el bump bajo demanda (kernel/mem/uheap.c). */
+        regs->eax = (uint32_t)uheap_alloc(pd, regs->ebx);
         break;
     }
     case SYS_FREE:
+        uheap_free(pd, (void *)regs->ebx);
         regs->eax = 0;
         break;
     case SYS_DREAD: { /* ebx=nombre, ecx=buf, edx=off, esi=max: lectura

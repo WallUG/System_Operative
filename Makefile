@@ -28,6 +28,7 @@ OBJS      = $(BUILD)/entry.o \
             $(BUILD)/mem/pmm.o \
             $(BUILD)/mem/paging.o \
             $(BUILD)/mem/heap.o \
+            $(BUILD)/mem/uheap.o \
             $(BUILD)/task/task.o \
             $(BUILD)/task/switch.o \
             $(BUILD)/gdt.o \
@@ -136,6 +137,13 @@ WIN_APPS  += $(BUILD)/user/win32/movetest.exe
 WIN_APPS  += $(BUILD)/user/win32/dlltest.exe
 # txtmode.exe: modos binario/texto _O_BINARY/_O_TEXT (Fase 23-C9).
 WIN_APPS  += $(BUILD)/user/win32/txtmode.exe
+# heaptest.exe: heap por proceso _O_BINARY (Fase 23-C10).
+WIN_APPS  += $(BUILD)/user/win32/heaptest.exe
+
+$(BUILD)/user/win32/heaptest.exe: user/win32/heaptest.c
+	@mkdir -p $(dir $@)
+	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
+	           -Wl,--subsystem,console -s -o $@ $< -luser32 -lkernel32
 
 $(BUILD)/user/win32/txtmode.exe: user/win32/txtmode.c
 	@mkdir -p $(dir $@)

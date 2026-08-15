@@ -485,15 +485,30 @@ void free(void *p)
 {
     if (p) {
         int r;
-        __asm__ volatile("int $0x80" : "=a"(r) : "a"(SYS_FREE) : "memory");
+        __asm__ volatile("int $0x80" : "=a"(r)
+                         : "a"(SYS_FREE), "b"(p)
+                         : "memory");
         (void)r;
     }
 }
 
 void *realloc(void *p, unsigned int size)
 {
-    (void)p;
-    return malloc(size);
+    void *n;
+    unsigned int old, i;
+    if (p == 0)
+        return malloc(size);
+    n = malloc(size);
+    if (n == 0)
+        return 0;
+    /* tamano viejo: header de 16 B del heap de usuario (magic, size, ...) */
+    old = ((unsigned int *)p)[-3];
+    if (old > size)
+        old = size;
+    for (i = 0; i < old; i++)
+        ((unsigned char *)n)[i] = ((unsigned char *)p)[i];
+    free(p);
+    return n;
 }
 
 /* --- cadenas que exporta el CRT (wide incluido) --- */

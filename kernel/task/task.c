@@ -203,6 +203,7 @@ int task_create_user(const char *name, const char *exe, const char *cmdline,
     t->esp0 = stack_frame + 0x1000;
     t->cr3 = pd;
     t->heap_cur = USER_HEAP_BASE;
+    t->heap_head = 0;               /* Fase 23-C10: heap por proceso */
     t->exe_base = exe_base;
 
     return task_init(t, name);
@@ -247,6 +248,7 @@ int task_fork(registers_t *regs)
     t->esp0 = stack_frame + 0x1000;
     t->cr3 = pd;
     t->heap_cur = current->heap_cur;
+    t->heap_head = current->heap_head;   /* el hijo hereda los bloques */
 
     return task_init(t, "user");
 }
@@ -398,4 +400,15 @@ void sched_user_heap_set(uint32_t p)
 {
     if (current)
         current->heap_cur = p;
+}
+
+uint32_t sched_user_heap_head(void)
+{
+    return current ? current->heap_head : 0;
+}
+
+void sched_user_heap_head_set(uint32_t p)
+{
+    if (current)
+        current->heap_head = p;
 }

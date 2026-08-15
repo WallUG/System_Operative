@@ -16,6 +16,13 @@ static void logstr(const char *s)
     WriteFile(h, s, len, &n, 0);
 }
 
+static void logstr_len(const char *s, int len)
+{
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD n = 0;
+    WriteFile(h, s, len, &n, 0);
+}
+
 static void lognum(int v)
 {
     char b[12];
@@ -86,7 +93,7 @@ int main(void)
     logstr(" len=");
     lognum(rd);
     logstr(" data=[");
-    logstr(buf);
+    logstr_len(buf, (int)rd);
     logstr("]");
     logstr(" match=");
     lognum(rd == 14 && cr_count(buf, 14) == 0 &&

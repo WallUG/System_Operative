@@ -44,7 +44,10 @@ typedef struct task {
     uint32_t stack_base;        /* base de su pila de kernel (frame PMM) */
     uint32_t esp0;              /* tope de la pila de kernel (TSS), user */
     uint32_t cr3;               /* PD (kernel_pd para tareas ring 0) */
-    uint32_t heap_cur;          /* puntero del heap de usuario (bump) */
+    uint32_t heap_cur;          /* tope del heap de usuario (expansion) */
+    uint32_t heap_head;         /* Fase 23-C10: cabeza de la lista de
+                                 * bloques del heap first-fit (0 = sin
+                                 * inicializar) */
     uint32_t exe_base;          /* ImageBase final del PE cargado (0 si ELF) */
     char     exe_name[TASK_EXE_LEN]; /* nombre del ejecutable (para Win32) */
     char     name[TASK_NAME_LEN];
@@ -92,6 +95,8 @@ uint32_t sched_current_cr3(void);
  * USER con paging_user_map; el bump nunca decrece (sin free por ahora). */
 uint32_t sched_user_heap(void);
 void     sched_user_heap_set(uint32_t p);
+uint32_t sched_user_heap_head(void);
+void     sched_user_heap_head_set(uint32_t p);
 /* Llamado desde el handler IRQ0 (timer): guarda el marco actual y
  * restaura el de la siguiente tarea de la lista circular. Retorna solo
  * cuando la multitarea no esta activa (vuelve al epilogo del stub). */

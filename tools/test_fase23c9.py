@@ -30,13 +30,15 @@ def run():
         ['qemu-system-i386','-display','none','-monitor',f'unix:{MON},server,nowait',
          '-serial','stdio','-no-reboot','-no-shutdown',
          '-drive',f'format=raw,file={WORK}'],
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0, text=True)
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
     acc = []
     def reader():
         while True:
             ch = qemu.stdout.read(1)
-            if ch == '': return
-            acc.append(ch); sys.stdout.write(ch); sys.stdout.flush()
+            if ch == b'': return
+            acc.append(ch.decode('utf-8', errors='replace'))
+            sys.stdout.write(ch.decode('utf-8', errors='replace'))
+            sys.stdout.flush()
     threading.Thread(target=reader, daemon=True).start()
     def mon_sock():
         for _ in range(200):
