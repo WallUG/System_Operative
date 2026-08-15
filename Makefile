@@ -130,6 +130,7 @@ WIN_APPS  += $(BUILD)/user/win32/gdidemo.exe
 WIN_APPS  += $(BUILD)/user/win32/writetest.exe
 WIN_APPS  += $(BUILD)/user/win32/dlgtest.exe
 WIN_APPS  += $(BUILD)/user/win32/wintwo.exe
+WIN_APPS  += $(BUILD)/user/win32/movetest.exe
 
 $(BUILD)/user/win32/%.exe: user/win32/%.c
 	@mkdir -p $(dir $@)
@@ -137,6 +138,12 @@ $(BUILD)/user/win32/%.exe: user/win32/%.c
 	           -Wl,--subsystem,console -s -o $@ $<
 
 $(BUILD)/user/win32/messagebox.exe: user/win32/messagebox.c
+	@mkdir -p $(dir $@)
+	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
+	           -Wl,--subsystem,console -s -o $@ $< -luser32
+
+# movetest.exe: MoveWindow/GetWindowRect/WM_MOVE/WM_SIZE (Fase 23-B7).
+$(BUILD)/user/win32/movetest.exe: user/win32/movetest.c
 	@mkdir -p $(dir $@)
 	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
 	           -Wl,--subsystem,console -s -o $@ $< -luser32

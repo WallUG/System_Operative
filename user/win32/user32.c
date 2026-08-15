@@ -56,6 +56,9 @@
 #define WM_GETTEXT      0x000D
 #define WM_PAINT        0x000F
 #define WM_ERASEBKGND   0x0014
+#define WM_MOVE         0x0003   /* Fase 23-B7: ventana movida */
+#define WM_SIZE         0x0005   /* Fase 23-B7: ventana redimensionada */
+#define WM_NOTIFY       0x004E   /* Fase 23-B7: avisos de controles */
 #define WM_FRAME        2           /* igual que kernel/winmgr.h */
 #define WM_TITLE_H      20
 
@@ -174,6 +177,16 @@ static int sys_wininfo(uint32_t id, uint32_t *out)
     __asm__ volatile("int $0x80"
                      : "=a"(r)
                      : "a"(SYS_WININFO), "b"(id), "c"(out)
+                     : "memory");
+    return r;
+}
+
+static int sys_winmove(uint32_t id, int dx, int dy)
+{
+    int r;
+    __asm__ volatile("int $0x80"
+                     : "=a"(r)
+                     : "a"(SYS_WINMOVE), "b"(id), "c"(dx), "d"(dy)
                      : "memory");
     return r;
 }
@@ -1870,6 +1883,11 @@ uint32_t __attribute__((stdcall)) SetWindowTextA(uint32_t hwnd, uint32_t t)
         child_text[i][k] = 0;
         return 1;
     }
+    /* Fase 23-B7: WM_SETTEXT al wndproc (puede interceptarlo); luego
+     * DefWindowProc aplica el titulo al kernel. */
+    if (wnd_proc[hwnd])
+        ((uint32_t(*)(uint32_t,uint32_t,uint32_t,uint32_t))wnd_proc[hwnd])
+            (hwnd, WM_SETTEXT, 0, t);
     if (str_valid((const char *)t))
         sys_wintitle(hwnd, (const char *)t);
     return 1;
@@ -1910,8 +1928,88 @@ uint32_t __attribute__((stdcall)) SetWindowLongA(uint32_t hwnd, int idx, uint32_
 uint32_t __attribute__((stdcall)) SetClassLongA(uint32_t hwnd, int idx, uint32_t v) { (void)hwnd; (void)idx; (void)v; return 0; }
 uint32_t __attribute__((stdcall)) SetWindowPos(uint32_t hwnd, uint32_t after, int x, int y, int w,
                       int h, uint32_t f)
-{ (void)hwnd; (void)after; (void)x; (void)y; (void)w; (void)h; (void)f; return 0; }
-uint32_t __attribute__((stdcall)) GetWindowRect(uint32_t hwnd, uint32_t r) { (void)hwnd; (void)r; return 0; }
+{
+    (void)after;
+    if (hwnd >= MAX_WNDPROCS || !wnd_proc[hwnd])
+        return 0;
+    if (is_child(hwnd)) {
+        /* Fase 23-B7: respetar las flags SWP. metapad hace un
+         * SetWindowPos(hwnd,0,0,0,0,0,SWP_NOSIZE|SWP_NOMOVE|...) de
+         * reposicion "no-op": sin las flags, el hijo quedaria a 0x0. */
+        uint32_t i = hwnd - CHILD_BASE;
+        if (!(f & 0x0001))          /* SWP_NOMOVE */
+            child_x[i] = x, child_y[i] = y;
+        if (!(f & 0x0004)) {        /* SWP_NOSIZE */
+            int ow = child_w[i], oh = child_h[i];
+            child_w[i] = w;
+            child_h[i] = h;
+            if (w != ow || h != oh)
+                ((uint32_t(*)(uint32_t,uint32_t,uint32_t,uint32_t))
+                 wnd_proc[hwnd])(hwnd, WM_SIZE, 0,
+                                 (uint32_t)((uint16_t)w |
+                                            ((uint32_t)(uint16_t)h << 16)));
+        }
+        child_repaint(i);
+        return 1;
+    }
+    return 1;
+}
+uint32_t __attribute__((stdcall)) MoveWindow(uint32_t hwnd, int x, int y,
+                    int w, int h, uint32_t repaint)
+{
+    (void)repaint;
+    if (hwnd >= MAX_WNDPROCS || !wnd_proc[hwnd])
+        return 0;
+    if (is_child(hwnd)) {
+        uint32_t i = hwnd - CHILD_BASE;
+        child_x[i] = x;
+        child_y[i] = y;
+        child_w[i] = w;
+        child_h[i] = h;
+        ((uint32_t(*)(uint32_t,uint32_t,uint32_t,uint32_t))wnd_proc[hwnd])(hwnd, WM_SIZE, 0,
+                       (uint32_t)((uint16_t)w | ((uint32_t)(uint16_t)h << 16)));
+        child_repaint(i);
+        return 1;
+    }
+    {
+        uint32_t info[8];
+        if (sys_wininfo(hwnd, info) != 0)
+            return 0;
+        {
+            int dx = x - (int)info[0];
+            int dy = y - (int)info[1];
+            if (dx || dy)
+                sys_winmove(hwnd, dx, dy);
+        }
+        ((uint32_t(*)(uint32_t,uint32_t,uint32_t,uint32_t))wnd_proc[hwnd])(hwnd, WM_MOVE, 0,
+                       (uint32_t)((uint16_t)x |
+                                  ((uint32_t)(uint16_t)y << 16)));
+    }
+    return 1;
+}
+
+uint32_t __attribute__((stdcall)) GetWindowRect(uint32_t hwnd, uint32_t r)
+{
+    uint32_t info[8];
+    int *rc = (int *)r;
+    if (rc == 0)
+        return 0;
+    if (is_child(hwnd)) {
+        uint32_t i = hwnd - CHILD_BASE;
+        rc[0] = child_x[i];
+        rc[1] = child_y[i];
+        rc[2] = child_x[i] + child_w[i];
+        rc[3] = child_y[i] + child_h[i];
+        return 1;
+    }
+    if (sys_wininfo(hwnd, info) != 0)
+        return 0;
+    rc[0] = (int)info[0];
+    rc[1] = (int)info[1];
+    rc[2] = (int)info[0] + (int)info[2];
+    rc[3] = (int)info[1] + (int)info[3];
+    return 1;
+}
 uint32_t __attribute__((stdcall)) GetClientRect(uint32_t hwnd, uint32_t r)
 {
     int *rc = (int *)r;
@@ -2928,6 +3026,7 @@ win32_export_t __exports[] __attribute__((section(".exports"))) = {
     { "SetWindowLongA", (uint32_t)&SetWindowLongA },
     { "SetClassLongA", (uint32_t)&SetClassLongA },
     { "SetWindowPos", (uint32_t)&SetWindowPos },
+    { "MoveWindow", (uint32_t)&MoveWindow },
     { "GetWindowRect", (uint32_t)&GetWindowRect },
     { "GetClientRect", (uint32_t)&GetClientRect },
     { "GetWindowPlacement", (uint32_t)&GetWindowPlacement },
