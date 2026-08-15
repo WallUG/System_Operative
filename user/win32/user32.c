@@ -135,7 +135,7 @@ static int sys_winupdate(uint32_t id)
     int r;
     __asm__ volatile("int $0x80"
                      : "=a"(r)
-                     : "a"(SYS_WINUPDATE), "b"(id)
+                     : "a"(SYS_WINUPDATE), "b"(id), "c"(0)
                      : "memory");
     return r;
 }
@@ -788,6 +788,23 @@ static int      child_edit[CHILD_MAX];  /* 1 = control editable (EDIT/RichEdit) 
 static uint32_t focus_edit;             /* control de edicion enfocado  */
 static uint32_t wm_focus_win = 1;       /* Fase 23-B6: foco por ventana */
 
+/* Fase 23-C11: SysListView32 (comctl32). Hijo con columnas e items,
+ * seleccion por teclado (flechas) y Enter -> WM_COMMAND al padre. */
+#define LV_COLS_MAX 4
+#define LV_ITEMS_MAX 48
+#define LV_NAMELEN  33
+static int      child_type[CHILD_MAX];              /* 0=edit, 1=listview */
+static char     lv_col[CHILD_MAX][LV_COLS_MAX][LV_NAMELEN];
+static int      lv_colw[CHILD_MAX][LV_COLS_MAX];
+static int      lv_ncol[CHILD_MAX];
+static char     lv_item[CHILD_MAX][LV_ITEMS_MAX][LV_NAMELEN];
+static int      lv_isz[CHILD_MAX][LV_ITEMS_MAX];    /* tamano (col 1) */
+static int      lv_nitem[CHILD_MAX];
+static int      lv_sel[CHILD_MAX];                  /* fila seleccionada */
+static uint32_t focus_child;                        /* hijo con foco */
+
+#define LV_HEADER_H 18
+
 /* DCs de gdi32: uno por hwnd (pool estatico). */
 static myos_dc_t dc_pool[MAX_WNDPROCS];
 
@@ -814,6 +831,7 @@ static const builtin_class_t builtin_classes[] = {
     { "STATIC",      (uint32_t)&builtin_wndproc },
     { "BUTTON",      (uint32_t)&builtin_wndproc },
     { "msctls_statusbar32", (uint32_t)&builtin_wndproc },
+    { "SysListView32", (uint32_t)&builtin_wndproc },
     { 0, 0 },
 };
 
@@ -1001,6 +1019,9 @@ static void event_to_wm(const uint32_t *ev)
         if (focus_edit && focus_edit < MAX_WNDPROCS &&
             wnd_proc[focus_edit])
             target = focus_edit;
+        else if (focus_child && focus_child < MAX_WNDPROCS &&
+                 wnd_proc[focus_child])
+            target = focus_child;   /* Fase 23-C11: listview con foco */
         msgq_push(target, WM_KEYDOWN, key, ev[3]);
         /* WM_CHAR solo sin Ctrl: Ctrl+letra es comando (acelerador) */
         if (key >= 32 && key <= 126 && !(ev[3] & 1))
@@ -1099,6 +1120,15 @@ uint32_t __attribute__((stdcall)) CreateWindowExA(uint32_t e, uint32_t cls, uint
                         ci_eq((const char *)cls, "RichEdit20A") ? 1 : 0;
         if (child_edit[i])
             focus_edit = id;        /* primer editor: foco inicial */
+        /* Fase 23-C11: SysListView32 -> hijo listview */
+        child_type[i] = ci_eq((const char *)cls, "SysListView32") ? 1 : 0;
+        if (child_type[i]) {
+            lv_ncol[i] = 0;
+            lv_nitem[i] = 0;
+            lv_sel[i] = 0;
+            if (focus_child == 0)
+                focus_child = id;   /* foco de teclado del listview */
+        }
         wnd_proc[id] = proc;
         wnd_buf[id] = 0;
         wnd_cw[id] = w;
@@ -1604,15 +1634,130 @@ static void child_paint(uint32_t i)
     int px0 = child_x[i], py0 = child_y[i];
     int pw = child_w[i], ph = child_h[i];
     int cw = wnd_cw[parent];
-    const char *s = child_text[i];
-    int cx = px0, cy = py0;
-    int cur = child_cur[i], idx = 0;
-    int cur_x = px0, cur_y = py0;
     int x, y;
 
     if (px == 0)
         return;
-    /* fondo del editor: blanco */
+
+    /* Fase 23-C11: SysListView32: fondo blanco, header de columnas
+     * gris y filas con la seleccion resaltada en azul. */
+    if (child_type[i] == 1) {
+        int f;
+        for (y = py0; y < py0 + ph && y < cw && y < wnd_ch[parent]; y++) {
+            uint32_t *row = px + (uint32_t)y * (uint32_t)cw;
+            for (x = px0; x < px0 + pw && x < cw; x++)
+                row[x] = px_disp(0x00FFFFFFu);
+        }
+        for (y = py0; y < py0 + LV_HEADER_H && y < py0 + ph &&
+                    y < wnd_ch[parent]; y++) {
+            uint32_t *row = px + (uint32_t)y * (uint32_t)cw;
+            for (x = px0; x < px0 + pw && x < cw; x++)
+                row[x] = px_disp(0x00C0C0C0u);
+        }
+        for (f = 0; f < lv_ncol[i]; f++) {
+            const char *s = lv_col[i][f];
+            int cx = px0 + 4, cy = py0 + 1, idx = 0;
+            int colx = px0;
+            int c;
+            if (f > 0) {
+                for (c = 0; c < f; c++)
+                    colx += lv_colw[i][c];
+            }
+            cx = colx + 4;
+            cy = py0 + 1;
+            while (*s && idx < 12 && cy < py0 + LV_HEADER_H) {
+                const unsigned char *g;
+                int yy, xx;
+                if (*s < 32 || *s > 126)
+                    break;
+                g = font8x16_basic[*s - 32];
+                for (yy = 0; yy < 16 && cy + yy < py0 + LV_HEADER_H; yy++)
+                    for (xx = 0; xx < 8; xx++)
+                        if (g[yy] & (0x80u >> xx)) {
+                            int xxx = cx + xx, yyy = cy + yy;
+                            if (xxx < colx + lv_colw[i][f] &&
+                                xxx < px0 + pw && xxx < cw)
+                                px[(uint32_t)yyy * (uint32_t)cw +
+                                   (uint32_t)xxx] =
+                                    px_disp(0x00000000u);
+                        }
+                idx++;
+                cx += 8;
+                s++;
+            }
+        }
+        for (f = 0; f < lv_nitem[i]; f++) {
+            int fy = py0 + LV_HEADER_H + f * 16;
+            const char *s = lv_item[i][f];
+            int cx = px0 + 4, idx = 0, c;
+            if (fy + 16 > py0 + ph || fy + 16 > wnd_ch[parent])
+                break;
+            if (f == lv_sel[i]) {
+                for (y = fy; y < fy + 16 && y < py0 + ph; y++) {
+                    uint32_t *row = px + (uint32_t)y * (uint32_t)cw;
+                    for (x = px0; x < px0 + pw && x < cw; x++)
+                        row[x] = px_disp(0x00000088u);
+                }
+            }
+            while (*s && idx < 12 && cx < px0 + lv_colw[i][0]) {
+                const unsigned char *g;
+                int yy, xx;
+                if (*s < 32 || *s > 126)
+                    break;
+                g = font8x16_basic[*s - 32];
+                for (yy = 0; yy < 16 && fy + yy < py0 + ph; yy++)
+                    for (xx = 0; xx < 8; xx++)
+                        if (g[yy] & (0x80u >> xx)) {
+                            int xxx = cx + xx, yyy = fy + yy;
+                            if (xxx < px0 + lv_colw[i][0] &&
+                                xxx < px0 + pw && xxx < cw)
+                                px[(uint32_t)yyy * (uint32_t)cw +
+                                   (uint32_t)xxx] =
+                                    px_disp(f == lv_sel[i]
+                                                ? 0x00FFFFFFu
+                                                : 0x00000000u);
+                        }
+                idx++;
+                cx += 8;
+                s++;
+            }
+            if (lv_ncol[i] > 1) {
+                char num[16];
+                int np = 0, v = lv_isz[i][f], cc;
+                int cx2 = px0 + 4;
+                for (c = 0; c < 1; c++)
+                    cx2 += lv_colw[i][c];
+                do {
+                    num[np++] = (char)('0' + v % 10);
+                    v /= 10;
+                } while (v);
+                for (cc = np - 1; cc >= 0; cc--) {
+                    const unsigned char *g =
+                        font8x16_basic[num[cc] - 32];
+                    int yy, xx;
+                    for (yy = 0; yy < 16 && fy + yy < py0 + ph; yy++)
+                        for (xx = 0; xx < 8; xx++)
+                            if (g[yy] & (0x80u >> xx)) {
+                                int xxx = cx2 + xx, yyy = fy + yy;
+                                if (xxx < px0 + pw && xxx < cw)
+                                    px[(uint32_t)yyy * (uint32_t)cw +
+                                       (uint32_t)xxx] =
+                                        px_disp(f == lv_sel[i]
+                                                    ? 0x00FFFFFFu
+                                                    : 0x00000000u);
+                            }
+                    cx2 += 8;
+                }
+            }
+        }
+        return;
+    }
+
+    {
+    const char *s = child_text[i];
+    int cx = px0, cy = py0;
+    int cur = child_cur[i], idx = 0;
+    int cur_x = px0, cur_y = py0;
     for (y = py0; y < py0 + ph && y < cw && y < wnd_ch[parent]; y++) {
         uint32_t *row = px + (uint32_t)y * (uint32_t)cw;
         for (x = px0; x < px0 + pw && x < cw; x++)
@@ -1667,6 +1812,7 @@ static void child_paint(uint32_t i)
         for (y = 0; y < 16 && cur_y + y < py0 + ph && cur_y + y >= py0; y++)
             px[(uint32_t)(cur_y + y) * (uint32_t)cw + (uint32_t)cur_x] =
                 px_disp(0x00000000u);
+    }
     }
 }
 
@@ -1726,6 +1872,115 @@ static void child_insert(uint32_t hwnd, char ch)
 uint32_t builtin_wndproc(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
 {
     (void)b;
+
+    /* Fase 23-C11: mensajes del SysListView32 (comctl32). */
+    if (is_child(hwnd) && child_type[hwnd - CHILD_BASE] == 1) {
+        uint32_t i = hwnd - CHILD_BASE;
+        if (m == 0x101B) {          /* LVM_INSERTCOLUMNA (mingw): a=col, b=&LVCOLUMNA */
+            const char *txt = *(const char **)(b + 12);
+            int cx = *(int *)(b + 8);
+            int k;
+            if (a < LV_COLS_MAX && txt != 0 && b != 0) {
+                for (k = 0; k < LV_NAMELEN - 1 && txt[k]; k++)
+                    lv_col[i][a][k] = txt[k];
+                lv_col[i][a][k] = 0;
+                lv_colw[i][a] = cx > 0 ? cx : 80;
+                if ((int)a + 1 > lv_ncol[i])
+                    lv_ncol[i] = (int)a + 1;
+            }
+            child_repaint(i);
+            return 1;
+        }
+        if (m == 0x1007) {          /* LVM_INSERTITEMA (mingw): a=idx, b=&LVITEMA */
+            const char *txt = *(const char **)(b + 20);
+            int iitem = *(int *)(b + 4);
+            int isub = *(int *)(b + 8);
+            int k;
+            if (txt == 0 || b == 0 || iitem < 0 || iitem >= LV_ITEMS_MAX)
+                return 0;
+            if (isub == 0) {
+                for (k = 0; k < LV_NAMELEN - 1 && txt[k]; k++)
+                    lv_item[i][iitem][k] = txt[k];
+                lv_item[i][iitem][k] = 0;
+                if (iitem + 1 > lv_nitem[i])
+                    lv_nitem[i] = iitem + 1;
+            } else if (isub == 1) {
+                int v = 0, neg = 0, sig = 0;
+                for (k = 0; txt[k]; k++) {
+                    if (txt[k] >= '0' && txt[k] <= '9')
+                        v = v * 10 + (txt[k] - '0');
+                    else if (txt[k] == '-')
+                        neg = 1;
+                    else if (txt[k] != ' ')
+                        sig = 1;
+                }
+                lv_isz[i][iitem] = neg ? -v : v;
+                (void)sig;
+            }
+            child_repaint(i);
+            return 1;
+        }
+        if (m == 0x1008) {          /* LVM_DELETEITEM */
+            int idx = (int)a;
+            int k;
+            if (idx >= 0 && idx < lv_nitem[i]) {
+                for (k = idx; k < lv_nitem[i] - 1; k++) {
+                    int kk;
+                    for (kk = 0; kk < LV_NAMELEN; kk++)
+                        lv_item[i][k][kk] = lv_item[i][k + 1][kk];
+                    lv_isz[i][k] = lv_isz[i][k + 1];
+                }
+                lv_nitem[i]--;
+            }
+            if (lv_sel[i] >= lv_nitem[i])
+                lv_sel[i] = lv_nitem[i] > 0 ? lv_nitem[i] - 1 : 0;
+            child_repaint(i);
+            return 1;
+        }
+        if (m == 0x1009) {          /* LVM_DELETEALLITEMS */
+            lv_nitem[i] = 0;
+            lv_sel[i] = 0;
+            child_repaint(i);
+            return 1;
+        }
+        if (m == 0x1004)            /* LVM_GETITEMCOUNT */
+            return (uint32_t)lv_nitem[i];
+        if (m == 0x102D) {          /* LVM_GETITEMTEXTA: a=idx, b=&LVITEMA */
+            int idx = (int)a;
+            char *dst = *(char **)(b + 20);
+            int max = *(int *)(b + 24);
+            int k;
+            if (dst == 0 || b == 0 || idx < 0 || idx >= lv_nitem[i])
+                return 0;
+            for (k = 0; k < max - 1 && lv_item[i][idx][k]; k++)
+                dst[k] = lv_item[i][idx][k];
+            dst[k] = 0;
+            return (uint32_t)k;
+        }
+        if (m == 0x102B) {          /* LVM_GETITEMCOUNT de texto: LVM_GETITEMTEXTW? no: 0x102B = LVM_GETITEMINDEX... */
+            (void)a;
+            return (uint32_t)lv_nitem[i];
+        }
+        if (m == 0x1043) {          /* LVM_SETSELECTIONMARK: a=sel */
+            if ((int)a >= 0 && (int)a < lv_nitem[i]) {
+                lv_sel[i] = (int)a;
+                child_repaint(i);
+            }
+            return 1;
+        }
+        if (m == 0x100C)            /* LVM_GETNEXTITEM: a=start, b=flags */
+            return (uint32_t)lv_sel[i];
+        if (m == 0x100F)            /* LVM_GETSELECTEDCOUNT */
+            return 1;
+        if (m == 0x1010)            /* LVM_GETITEMSTATE */
+            return 0x0002;          /* LVIS_SELECTED */
+        if (m == 0x1023) {          /* LVM_SETEXTENDEDLISTVIEWSTYLE */
+            (void)a;
+            (void)b;
+            return 0;
+        }
+    }
+
     if (m == WM_SETTEXT) {
         uint32_t i = hwnd - CHILD_BASE;
         int k = 0;
@@ -1759,6 +2014,33 @@ uint32_t builtin_wndproc(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
         return 0;
     }
     if (m == WM_KEYDOWN) {
+        /* Fase 23-C11: listview: flechas mueven la seleccion, Enter
+         * envia WM_COMMAND al padre con (id<<16)|1. */
+        if (is_child(hwnd) && child_type[hwnd - CHILD_BASE] == 1) {
+            uint32_t i = hwnd - CHILD_BASE;
+            if (a == 0x102 /*up*/) {
+                if (lv_sel[i] > 0) {
+                    lv_sel[i]--;
+                    child_repaint(i);
+                }
+                return 0;
+            }
+            if (a == 0x103 /*down*/) {
+                if (lv_sel[i] < lv_nitem[i] - 1) {
+                    lv_sel[i]++;
+                    child_repaint(i);
+                }
+                return 0;
+            }
+            if (a == '\n') {
+                uint32_t parent = child_parent[i];
+                if (parent < MAX_WNDPROCS && wnd_proc[parent])
+                    msgq_push(parent, WM_COMMAND,
+                              (hwnd - CHILD_BASE + 1) << 16 | 1, 0);
+                return 0;
+            }
+            return 0;
+        }
         /* Enter/BackSpace llegan por KEYDOWN (no pasan el filtro CHAR) */
         if (a == '\n' || a == '\b') {
             child_insert(hwnd, (char)a);

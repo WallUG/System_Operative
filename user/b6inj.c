@@ -20,7 +20,7 @@ static void inject(int type, int x, int y)
 
 static void wait_big(void)
 {
-    volatile uint32_t n = 320000000;
+    volatile uint32_t n = 900000000;
     while (n-- > 0)
         ;
 }

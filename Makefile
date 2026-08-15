@@ -139,6 +139,13 @@ WIN_APPS  += $(BUILD)/user/win32/dlltest.exe
 WIN_APPS  += $(BUILD)/user/win32/txtmode.exe
 # heaptest.exe: heap por proceso _O_BINARY (Fase 23-C10).
 WIN_APPS  += $(BUILD)/user/win32/heaptest.exe
+# listview.exe: SysListView32 de comctl32 (Fase 23-C11).
+WIN_APPS  += $(BUILD)/user/win32/listview.exe
+
+$(BUILD)/user/win32/listview.exe: user/win32/listview.c
+	@mkdir -p $(dir $@)
+	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
+	           -Wl,--subsystem,console -s -o $@ $< -luser32 -lcomctl32
 
 $(BUILD)/user/win32/heaptest.exe: user/win32/heaptest.c
 	@mkdir -p $(dir $@)
