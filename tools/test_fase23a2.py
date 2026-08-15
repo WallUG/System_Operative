@@ -42,8 +42,8 @@ def make_fs():
     fs = 'build/fs_a2.bin'
     subprocess.run(['python3', 'tools/makefs.py'] + root +
                    ['--dir', 'apps:' + ','.join(a2),
-                    '-c', '1400', '-o', fs], check=True)
-    subprocess.run(['truncate', '-s', str(1400 * 512), fs], check=True)
+                    '-c', '2000', '-o', fs], check=True)
+    subprocess.run(['truncate', '-s', str(2000 * 512), fs], check=True)
     with open(WORK, 'wb') as f:
         for part in ['build/boot.bin', 'build/kernel.bin', fs]:
             f.write(open(part, 'rb').read())
@@ -130,7 +130,7 @@ def run():
     bx, by0 = thumb_center('/tmp/opencode/a2_root0.ppm')
     check('scrollbar visible en la raiz (thumb en x 666..677)',
           bx >= 666 and bx <= 677)
-    check('thumb al inicio (arriba)', by0 >= 190 and by0 <= 270)
+    check('thumb al inicio (arriba)', by0 >= 110 and by0 <= 250)
 
     # 2) End en la raiz: sel=28 (apps, ultima) -> thumb baja
     hmp('sendkey end', 0.4)
@@ -155,7 +155,7 @@ def run():
     hmp('sendkey home', 0.4)
     snap('apps2')
     bx, byh = thumb_center('/tmp/opencode/a2_apps2.ppm')
-    check('Home: thumb al tope', byh >= 170 and byh <= 250)
+    check('Home: thumb al tope', byh >= 110 and byh <= 250)
 
     # 6) 25 x down: sel=24 -> thumb baja un poco
     for _ in range(25):

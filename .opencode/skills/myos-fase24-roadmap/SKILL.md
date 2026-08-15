@@ -166,16 +166,25 @@ GetVersionEx y verifica los valores en el serial.
 
 ### P2.1. comctl32: toolbar real + statusbar + trackbar + treeview
 
-**Estado**: ListView real (C11), InitCommonControlsEx, falta toolbar/
-statusbar/trackbar/treeview completos.
-
-**Tarea**: implementar los hijos virtuales en user32 para estas clases
-(msctls_trackbar32, msctls_treeview32) con sus mensajes (TBM_* , TVM_*),
-paint y teclado; toolbar con botones que envían WM_COMMAND.
-
-**Por qué**: más controles = más apps.
-
-**Riesgo**: medio.
+**Estado: COMPLETADO.** Añadidos en user32 (hijos virtuales, patrón del
+ListView de C11):
+- **toolbar** (ToolbarWindow32): TB_BUTTONSTRUCTSIZE/ADDBUTTONS/
+  BUTTONCOUNT, botones con label, paint.
+- **statusbar** (msctls_statusbar32): SB_SETPARTS/SETTEXT/GETTEXT
+  (soporta parte ancho -1 = resto de la barra), paint por partes.
+- **trackbar** (msctls_trackbar32): TBM_GETPOS/RANGEMIN/MAX/SETPOS/
+  SETRANGEMIN/MAX/SETRANGE (MAKELONG min,max) + teclado flechas.
+- **treeview** (SysTreeView32): TVM_INSERTITEMA/GETCOUNT/GETNEXTITEM/
+  SELECTITEM/EXPAND, nodos con profundidad y caja +/-, teclado.
+Test `tools/test_fase24p21.py` (ctldemo.exe, verifica los 4 por
+SendMessageA) 6/6.
+**Cambios de soporte**: FS_SECTORS 1760→2000 (el FS de arranque se
+llenó con las apps nuevas; boot.asm y la capacidad del test a2 se
+actualizaron) y checks del thumb del a2 hechos robustos al nº de
+archivos (cada app nueva rompía el rango absoluto de Y).
+NOTA: los bucles de paint de los controles deben acotarse a
+`wnd_ch[parent]` (alto del cliente), no `cw` (ancho) — un hijo cerca
+del borde inferior escribía fuera del buffer del padre (page fault).
 
 ### P2.2. Threads (CreateThread con scheduler leve)
 

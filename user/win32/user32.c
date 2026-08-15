@@ -803,6 +803,34 @@ static int      lv_nitem[CHILD_MAX];
 static int      lv_sel[CHILD_MAX];                  /* fila seleccionada */
 static uint32_t focus_child;                        /* hijo con foco */
 
+/* Fase 24-P2.1: mas controles comctl32. child_type: 0=edit, 1=listview,
+ * 2=toolbar, 3=statusbar, 4=trackbar, 5=treeview. */
+
+/* toolbar (ToolbarWindow32) */
+#define TB_MAXBTN 16
+static int      tb_nbtn[CHILD_MAX];
+static int      tb_btnid[CHILD_MAX][TB_MAXBTN];
+static char     tb_txt[CHILD_MAX][TB_MAXBTN][16];
+static int      tb_btnsz;      /* TB_BUTTONSTRUCTSIZE confirmado */
+
+/* statusbar (msctls_statusbar32) */
+#define SB_MAXPARTS 4
+static int      sb_nparts[CHILD_MAX];
+static int      sb_partw[CHILD_MAX][SB_MAXPARTS];
+static char     sb_text[CHILD_MAX][SB_MAXPARTS][48];
+
+/* trackbar (msctls_trackbar32) */
+static int      tbar_min[CHILD_MAX], tbar_max[CHILD_MAX];
+static int      tbar_pos[CHILD_MAX];
+
+/* treeview (SysTreeView32) */
+#define TV_MAXNODE 48
+static int      tv_nnode[CHILD_MAX];
+static char     tv_label[CHILD_MAX][TV_MAXNODE][48];
+static int      tv_par[CHILD_MAX][TV_MAXNODE];   /* indice padre o -1 */
+static int      tv_sel[CHILD_MAX];
+static int      tv_exp[CHILD_MAX][TV_MAXNODE];   /* expandido */
+
 #define LV_HEADER_H 18
 
 /* DCs de gdi32: uno por hwnd (pool estatico). */
@@ -832,6 +860,9 @@ static const builtin_class_t builtin_classes[] = {
     { "BUTTON",      (uint32_t)&builtin_wndproc },
     { "msctls_statusbar32", (uint32_t)&builtin_wndproc },
     { "SysListView32", (uint32_t)&builtin_wndproc },
+    { "ToolbarWindow32", (uint32_t)&builtin_wndproc },
+    { "msctls_trackbar32", (uint32_t)&builtin_wndproc },
+    { "SysTreeView32", (uint32_t)&builtin_wndproc },
     { 0, 0 },
 };
 
@@ -1128,6 +1159,27 @@ uint32_t __attribute__((stdcall)) CreateWindowExA(uint32_t e, uint32_t cls, uint
             lv_sel[i] = 0;
             if (focus_child == 0)
                 focus_child = id;   /* foco de teclado del listview */
+        }
+        /* Fase 24-P2.1: toolbar/statusbar/trackbar/treeview. */
+        if (!child_type[i]) {
+            if (ci_eq((const char *)cls, "ToolbarWindow32"))
+                child_type[i] = 2;
+            else if (ci_eq((const char *)cls, "msctls_statusbar32"))
+                child_type[i] = 3;
+            else if (ci_eq((const char *)cls, "msctls_trackbar32"))
+                child_type[i] = 4;
+            else if (ci_eq((const char *)cls, "SysTreeView32"))
+                child_type[i] = 5;
+            if (child_type[i] == 2) {
+                tb_nbtn[i] = 0;
+            } else if (child_type[i] == 3) {
+                sb_nparts[i] = 0;
+            } else if (child_type[i] == 4) {
+                tbar_min[i] = 0; tbar_max[i] = 100; tbar_pos[i] = 0;
+            } else if (child_type[i] == 5) {
+                tv_nnode[i] = 0;
+                tv_sel[i] = 0;
+            }
         }
         wnd_proc[id] = proc;
         wnd_buf[id] = 0;
@@ -1753,6 +1805,180 @@ static void child_paint(uint32_t i)
         return;
     }
 
+    /* Fase 24-P2.1: toolbar/statusbar/trackbar/treeview. Todos los
+     * bucles verticales se limitan a wnd_ch[parent] (alto del cliente)
+     * para no escribir fuera del buffer del padre. */
+    {
+        int ylim = py0 + ph;
+        if (ylim > wnd_ch[parent])
+            ylim = wnd_ch[parent];
+
+        if (child_type[i] == 2) {           /* toolbar: botones con label */
+            int b, bx, bw, by;
+            for (y = py0; y < ylim; y++) {
+                uint32_t *row = px + (uint32_t)y * (uint32_t)cw;
+                for (x = px0; x < px0 + pw && x < cw; x++)
+                    row[x] = px_disp(0x00C0C0C0u);
+            }
+            bw = tb_nbtn[i] ? (pw / tb_nbtn[i]) : 0;
+            for (b = 0; b < tb_nbtn[i]; b++) {
+                const char *s = tb_txt[i][b];
+                int idx = 0;
+                bx = px0 + b * bw;
+                by = py0;
+                for (y = by; y < by + ph - 2 && y < ylim; y++) {
+                    uint32_t *row = px + (uint32_t)y * (uint32_t)cw;
+                    for (x = bx; x < bx + bw - 2 && x < cw; x++)
+                        row[x] = px_disp(0x00D0D0D0u);
+                }
+                if (b > 0)
+                    for (y = by; y < by + ph && y < ylim; y++)
+                        px[(uint32_t)y * (uint32_t)cw + (uint32_t)(bx - 1)]
+                            = px_disp(0x00888888u);
+                while (*s && idx < 12 && bx + idx * 8 < bx + bw) {
+                    const unsigned char *g;
+                    int yy, xx;
+                    if (*s < 32 || *s > 126) break;
+                    g = font8x16_basic[*s - 32];
+                    for (yy = 0; yy < 16 && by + 3 + yy < ylim; yy++)
+                        for (xx = 0; xx < 8; xx++)
+                            if (g[yy] & (0x80u >> xx)) {
+                                int xxx = bx + 4 + idx * 8 + xx,
+                                    yyy = by + 3 + yy;
+                                if (xxx < bx + bw - 2 && xxx < cw)
+                                    px[(uint32_t)yyy * (uint32_t)cw +
+                                       (uint32_t)xxx] = px_disp(0x00000000u);
+                            }
+                    idx++; s++;
+                }
+            }
+            return;
+        }
+        if (child_type[i] == 3) {           /* statusbar: barra con partes */
+            int p, partx;
+            for (y = py0; y < ylim; y++) {
+                uint32_t *row = px + (uint32_t)y * (uint32_t)cw;
+                for (x = px0; x < px0 + pw && x < cw; x++)
+                    row[x] = px_disp(0x00C0C0C0u);
+            }
+            partx = px0;
+            for (p = 0; p < sb_nparts[i] && p < SB_MAXPARTS; p++) {
+                const char *s = sb_text[i][p];
+                int idx = 0, pw_part, part_end;
+                pw_part = sb_partw[i][p];
+                if (pw_part == -1 || pw_part == 0)
+                    pw_part = px0 + pw - partx;   /* resto de la barra */
+                part_end = partx + pw_part;
+                if (part_end > px0 + pw)
+                    part_end = px0 + pw;
+                while (*s && idx < 12 && partx + idx * 8 < part_end) {
+                    const unsigned char *g;
+                    int yy, xx;
+                    if (*s < 32 || *s > 126) break;
+                    g = font8x16_basic[*s - 32];
+                    for (yy = 0; yy < 16 && py0 + yy < ylim; yy++)
+                        for (xx = 0; xx < 8; xx++)
+                            if (g[yy] & (0x80u >> xx)) {
+                                int xxx = partx + 4 + idx * 8 + xx;
+                                if (xxx < part_end && xxx < cw)
+                                    px[(uint32_t)(py0 + yy) * (uint32_t)cw +
+                                       (uint32_t)xxx] = px_disp(0x00000000u);
+                            }
+                    idx++; s++;
+                }
+                partx = part_end;
+                if (p < sb_nparts[i] - 1)
+                    for (y = py0; y < ylim; y++)
+                        px[(uint32_t)y * (uint32_t)cw + (uint32_t)(partx - 1)]
+                            = px_disp(0x00888888u);
+            }
+            return;
+        }
+        if (child_type[i] == 4) {           /* trackbar: riel + posicion */
+            int midy = py0 + ph / 2, tx, tw, frac;
+            for (y = py0; y < ylim; y++) {
+                uint32_t *row = px + (uint32_t)y * (uint32_t)cw;
+                for (x = px0; x < px0 + pw && x < cw; x++)
+                    row[x] = px_disp(0x00E0E0E0u);
+            }
+            for (x = px0 + 4; x < px0 + pw - 4 && x < cw; x++) {
+                px[(uint32_t)midy * (uint32_t)cw + (uint32_t)x]
+                    = px_disp(0x00000000u);
+                px[(uint32_t)(midy + 1) * (uint32_t)cw + (uint32_t)x]
+                    = px_disp(0x00888888u);
+            }
+            tw = pw - 8;
+            frac = (tbar_max[i] > tbar_min[i])
+                       ? (tbar_pos[i] - tbar_min[i]) * 100 /
+                         (tbar_max[i] - tbar_min[i]) : 0;
+            if (frac < 0) frac = 0;
+            if (frac > 100) frac = 100;
+            tx = px0 + 4 + tw * frac / 100;
+            for (y = midy - 5; y < midy + 6 && y < ylim; y++)
+                for (x = tx - 3; x < tx + 4 && x < cw; x++)
+                    px[(uint32_t)y * (uint32_t)cw + (uint32_t)x]
+                        = px_disp(0x000080C0u);
+            return;
+        }
+        if (child_type[i] == 5) {           /* treeview: nodos indentados */
+            int f, fy;
+            for (y = py0; y < ylim; y++) {
+                uint32_t *row = px + (uint32_t)y * (uint32_t)cw;
+                for (x = px0; x < px0 + pw && x < cw; x++)
+                    row[x] = px_disp(0x00FFFFFFu);
+            }
+            for (f = 0; f < tv_nnode[i]; f++) {
+                const char *s = tv_label[i][f];
+                int idx = 0, cx = px0 + 4 + tv_par[i][f] * 16;
+                int has_child = 0, cc;
+                fy = py0 + f * 16;
+                if (fy + 16 > py0 + ph || fy + 16 > ylim)
+                    break;
+                for (cc = 0; cc < tv_nnode[i]; cc++)
+                    if (tv_par[i][cc] == f) has_child = 1;
+                if (f == tv_sel[i]) {
+                    for (y = fy; y < fy + 16 && y < ylim; y++) {
+                        uint32_t *row = px + (uint32_t)y * (uint32_t)cw;
+                        for (x = px0; x < px0 + pw && x < cw; x++)
+                            row[x] = px_disp(0x00000088u);
+                    }
+                }
+                if (has_child) {
+                    for (y = fy + 3; y < fy + 13 && y < ylim; y++)
+                        for (x = cx - 12; x < cx - 2 && x < cw; x++)
+                            px[(uint32_t)y * (uint32_t)cw + (uint32_t)x]
+                                = px_disp(0x00C0C0C0u);
+                    for (x = cx - 9; x < cx - 5 && x < cw; x++)
+                        px[(uint32_t)(fy + 7) * (uint32_t)cw + (uint32_t)x]
+                            = px_disp(0x00000000u);
+                    if (!tv_exp[i][f])
+                        for (y = fy + 5; y < fy + 9 && y < ylim; y++)
+                            px[(uint32_t)y * (uint32_t)cw + (uint32_t)(cx - 7)]
+                                = px_disp(0x00000000u);
+                }
+                while (*s && idx < 12 && cx + 16 + idx * 8 < px0 + pw) {
+                    const unsigned char *g;
+                    int yy, xx;
+                    if (*s < 32 || *s > 126) break;
+                    g = font8x16_basic[*s - 32];
+                    for (yy = 0; yy < 16 && fy + yy < ylim; yy++)
+                        for (xx = 0; xx < 8; xx++)
+                            if (g[yy] & (0x80u >> xx)) {
+                                int xxx = cx + 16 + idx * 8 + xx, yyy = fy + yy;
+                                if (xxx < px0 + pw && xxx < cw)
+                                    px[(uint32_t)yyy * (uint32_t)cw +
+                                       (uint32_t)xxx] =
+                                        px_disp(f == tv_sel[i]
+                                                    ? 0x00FFFFFFu
+                                                    : 0x00000000u);
+                            }
+                    idx++; s++;
+                }
+            }
+            return;
+        }
+    }
+
     {
     const char *s = child_text[i];
     int cx = px0, cy = py0;
@@ -1981,6 +2207,163 @@ uint32_t builtin_wndproc(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
         }
     }
 
+    /* Fase 24-P2.1: toolbar/statusbar/trackbar/treeview. */
+    if (is_child(hwnd)) {
+        uint32_t i = hwnd - CHILD_BASE;
+        int ct = child_type[i];
+        if (ct == 2) {              /* toolbar */
+            if (m == 0x0419) {      /* TB_BUTTONSTRUCTSIZE */
+                tb_btnsz = (int)a;
+                return 1;
+            }
+            if (m == 0x0418)        /* TB_BUTTONCOUNT */
+                return (uint32_t)tb_nbtn[i];
+            if (m == 0x0414) {      /* TB_ADDBUTTONS: a=n, b=&TBBUTTON[] */
+                int n = (int)a, j, k;
+                if (n > TB_MAXBTN) n = TB_MAXBTN;
+                for (j = 0; j < n && tb_nbtn[i] < TB_MAXBTN; j++) {
+                    int idcmd = *(int *)((uint8_t *)b + j * 20 + 4);
+                    int iStr  = *(int *)((uint8_t *)b + j * 20 + 16);
+                    tb_btnid[i][tb_nbtn[i]] = idcmd;
+                    if (iStr == -1) {   /* sin string: etiqueta por defecto */
+                        int x = tb_nbtn[i];
+                        tb_txt[i][x][0] = 'B';
+                        tb_txt[i][x][1] = (char)('1' + x % 9);
+                        tb_txt[i][x][2] = 0;
+                    } else {
+                        tb_txt[i][tb_nbtn[i]][0] = 0;
+                    }
+                    tb_nbtn[i]++;
+                    (void)k;
+                }
+                child_repaint(i);
+                return 1;
+            }
+            if (m == 0x041C)        /* TB_ADDSTRINGA */
+                return 0;
+            if (m == 0x041F || m == 0x0421)   /* TB_SETBUTTONSIZE/ROWS */
+                return 0;
+            return 0;
+        }
+        if (ct == 3) {              /* statusbar */
+            if (m == 0x0404) {      /* SB_SETPARTS: a=n, b=&int widths */
+                int n = (int)a, j;
+                if (n > SB_MAXPARTS) n = SB_MAXPARTS;
+                sb_nparts[i] = n;
+                for (j = 0; j < n; j++)
+                    sb_partw[i][j] = *(int *)((uint8_t *)b + j * 4);
+                child_repaint(i);
+                return 1;
+            }
+            if (m == 0x0401) {      /* SB_SETTEXTA: a=part, b=texto */
+                int p = (int)a, k;
+                const char *s = (const char *)b;
+                if (p >= 0 && p < SB_MAXPARTS) {
+                    if (s == 0) s = "";
+                    for (k = 0; k < 47 && s[k]; k++)
+                        sb_text[i][p][k] = s[k];
+                    sb_text[i][p][k] = 0;
+                    child_repaint(i);
+                }
+                return 1;
+            }
+            if (m == 0x0402) {      /* SB_GETTEXTA: a=part, b=buf */
+                int p = (int)a, k;
+                char *dst = (char *)b;
+                if (dst == 0 || p < 0 || p >= SB_MAXPARTS)
+                    return 0;
+                for (k = 0; k < 47 && sb_text[i][p][k]; k++)
+                    dst[k] = sb_text[i][p][k];
+                dst[k] = 0;
+                return (uint32_t)k;
+            }
+            return 0;
+        }
+        if (ct == 4) {              /* trackbar */
+            if (m == 0x0400)        /* TBM_GETPOS */
+                return (uint32_t)tbar_pos[i];
+            if (m == 0x0401)        /* TBM_GETRANGEMIN */
+                return (uint32_t)tbar_min[i];
+            if (m == 0x0402)        /* TBM_GETRANGEMAX */
+                return (uint32_t)tbar_max[i];
+            if (m == 0x0405) {      /* TBM_SETPOS: a=redraw, b=pos */
+                tbar_pos[i] = (int)b;
+                child_repaint(i);
+                return 1;
+            }
+            if (m == 0x0406) {      /* TBM_SETRANGEMIN: a=redraw, b=min */
+                tbar_min[i] = (int)b;
+                child_repaint(i);
+                return 1;
+            }
+            if (m == 0x0407) {      /* TBM_SETRANGEMAX */
+                tbar_max[i] = (int)b;
+                child_repaint(i);
+                return 1;
+            }
+            if (m == 0x0408) {      /* TBM_SETRANGE: b=MAKELONG(lMin,lMax) */
+                tbar_min[i] = (int)(b & 0xFFFF);
+                tbar_max[i] = (int)((b >> 16) & 0xFFFF);
+                child_repaint(i);
+                return 1;
+            }
+            return 0;
+        }
+        if (ct == 5) {              /* treeview */
+            if (m == 0x1105)        /* TVM_GETCOUNT */
+                return (uint32_t)tv_nnode[i];
+            if (m == 0x1100) {      /* TVM_INSERTITEMA: b=&TV_INSERTSTRUCT */
+                int par, k, d;
+                const char *txt;
+                if (b == 0)
+                    return 0;
+                par = *(int *)b;            /* hParent */
+                txt = *(const char **)((uint8_t *)b + 24);  /* item.pszText */
+                if (tv_nnode[i] >= TV_MAXNODE)
+                    return 0;
+                d = 0;
+                if (par != 0xFFFF0000 /* TVI_ROOT */ && par > 0 &&
+                    par - 1 < tv_nnode[i])
+                    d = tv_par[i][par - 1] + 1;
+                tv_par[i][tv_nnode[i]] = d;
+                for (k = 0; txt && k < 47 && txt[k]; k++)
+                    tv_label[i][tv_nnode[i]][k] = txt[k];
+                tv_label[i][tv_nnode[i]][k] = 0;
+                tv_exp[i][tv_nnode[i]] = 0;
+                if (d == 0 && tv_sel[i] == 0)
+                    tv_sel[i] = tv_nnode[i];
+                tv_nnode[i]++;
+                child_repaint(i);
+                return (uint32_t)(tv_nnode[i]); /* handle = idx+1 */
+            }
+            if (m == 0x110A)        /* TVM_GETNEXTITEM: a=flag, b=hItem */
+                return (uint32_t)tv_sel[i];
+            if (m == 0x110B) {      /* TVM_SELECTITEM: a=flag, b=hItem */
+                if ((int)b > 0 && (int)b <= tv_nnode[i]) {
+                    tv_sel[i] = (int)b - 1;
+                    child_repaint(i);
+                }
+                return 1;
+            }
+            if (m == 0x1102) {      /* TVM_EXPAND: a=action, b=hItem */
+                if ((int)b > 0 && (int)b <= tv_nnode[i]) {
+                    if (a == 2)      /* TVE_TOGGLE */
+                        tv_exp[i][(int)b - 1] =
+                            tv_exp[i][(int)b - 1] ? 0 : 1;
+                    else if (a == 1) /* TVE_EXPAND */
+                        tv_exp[i][(int)b - 1] = 1;
+                    else if (a == 0) /* TVE_COLLAPSE */
+                        tv_exp[i][(int)b - 1] = 0;
+                    child_repaint(i);
+                }
+                return 1;
+            }
+            if (m == 0x110D)        /* TVM_SETITEMA: b=&TVITEMA */
+                return 1;
+            return 0;
+        }
+    }
+
     if (m == WM_SETTEXT) {
         uint32_t i = hwnd - CHILD_BASE;
         int k = 0;
@@ -2038,6 +2421,35 @@ uint32_t builtin_wndproc(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
                     msgq_push(parent, WM_COMMAND,
                               (hwnd - CHILD_BASE + 1) << 16 | 1, 0);
                 return 0;
+            }
+            return 0;
+        }
+        /* Fase 24-P2.1: trackbar/treeview con teclado. */
+        if (is_child(hwnd) && child_type[hwnd - CHILD_BASE] == 4) {
+            uint32_t i = hwnd - CHILD_BASE;
+            if (a == 0x100 && tbar_pos[i] > tbar_min[i]) {   /* Izq */
+                tbar_pos[i]--;
+                child_repaint(i);
+            } else if (a == 0x101 && tbar_pos[i] < tbar_max[i]) { /* Der */
+                tbar_pos[i]++;
+                child_repaint(i);
+            }
+            return 0;
+        }
+        if (is_child(hwnd) && child_type[hwnd - CHILD_BASE] == 5) {
+            uint32_t i = hwnd - CHILD_BASE;
+            if (a == 0x103 && tv_sel[i] < tv_nnode[i] - 1) {  /* Down */
+                tv_sel[i]++;
+                child_repaint(i);
+            } else if (a == 0x102 && tv_sel[i] > 0) {          /* Up */
+                tv_sel[i]--;
+                child_repaint(i);
+            } else if (a == 0x101) {                          /* Der */
+                tv_exp[i][tv_sel[i]] = 1;
+                child_repaint(i);
+            } else if (a == 0x100) {                          /* Izq */
+                tv_exp[i][tv_sel[i]] = 0;
+                child_repaint(i);
             }
             return 0;
         }

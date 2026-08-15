@@ -7,7 +7,7 @@ LD        = ld
 OBJCOPY   = objcopy
 QEMU      = qemu-system-i386
 KERNEL_SECTORS = 128            # tamano de kernel en sectores (1 = 512 bytes)
-FS_SECTORS     = 1760           # fs.bin rellenado a 1760 sectores (FS real ~1240 + margen Fase E para escrituras; boot.asm usa el mismo valor)
+FS_SECTORS     = 2000           # fs.bin rellenado a 2000 sectores (1 MB; apps + margen Fase E para escrituras; boot.asm usa el mismo valor)
 
 BUILD     = build
 CFLAGS    = -m32 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
@@ -143,6 +143,14 @@ WIN_APPS  += $(BUILD)/user/win32/heaptest.exe
 WIN_APPS  += $(BUILD)/user/win32/listview.exe
 
 $(BUILD)/user/win32/listview.exe: user/win32/listview.c
+	@mkdir -p $(dir $@)
+	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
+	           -Wl,--subsystem,console -s -o $@ $< -luser32 -lcomctl32
+
+# ctldemo.exe: toolbar/statusbar/trackbar/treeview (Fase 24-P2.1).
+WIN_APPS  += $(BUILD)/user/win32/ctldemo.exe
+
+$(BUILD)/user/win32/ctldemo.exe: user/win32/ctldemo.c
 	@mkdir -p $(dir $@)
 	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
 	           -Wl,--subsystem,console -s -o $@ $< -luser32 -lcomctl32
