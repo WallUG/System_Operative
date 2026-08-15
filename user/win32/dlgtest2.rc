@@ -1,0 +1,11 @@
+#define IDD_DLG  201
+#define IDC_TEXT 202
+#define IDC_EDIT 203
+
+IDD_DLG DIALOG 0, 0, 200, 90
+CAPTION "Dialogo con edit"
+BEGIN
+    LTEXT "Escribe algo:", IDC_TEXT, 10, 12, 180, 12
+    EDITTEXT IDC_EDIT, 10, 28, 180, 14
+    DEFPUSHBUTTON "OK", 1, 70, 60, 60, 16
+END

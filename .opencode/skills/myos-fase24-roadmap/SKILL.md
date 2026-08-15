@@ -79,10 +79,17 @@ LoadIconA (handle no-0); screendump del menú dibujado.
 
 ### P1.2. DialogBoxParamA real con RT_DIALOG
 
-**Estado**: `DialogBoxParamA`/`EndDialog`/`CreateDialogParamA` existen
-como stubs; `menu_modal` en user32 ya es un modal genérico (bucle de
-eventos con sys_event). Los diálogos de metapad usan mensajes al wndproc,
-no son modales reales.
+**Estado: COMPLETADO.** B5 ya tenía el parser RT_DIALOG + STATIC/BUTTON +
+WM_INITDIALOG + EndDialog (basado en `menu_modal`). Este ítem añadió los
+**controles EDIT**: foco en el primer EDIT, input de teclado
+(caracteres + backspace, dibujo con cursor), y **GetDlgItemTextA /
+SetDlgItemTextA / GetDlgItem** reales sobre los controles del diálogo.
+También se **drena la cola de eventos al abrir** el diálogo (descarta las
+teclas de la shell que lanzaron la app; sys_event devuelve 0=evento,
+-1=vacío). Test `tools/test_fase24p12.py` (dlgtest2.exe: EDITTEXT + OK,
+escribe 'abc', GetDlgItemTextA, EndDialog(IDOK)) 4/4 PASS. NOTA: los
+tests inyectan teclas en minúscula (sendkey 'A' mayúscula no genera
+EV_KEY).
 
 **Tarea**: implementar `DialogBoxParamA` sobre el patrón de `menu_modal`
 pero con el template RT_DIALOG del .rsrc (P1.1):

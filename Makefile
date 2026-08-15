@@ -203,6 +203,16 @@ $(BUILD)/user/win32/dlgtest.exe: user/win32/dlgtest.c user/win32/dlgtest.rc
 	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
 	           -Wl,--subsystem,console -s -o $@ $< build/dlgtest.res.o -luser32
 
+# dlgtest2.exe: dialogos con EDIT control (Fase 24-P1.2).
+WIN_APPS  += $(BUILD)/user/win32/dlgtest2.exe
+
+$(BUILD)/user/win32/dlgtest2.exe: user/win32/dlgtest2.c user/win32/dlgtest2.rc
+	@mkdir -p $(dir $@)
+	$(MINGW32)-windres user/win32/dlgtest2.rc -O coff -o build/dlgtest2.res.o || \
+	i686-w64-mingw32-windres user/win32/dlgtest2.rc -O coff -o build/dlgtest2.res.o
+	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
+	           -Wl,--subsystem,console -s -o $@ $< build/dlgtest2.res.o -luser32
+
 $(BUILD)/user/win32/gdidemo.exe: user/win32/gdi_demo.c
 	@mkdir -p $(dir $@)
 	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \

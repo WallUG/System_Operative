@@ -2564,11 +2564,6 @@ uint32_t __attribute__((stdcall)) GetSysColorBrush(int idx) { (void)idx; return 
 uint32_t __attribute__((stdcall)) SystemParametersInfoA(uint32_t a, uint32_t b, uint32_t c, uint32_t d)
 { (void)a; (void)b; (void)c; (void)d; return 0; }
 uint32_t __attribute__((stdcall)) GetDialogBaseUnits(void) { return 0; }
-uint32_t __attribute__((stdcall)) GetDlgItem(uint32_t d, int id) { (void)d; (void)id; return 0; }
-uint32_t __attribute__((stdcall)) GetDlgItemTextA(uint32_t d, int id, uint32_t b, int n)
-{ (void)d; (void)id; (void)b; (void)n; return 0; }
-uint32_t __attribute__((stdcall)) SetDlgItemTextA(uint32_t d, int id, uint32_t b)
-{ (void)d; (void)id; (void)b; return 0; }
 /* --- Dialogos modales reales (Fase 23-B5) ---
  * DialogBoxParamA/EndDialog sobre el patron de menu_modal (drenan
  * sys_event). Parsea DLGTEMPLATE (32-bit, no extendido) del recurso
@@ -2597,6 +2592,29 @@ static uint32_t dlg_param;
 static int dlg_result;
 static int dlg_done;
 static uint32_t dlg_cur;
+static int dlg_focus;           /* indice del control EDIT enfocado (-1 no) */
+
+/* Cuadro de edicion (EDIT): rect blanco con borde; dibuja el texto con
+ * un cursor '_' al final si esta enfocado. */
+static void user32_draw_edit(dlgctl_t *c, int focused)
+{
+    char buf[64];
+    int i;
+    fillrect(c->x, c->y, c->w, c->h, 0x00FFFFFFu);
+    fillrect(c->x, c->y, c->w, 1, COLOR_FRAME);
+    fillrect(c->x, c->y, 1, c->h, COLOR_FRAME);
+    fillrect(c->x + c->w - 1, c->y, 1, c->h, COLOR_FRAME);
+    fillrect(c->x, c->y + c->h - 1, c->w, 1, COLOR_FRAME);
+    for (i = 0; i < 62 && c->text[i]; i++)
+        buf[i] = c->text[i];
+    if (focused && i < 62) {
+        buf[i] = '_';
+        buf[i + 1] = 0;
+    } else {
+        buf[i] = 0;
+    }
+    drawtext(c->x + 4, c->y + 2, buf, 0x00000000u);
+}
 
 typedef int (__attribute__((stdcall)) *dlgproc_t)(uint32_t, uint32_t,
                                                   uint32_t, uint32_t);
@@ -2706,6 +2724,7 @@ static uint32_t dialog_modal(const uint8_t *tpl, uint32_t size, uint32_t f,
     dlg_result = 0;
     dlg_done = 0;
     dlg_cur = 1;
+    dlg_focus = -1;
 
         ww = dlu_cx * DLG_SCALE;
     wh = dlu_cy * DLG_SCALE;
@@ -2743,6 +2762,8 @@ static uint32_t dialog_modal(const uint8_t *tpl, uint32_t size, uint32_t f,
         c->is_default = (cstyle & 0x1) != 0;   /* BS_DEFPUSHBUTTON */
         c->x += wx;
         c->y += wy + 18;
+        if (dlg_focus < 0 && c->cls == 2)
+            dlg_focus = dlg_nctl;              /* primer EDIT toma el foco */
 
                 if (c->is_btn) {
             c->b.x = c->x; c->b.y = c->y; c->b.w = c->w; c->b.h = c->h;
@@ -2751,6 +2772,8 @@ static uint32_t dialog_modal(const uint8_t *tpl, uint32_t size, uint32_t f,
             c->b.fg_p = COLOR_BTN; c->b.bg_p = COLOR_TEXT;
             c->b.hovered = 0; c->b.pressed = 0;
             user32_draw_button(&c->b);
+        } else if (c->cls == 2) {
+            user32_draw_edit(c, dlg_focus == dlg_nctl);
         } else {
             drawtext(c->x + 4, c->y + 2, c->text, COLOR_TEXT);
         }
@@ -2760,6 +2783,12 @@ static uint32_t dialog_modal(const uint8_t *tpl, uint32_t size, uint32_t f,
     /* WM_INITDIALOG */
     if (dlg_proc)
         dlg_call(dlg_proc, dlg_cur, WM_INITDIALOG, a, 0);
+
+    /* Descarta eventos ya encolados (p.ej. las teclas de la shell que
+     * lanzaron la app) para que el dialogo solo procese eventos
+     * posteriores a su apertura (P1.2). sys_event: 0=evento, -1=vacio. */
+    while (sys_event(ev) == 0)
+        ;
 
     /* bucle modal */
     for (;;) {
@@ -2789,6 +2818,19 @@ static uint32_t dialog_modal(const uint8_t *tpl, uint32_t size, uint32_t f,
             } else if (ev[4] == 27) {    /* Esc: WM_CLOSE */
                 if (dlg_proc)
                     dlg_call(dlg_proc, dlg_cur, WM_CLOSE, 0, 0);
+            } else if (dlg_focus >= 0 && dlg_focus < dlg_nctl) {
+                dlgctl_t *c = &dlg_ctls[dlg_focus];
+                int len = (int)strlen32(c->text);
+                if (ev[4] == 8) {                 /* backspace */
+                    if (len > 0) {
+                        c->text[len - 1] = 0;
+                        user32_draw_edit(c, 1);
+                    }
+                } else if (ev[4] >= 32 && ev[4] < 127 && len < 47) {
+                    c->text[len] = (char)ev[4];
+                    c->text[len + 1] = 0;
+                    user32_draw_edit(c, 1);
+                }
             }
         }
         if (dlg_done)
@@ -2823,6 +2865,59 @@ uint32_t __attribute__((stdcall)) EndDialog(uint32_t d, int r)
     dlg_result = r;
     dlg_done = 1;
     return 0;
+}
+/* P1.2: acceso a los controles del dialogo modal en curso. Operan sobre
+ * dlg_ctls[] (el DlgProc los llama desde WM_COMMAND, mismo dialogo). */
+uint32_t __attribute__((stdcall)) GetDlgItem(uint32_t d, int id)
+{
+    int i;
+    (void)d;
+    for (i = 0; i < dlg_nctl; i++)
+        if (dlg_ctls[i].id == id)
+            return (uint32_t)(i + 1);
+    return 0;
+}
+uint32_t __attribute__((stdcall)) GetDlgItemTextA(uint32_t d, int id, uint32_t b, int n)
+{
+    int i, len, k;
+    (void)d;
+    if (b == 0 || n <= 0)
+        return 0;
+    for (i = 0; i < dlg_nctl; i++)
+        if (dlg_ctls[i].id == id)
+            break;
+    if (i >= dlg_nctl)
+        return 0;
+    len = (int)strlen32(dlg_ctls[i].text);
+    if (len > n - 1)
+        len = n - 1;
+    for (k = 0; k < len; k++)
+        ((char *)b)[k] = dlg_ctls[i].text[k];
+    ((char *)b)[len] = 0;
+    return (uint32_t)len;
+}
+uint32_t __attribute__((stdcall)) SetDlgItemTextA(uint32_t d, int id, uint32_t b)
+{
+    int i, k;
+    dlgctl_t *c;
+    (void)d;
+    for (i = 0; i < dlg_nctl; i++)
+        if (dlg_ctls[i].id == id)
+            break;
+    if (i >= dlg_nctl)
+        return 0;
+    c = &dlg_ctls[i];
+    for (k = 0; b != 0 && k < 47 && ((char *)b)[k]; k++)
+        c->text[k] = ((char *)b)[k];
+    if (b != 0 || k == 0)
+        c->text[k] = 0;
+    if (c->is_btn)
+        user32_draw_button(&c->b);
+    else if (c->cls == 2)
+        user32_draw_edit(c, dlg_focus == i);
+    else
+        drawtext(c->x + 4, c->y + 2, c->text, COLOR_TEXT);
+    return 1;
 }
 uint32_t __attribute__((stdcall)) CreateMenu(void) { return 0; }
 uint32_t __attribute__((stdcall)) GetMenu(uint32_t hwnd) { (void)hwnd; return 0; }
