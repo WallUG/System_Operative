@@ -304,6 +304,9 @@ static const mod_desc_t mod_descs[] = {
     { "comdlg32.dll",  0xB0600000u },
     { "advapi32.dll",  0xB0700000u },
     { "shell32.dll",   0xB0800000u },
+    { "ole32.dll",     0xB0900000u },
+    { "shlwapi.dll",   0xB0A00000u },
+    { "winspool.drv",  0xB0B00000u },
     { "riched20.dll",  0xB9000000u },
     { 0, 0 },
 };

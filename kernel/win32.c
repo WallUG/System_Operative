@@ -61,6 +61,9 @@ static const struct dll_desc dll_descs[] = {
     { "comdlg32.elf", "comdlg32.dll", WIN32_REGION_BASE + DLL_BASE_STEP * 6 },
     { "advapi32.elf", "advapi32.dll", WIN32_REGION_BASE + DLL_BASE_STEP * 7 },
     { "shell32.elf",  "shell32.dll",  WIN32_REGION_BASE + DLL_BASE_STEP * 8 },
+    { "ole32.elf",    "ole32.dll",    WIN32_REGION_BASE + DLL_BASE_STEP * 9 },
+    { "shlwapi.elf",  "shlwapi.dll",  WIN32_REGION_BASE + DLL_BASE_STEP * 10 },
+    { "winspool.elf", "winspool.drv", WIN32_REGION_BASE + DLL_BASE_STEP * 11 },
 };
 
 /* Extrae la tabla .exports y las secciones de relocaciones del binario

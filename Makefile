@@ -7,7 +7,7 @@ LD        = ld
 OBJCOPY   = objcopy
 QEMU      = qemu-system-i386
 KERNEL_SECTORS = 128            # tamano de kernel en sectores (1 = 512 bytes)
-FS_SECTORS     = 1400           # fs.bin rellenado a 1400 sectores (FS real ~1208 + margen Fase E para escrituras; boot.asm usa el mismo valor)
+FS_SECTORS     = 1760           # fs.bin rellenado a 1760 sectores (FS real ~1240 + margen Fase E para escrituras; boot.asm usa el mismo valor)
 
 BUILD     = build
 CFLAGS    = -m32 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
@@ -112,7 +112,8 @@ FS_USER_EXES = $(filter %quick.exe %winapi.exe %fork.exe %exec.exe %console.exe,
 WIN32_REGION = 0xB0000000
 DLL_SRCS  = user/win32/kernel32.c user/win32/user32.c user/win32/ntdll.c \
             user/win32/msvcrt.c user/win32/gdi32.c user/win32/comctl32.c \
-            user/win32/comdlg32.c user/win32/advapi32.c user/win32/shell32.c
+            user/win32/comdlg32.c user/win32/advapi32.c user/win32/shell32.c \
+            user/win32/ole32.c user/win32/shlwapi.c user/win32/winspool.c
 DLL_ELFS  = $(patsubst user/win32/%.c,$(BUILD)/user/win32/%.elf,$(DLL_SRCS))
 
 # Fase 9/11/12: .exe compilado con la toolchain REAL de Windows (CRT de
@@ -131,6 +132,13 @@ WIN_APPS  += $(BUILD)/user/win32/writetest.exe
 WIN_APPS  += $(BUILD)/user/win32/dlgtest.exe
 WIN_APPS  += $(BUILD)/user/win32/wintwo.exe
 WIN_APPS  += $(BUILD)/user/win32/movetest.exe
+# dlltest.exe: OLE32/SHLWAPI/WINSPOOL (Fase 23-B8).
+WIN_APPS  += $(BUILD)/user/win32/dlltest.exe
+
+$(BUILD)/user/win32/dlltest.exe: user/win32/dlltest.c
+	@mkdir -p $(dir $@)
+	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
+	           -Wl,--subsystem,console -s -o $@ $< -luser32 -lshlwapi -lole32 -lwinspool
 
 $(BUILD)/user/win32/%.exe: user/win32/%.c
 	@mkdir -p $(dir $@)
@@ -204,6 +212,9 @@ $(BUILD)/user/win32/%.elf: user/win32/%.c tools/dll32.ld
 	        comdlg32) echo $$(( $(WIN32_REGION) + 0x600000 )) ;; \
 	        advapi32) echo $$(( $(WIN32_REGION) + 0x700000 )) ;; \
 	        shell32)  echo $$(( $(WIN32_REGION) + 0x800000 )) ;; \
+	        ole32)    echo $$(( $(WIN32_REGION) + 0x900000 )) ;; \
+	        shlwapi)  echo $$(( $(WIN32_REGION) + 0xA00000 )) ;; \
+	        winspool) echo $$(( $(WIN32_REGION) + 0xB00000 )) ;; \
 	        *) echo $(WIN32_REGION) ;; esac) \
 	      -o $@ $(BUILD)/user/win32/$*.o
 

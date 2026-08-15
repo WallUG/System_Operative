@@ -8,20 +8,20 @@
 ;    propio disco. El FS sigue en el disco (lo lee mefs_init via ATA).
 ;  - CD (dl >= 0xE0, El Torito no-emulation): la BIOS carga Toda la
 ;    imagen os-image.bin (boot + kernel + fs.bin) en 0x7C00. El bootloader
-;    copia el kernel a 0x10000 y la imagen MEFS a 0x140000 (RAM).
+;    copia el kernel a 0x10000 y la imagen MEFS a 0x176000 (RAM).
 ;
 ; En ambos modos escribe la estructura boot_info (ver kernel/bootinfo.h)
 ; en 0x7000 y se la pasa al kernel empujandola antes del call.
 ;
 ; Mapa de memoria relevante (ver DESIGN.md):
 ;   0x7000  boot_info | 0x7C00 bootloader | 0x7E00 E820 | 0x10000 kernel
-;   0x140000 imagen MEFS (modo CD, ~286 KB, reservada por el PMM)
+;   0x176000 imagen MEFS (modo CD, ~286 KB, reservada por el PMM)
 ;   0x180000 PD/PT del kernel (pmm_reserve_range) | 0x90000 pila PM
 ;   VGA 0xB8000
 ;
 ; OJO: la imagen MEFS en RAM (modo CD) NO puede vivir cerca de 0x90000:
 ; la pila del kernel crece hacia abajo desde 0x90000 y la corrompe en
-; cada llamada. Por eso vive en 0x140000, dentro del rango que el PMM
+; cada llamada. Por eso vive en 0x176000, dentro del rango que el PMM
 ; reserva (0x100000-0x180000) y que el bootloader entrega intacto.
 
 [org 0x7C00]
@@ -30,7 +30,7 @@
 KERNEL_LOAD_SEG  equ 0x1000        ; segmento:0x1000 -> fisica 0x10000
 KERNEL_OFFSET    equ 0x0000
 KERNEL_SECTORS   equ 128           ; 128 sectores = 64 KB (kernel pad)
-FS_SECTORS       equ 1400          ; fs.bin rellenado a 1400 sectores (Makefile)
+FS_SECTORS       equ 1760          ; fs.bin rellenado a 1760 sectores (Makefile)
 CODE_SEG         equ gdt_code - gdt_start
 DATA_SEG         equ gdt_data - gdt_start
 MMAP_ADDR        equ 0x7E00        ; buffer E820: dword contador + entradas de 20 B
@@ -39,7 +39,7 @@ BOOTINFO_ADDR    equ 0x7000        ; estructura boot_info (kernel/bootinfo.h)
 BOOTINFO_MAGIC   equ 0x4D594F53    ; 'MYOS'
 BOOTINFO_MODE_CD equ 1
 MEFS_FS_LBA      equ 129           ; sector absoluto del FS (1 boot + 128 kernel)
-FS_RAM_DEST      equ 0x140000      ; copia de la imagen MEFS en RAM (modo CD)
+FS_RAM_DEST      equ 0x176000      ; copia de la imagen MEFS en RAM (modo CD)
 IMG_BOOT         equ 0x7C00        ; base de la imagen completa en RAM (CD)
 FS_RAM_SRC       equ IMG_BOOT + 512 + KERNEL_SECTORS * 512   ; 0x17E00
 
@@ -134,14 +134,14 @@ write_bootinfo:
 ; (boot + kernel + fs.bin) en 0x7C00. Mapa en RAM:
 ;   0x7C00 boot (512 B) | 0x7E00 kernel (KERNEL_SECTORS*512 = 64 KB)
 ;   0x17E00: imagen MEFS (FS_SECTORS*512 = 286 KB, max 560 sectores:
-;   0x140000 + 0x46000 = 0x186000, borde del rango reservado del PMM)
+;   0x176000 + 0x46000 = 0x186000, borde del rango reservado del PMM)
 ; Copias con rep movsd: el 66 fija operando (movsd + ECX) y el 67
 ; (db 0x67) ESI/EDI de 32 bits; sin el 67 se usarian SI/DI de 16
 ; bits (truncado). Orden: primero el FS, luego el kernel hacia ATRAS
 ; (std) porque las fuentes se solapan con los destinos.
 ; ------------------------------------------------------------------
 load_kernel_ram:
-    ; 1) imagen MEFS -> 0x140000 (FS_RAM_DEST), FS_SECTORS*512 bytes
+    ; 1) imagen MEFS -> 0x176000 (FS_RAM_DEST), FS_SECTORS*512 bytes
     mov esi, FS_RAM_SRC
     mov edi, FS_RAM_DEST
     mov ecx, FS_SECTORS * 512 / 4

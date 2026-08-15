@@ -81,10 +81,10 @@ def run():
     if not waitstr('b6i: start', 15):
         print('FAIL - b6inj no corre'); qemu.terminate(); return
 
-    # --- 3) lanzar wintwo.exe (end = metapad, up=readme, up=movetest,
-    #           up=wintwo, Enter; movetest.exe (B7) quedo antes de
-    #           readme en la lista del disco) ---
+    # --- 3) lanzar wintwo.exe (end = metapad, up=readme, up=dlltest,
+    #           up=movetest, up=wintwo, Enter) ---
     key('end', 0.4)
+    key('up', 0.3)
     key('up', 0.3)
     key('up', 0.3)
     key('up', 0.3)
