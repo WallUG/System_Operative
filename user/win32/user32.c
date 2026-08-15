@@ -2320,8 +2320,115 @@ uint32_t __attribute__((stdcall)) SetKeyboardState(uint32_t s) { (void)s; return
 uint32_t __attribute__((stdcall)) IsDialogMessageA(uint32_t d, uint32_t m) { (void)d; (void)m; return 0; }
 uint32_t __attribute__((stdcall)) RegisterWindowMessageA(uint32_t s) { (void)s; return 0x0400; }
 uint32_t __attribute__((stdcall)) MessageBeep(uint32_t t) { (void)t; return 0; }
-uint32_t __attribute__((stdcall)) LoadIconA(uint32_t i, uint32_t n) { (void)i; (void)n; console_print("[user32] LoadIconA\n"); return 0; }
 uint32_t __attribute__((stdcall)) LoadCursorA(uint32_t i, uint32_t n) { (void)i; (void)n; console_print("[user32] LoadCursorA\n"); return 0; }
+
+/* Fase 24-P1.1: LoadIconA real. El .rsrc ya se mapea en el proceso;
+ * aqui se parsea RT_GROUP_ICON(14) -> RT_ICON(3), se extrae el bitmap
+ * (BITMAPINFOHEADER + XOR/AND masks) y se guarda en ARGB para que las
+ * apps obtengan un handle valido (antes siempre 0). */
+#define RT_GROUP_ICON 14
+#define RT_ICON         3
+#define ICON_MAX        4
+#define ICON_SZ         32
+static uint32_t icon_w[ICON_MAX], icon_h[ICON_MAX];
+static uint8_t  icon_px[ICON_MAX][ICON_SZ * ICON_SZ * 4];
+
+static uint32_t icon_parse(const uint8_t *gdir, uint32_t gsize,
+                           const uint8_t *idata, uint32_t isize)
+{
+    uint16_t n, i;
+    uint32_t w, h, slot;
+    int topdown, hh, biw;
+    int bih;
+
+    if (gdir == 0 || gsize < 6 || idata == 0 || isize < 40)
+        return 0;
+    n = rd16u(gdir + 4);
+    w = 0; h = 0;
+    for (i = 0; i < n && i < 32; i++) {
+        uint16_t iw = gdir[6 + i * 14];
+        uint16_t ih = gdir[6 + i * 14 + 1];
+        if (iw == 32 && ih == 32) { w = 32; h = 32; break; }
+    }
+    if (w == 0 && n > 0) { w = gdir[6]; h = gdir[7]; }
+    if (w == 0 || w > 32 || h > 32 || w > ICON_SZ || h > ICON_SZ)
+        return 0;
+
+    biw = (int)rd32u(idata + 4);
+    bih = (int)rd32u(idata + 8);
+    (void)biw;
+    if (rd16u(idata + 14) != 32)     /* 32bpp */
+        return 0;
+    if (bih < 0) { hh = -bih; topdown = 1; } else { hh = bih / 2; topdown = 0; }
+    if (hh <= 0)
+        return 0;
+
+    for (slot = 0; slot < ICON_MAX; slot++)
+        if (icon_w[slot] == 0)
+            break;
+    if (slot >= ICON_MAX)
+        return 0;
+
+    icon_w[slot] = w;
+    icon_h[slot] = h;
+    {
+        uint32_t xoroff = 40;
+        uint32_t row, col;
+        for (row = 0; row < h; row++) {
+            uint32_t srcy = topdown ? row : (h - 1 - row);
+            for (col = 0; col < w; col++) {
+                uint32_t off = xoroff + srcy * w * 4 + col * 4;
+                if (off + 4 > isize)
+                    goto done;
+                icon_px[slot][(row * w + col) * 4 + 0] = idata[off + 2];
+                icon_px[slot][(row * w + col) * 4 + 1] = idata[off + 1];
+                icon_px[slot][(row * w + col) * 4 + 2] = idata[off + 0];
+                icon_px[slot][(row * w + col) * 4 + 3] = idata[off + 3];
+            }
+        }
+    }
+done:
+    return slot + 1;   /* handle opaco (indice + 1) */
+}
+
+uint32_t __attribute__((stdcall)) LoadIconA(uint32_t hinst, const char *name)
+{
+    const uint8_t *gdir, *idata;
+    uint32_t gsize = 0, isize = 0, id, slot;
+    char num[12];
+
+    (void)hinst;
+    if (name == 0)
+        return 0;
+    id = (uint32_t)(uintptr_t)name;
+    gdir = find_resource(RT_GROUP_ICON, id, &gsize);
+    if (gdir == 0 || gsize < 6) {
+        console_print("[user32] LoadIconA: grupo ");
+        console_print(itoa32(num, id));
+        console_print(" no encontrado\n");
+        return 0;
+    }
+    idata = find_resource(RT_ICON, rd16u(gdir + 18), &isize);
+    if (idata == 0 || isize < 40) {
+        console_print("[user32] LoadIconA: RT_ICON no encontrado\n");
+        return 0;
+    }
+    slot = icon_parse(gdir, gsize, idata, isize);
+    if (slot == 0) {
+        console_print("[user32] LoadIconA: parse fallo\n");
+        return 0;
+    }
+    console_print("[user32] LoadIconA: icono ");
+    console_print(itoa32(num, id));
+    console_print(" slot=");
+    console_print(itoa32(num, slot));
+    console_print(" w=");
+    console_print(itoa32(num, icon_w[slot - 1]));
+    console_print(" h=");
+    console_print(itoa32(num, icon_h[slot - 1]));
+    console_print("\n");
+    return slot;
+}
 uint32_t __attribute__((stdcall)) LoadStringA(uint32_t i, uint32_t id, uint32_t b, int n)
 {
     /* RT_STRING (tipo 6): el bloque es (id>>4)+1; dentro, 16 strings

@@ -8,11 +8,36 @@ Enter). b6inj inyecta clics sinteticos exactos (SYS_MOUSE_INJECT):
 - clic en la ventana A (260,222) -> debe imprimir SOLO "A: click"
 - clic en la ventana B (540,302) -> debe imprimir SOLO "B: click"
 - tras 2 clics PostQuitMessage -> GetMessageA=0 -> "loop terminado"."""
-import subprocess, socket, threading, time, sys, os
+import subprocess, socket, threading, time, sys, os, struct
 
 os.chdir('/home/demox/respaldo/System_Operative')
 MON = '/tmp/opencode/qmon.sock'
 WORK = 'build/os-persist.bin'
+
+FS_START = 129
+MEFS_ROOT = 0xFFFFFFFF
+LBA = struct.Struct('<I')
+ENT = struct.Struct('<16s4I')
+
+def wintwo_ups():
+    """Numero de teclas 'up' desde 'end' (ultima entrada raiz) hasta
+    wintwo.exe en el explorer. Calculado parseando el MEFS: robusto a
+    anadir/quitar apps del FS (antes se hardcodeaba el conteo y cada app
+    nueva rompia la navegacion)."""
+    data = open(WORK, 'rb').read()
+    off = FS_START * 512
+    n = LBA.unpack_from(data, off+8)[0]
+    dir_lba = LBA.unpack_from(data, off+12)[0]
+    root = []
+    for i in range(n):
+        e = data[dir_lba*512 + i*32: dir_lba*512 + i*32 + 32]
+        name, size, lba, fl, par = ENT.unpack(e)
+        nm = name.split(b'\0')[0].decode()
+        if nm and par == MEFS_ROOT:
+            root.append((i, nm))
+    last = max(i for i, _ in root)
+    widx = next(i for i, nm in root if nm == 'wintwo.exe')
+    return last - widx
 
 passed = []
 def check(name, cond):
@@ -81,17 +106,11 @@ def run():
     if not waitstr('b6i: start', 15):
         print('FAIL - b6inj no corre'); qemu.terminate(); return
 
-    # --- 3) lanzar wintwo.exe (end = metapad, up=readme, up=listview,
-    #           up=heaptest, up=txtmode, up=dlltest, up=movetest,
-    #           up=wintwo, Enter) ---
+# --- 3) lanzar wintwo.exe: end (ultima raiz) + N up hasta wintwo.
+    #        N se calcula del FS (wintwo_ups) -> robusto a anadir apps. ---
     key('end', 0.4)
-    key('up', 0.3)
-    key('up', 0.3)
-    key('up', 0.3)
-    key('up', 0.3)
-    key('up', 0.3)
-    key('up', 0.3)
-    key('up', 0.3)
+    for _ in range(wintwo_ups()):
+        key('up', 0.3)
     key('ret', 0.4)
     if not waitstr('wintwo: ventanas creadas', 25):
         print('FAIL - wintwo no crea ventanas'); qemu.terminate(); return

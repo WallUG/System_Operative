@@ -147,6 +147,17 @@ $(BUILD)/user/win32/listview.exe: user/win32/listview.c
 	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
 	           -Wl,--subsystem,console -s -o $@ $< -luser32 -lcomctl32
 
+# iconres.exe: recursos PE .rsrc (Fase 24-P1.1): LoadIconA + icono.
+WIN_APPS  += $(BUILD)/user/win32/iconres.exe
+
+$(BUILD)/user/win32/iconres.exe: user/win32/iconres.c user/win32/iconres.rc \
+                                 user/win32/iconres.ico
+	@mkdir -p $(dir $@)
+	$(MINGW32)-windres user/win32/iconres.rc -O coff -o build/iconres.res.o || \
+	i686-w64-mingw32-windres user/win32/iconres.rc -O coff -o build/iconres.res.o
+	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
+	           -Wl,--subsystem,console -s -o $@ $< build/iconres.res.o -luser32
+
 $(BUILD)/user/win32/heaptest.exe: user/win32/heaptest.c
 	@mkdir -p $(dir $@)
 	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
