@@ -108,8 +108,16 @@ verificar WM_INITDIALOG, EndDialog(IDOK), screendump del diálogo.
 
 ### P1.3. Registro stubs → .ini persistente
 
-**Estado**: 0%. No hay API de registro; muchos .exe llaman
-RegCreateKeyEx/RegSetValueEx al arrancar y mueren sin más.
+**Estado: COMPLETADO.** advapi32 (RegCreateKeyExA/RegOpenKeyExA/
+RegSetValueExA/RegQueryValueExA/RegCloseKey + RegDeleteValueA) pasó de
+stubs a un registro real en memoria sembrado desde `registry.ini` del
+MEFS. `RegSetValueExA` vuelca el archivo (SYS_FCREATE/FWRITE/FLUSH),
+`RegQueryValueExA` lee; formato `[clave]` + `name=sz:valor` /
+`dword:n` / `bin:hex`. Claves por handle (hkey>=0x80000000 = raíz,
+si no handle = índice+1, concatenación de subkey). Test
+`tools/test_fase24p13.py` (regtest.exe, dos ejecuciones: round-trip en
+memoria + persistencia entre procesos leyendo el .ini del disco) 5/5.
+El .ini queda verificado en el disco (os-persist.bin).
 
 **Tarea**: stubs reales en advapi32 que persisten en un archivo
 `registry.ini` del FS (o memoria):

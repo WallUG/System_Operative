@@ -158,6 +158,14 @@ $(BUILD)/user/win32/iconres.exe: user/win32/iconres.c user/win32/iconres.rc \
 	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
 	           -Wl,--subsystem,console -s -o $@ $< build/iconres.res.o -luser32
 
+# regtest.exe: registro persistente advapi32 (Fase 24-P1.3).
+WIN_APPS  += $(BUILD)/user/win32/regtest.exe
+
+$(BUILD)/user/win32/regtest.exe: user/win32/regtest.c
+	@mkdir -p $(dir $@)
+	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
+	           -Wl,--subsystem,console -s -o $@ $< -luser32 -ladvapi32
+
 $(BUILD)/user/win32/heaptest.exe: user/win32/heaptest.c
 	@mkdir -p $(dir $@)
 	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
