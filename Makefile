@@ -182,6 +182,14 @@ $(BUILD)/user/win32/bootpaths.exe: user/win32/bootpaths.c
 	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
 	           -Wl,--subsystem,console -s -o $@ $< -luser32 -lkernel32
 
+# thrtest.exe: CreateThread preemptivo (Fase 24-P2.2).
+WIN_APPS  += $(BUILD)/user/win32/thrtest.exe
+
+$(BUILD)/user/win32/thrtest.exe: user/win32/thrtest.c
+	@mkdir -p $(dir $@)
+	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
+	           -Wl,--subsystem,console -s -o $@ $< -luser32 -lkernel32
+
 $(BUILD)/user/win32/heaptest.exe: user/win32/heaptest.c
 	@mkdir -p $(dir $@)
 	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \

@@ -49,6 +49,9 @@ typedef struct task {
                                  * bloques del heap first-fit (0 = sin
                                  * inicializar) */
     uint32_t exe_base;          /* ImageBase final del PE cargado (0 si ELF) */
+    int      is_thread;         /* Fase 24-P2.2: hilo que comparte el PD del
+                                 * proceso (cr3 = mismo PD; no libera el PD
+                                 * al morir, lo hace la ultima tarea) */
     char     exe_name[TASK_EXE_LEN]; /* nombre del ejecutable (para Win32) */
     char     name[TASK_NAME_LEN];
     struct task *next;          /* lista circular (round-robin) */
@@ -67,6 +70,9 @@ int  task_create(const char *name, void (*entry)(void));
 int  task_create_user(const char *name, const char *exe,
                       const char *cmdline, uint32_t pd, uint32_t entry,
                       uint32_t exe_base);
+int  task_create_thread(uint32_t pd, uint32_t fn, uint32_t param,
+                        uint32_t ret_va);   /* Fase 24-P2.2 */
+task_t *sched_proc_task(uint32_t cr3);      /* tarea principal del PD */
 /* Fork: copia el espacio de usuario (paginacion) del padre y el marco
  * registers_t (hijo reanuda tras int 0x80 con eax=0). Devuelve el pid
  * del hijo, -1 si falla. Solo valido desde una tarea de usuario. */

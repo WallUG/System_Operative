@@ -370,6 +370,22 @@ void syscall_handler(registers_t *regs)
             regs->eax = (int32_t)mefs_create_in(regs->ebx, name);
         break;
     }
+    case SYS_THREADCREATE: { /* Fase 24-P2.2: ebx=fn, ecx=param, edx=&tid */
+        uint32_t fn = regs->ebx, param = regs->ecx;
+        uint32_t *tid = (uint32_t *)regs->edx;
+        uint32_t ret_va = win32_resolve("kernel32.dll", "_thread_ret");
+        int pid = task_create_thread(sched_current_cr3(), fn, param,
+                                     ret_va);
+        if (tid != 0)
+            user_memcpy_out(tid, &pid, 4, pd);
+        regs->eax = (int32_t)pid;
+        break;
+    }
+    case SYS_THREADEXIT: { /* Fase 24-P2.2: termina el hilo actual */
+        (void)regs->ebx;
+        exit_current(regs);
+        break;
+    }
     case SYS_FWRITE: { /* ebx=nombre, ecx=buf, edx=len: sobrescribe */
         char name[32];
         void *tmp;

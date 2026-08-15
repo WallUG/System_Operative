@@ -28,6 +28,8 @@
 #define SYS_FWRITE  27
 #define SYS_FDELETE 28
 #define SYS_FLUSH   29
+#define SYS_THREADCREATE 39 /* Fase 24-P2.2: ebx=fn, ecx=param, edx=&tid */
+#define SYS_THREADEXIT 40   /* Fase 24-P2.2: ebx=code */
 
 #define INVALID_HANDLE_VALUE ((uint32_t)-1)
 
@@ -1252,16 +1254,45 @@ typedef void (*thread_fn)(void *);
 void *__attribute__((stdcall)) CreateThread(uint32_t attrs, uint32_t stack_size, void *start,
                    void *param, uint32_t flags, uint32_t *tid)
 {
-    thread_fn fn = (thread_fn)start;
     (void)attrs; (void)stack_size; (void)flags;
     trace("[k32] CreateThread start=");
     trace_hex((uint32_t)start);
     trace("\n");
-    if (fn != 0)
-        fn(param);
-    if (tid)
-        *tid = 1;
-    return (void *)1;
+    if (start == 0)
+        return 0;
+    {
+        int r;
+        uint32_t tidv = 0;
+        __asm__ volatile("int $0x80"
+                         : "=a"(r)
+                         : "a"(SYS_THREADCREATE), "b"(start), "c"(param),
+                           "d"(&tidv)
+                         : "memory");
+        if (tid)
+            *tid = tidv;
+        if (r < 0)
+            return 0;
+        return (void *)(uint32_t)(r + 1);   /* HANDLE del hilo */
+    }
+}
+
+/* Fase 24-P2.2: termina el hilo actual (llamada por ExitThread y como
+ * retorno de la funcion del hilo via el trampolin _thread_ret). */
+uint32_t __attribute__((stdcall)) ExitThread(uint32_t code)
+{
+    trace("[k32] ExitThread\n");
+    (void)code;
+    __asm__ volatile("int $0x80" : : "a"(SYS_THREADEXIT), "b"(code)
+                     : "memory");
+    return 0;                   /* no se llega: SYS_THREADEXIT no retorna */
+}
+
+/* Retorno de la funcion del hilo: si el hilo no llama ExitThread y su fn
+ * retorna, vuelve aqui y se termina. Direccion usada por el kernel como
+ * return address en la pila del hilo (win32_resolve kernel32._thread_ret). */
+void __attribute__((stdcall)) _thread_ret(void)
+{
+    ExitThread(0);
 }
 
 /* --- procesos: Metapad abre "una segunda copia" con CreateProcessA;
@@ -1798,6 +1829,8 @@ win32_export_t __exports[] __attribute__((section(".exports"))) = {
     { "SetEndOfFile",          (uint32_t)&SetEndOfFile },
     { "GetFullPathNameA",      (uint32_t)&GetFullPathNameA },
     { "CreateThread",          (uint32_t)&CreateThread },
+    { "ExitThread",            (uint32_t)&ExitThread },
+    { "_thread_ret",           (uint32_t)&_thread_ret },
     { "CreateProcessA",        (uint32_t)&CreateProcessA },
     { "MulDiv",                (uint32_t)&MulDiv },
     { "GetPrivateProfileStringA", (uint32_t)&GetPrivateProfileStringA },

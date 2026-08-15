@@ -51,6 +51,8 @@
                                (Fase 23-A4)                              */
 #define SYS_FCREATE_IN 38   /* ebx=parent, ecx=nombre: crea archivo en un
                                subdirectorio (Fase 23-A4)                */
+#define SYS_THREADCREATE 39 /* ebx=fn, ecx=param, edx=&tid (Fase 24-P2.2) */
+#define SYS_THREADEXIT 40   /* ebx=code: termina el hilo actual          */
 
 void syscall_init(void);            /* registra el gate 0x80 (DPL=3) */
 void syscall_handler(registers_t *regs);

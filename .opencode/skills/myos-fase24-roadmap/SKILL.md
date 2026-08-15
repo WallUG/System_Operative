@@ -188,15 +188,21 @@ del borde inferior escribía fuera del buffer del padre (page fault).
 
 ### P2.2. Threads (CreateThread con scheduler leve)
 
-**Estado**: CreateThread es stub; sin preemptión real.
-
-**Tarea**: `CreateThread` con una tarea por hilo (o hilos cooperativos en
-el proceso), un scheduler leve round-robin para ring 3.
-
-**Por qué**: apps con hilos de fondo (UI + worker) se cuelgan sin esto.
-
-**Riesgo**: alto (scheduler). Empezar con 1 proceso = 1 tarea + hilos
-cooperativos en user32 (bucle que reparte sys_event).
+**Estado: COMPLETADO.** CreateThread pasa de llamar a `fn` síncrono a
+crear un **hilo real** que comparte el PD del proceso (multitarea
+preemptiva del scheduler por timer):
+- Syscall `SYS_THREADCREATE`/`SYS_THREADEXIT`; `task_create_thread`
+  fabrica un task ring-3 con el mismo cr3, pila de usuario propia y
+  EIP = fn; la pila se inicializa con `[ret]=kernel32._thread_ret`,
+  `[+4]=param` (fn llamada como fn(param)).
+- `ExitThread` → SYS_THREADEXIT. Si fn retorna, vuelve a `_thread_ret`
+  (exportado) que llama ExitThread(0).
+- El heap es compartido: `sched_user_heap*` derivan a la tarea principal
+  del PD (is_thread=0); syscalls atómicos (gate deshabilita IF).
+- `sched_kill_current`: un hilo muere sin liberar el PD (libera su pila
+  de kernel); la tarea principal al morir mata sus hilos y libera el PD.
+Test `tools/test_fase24p22.py` (thrtest.exe: hilo incrementa un contador
+global, main busy-wait; solo retorna si el timer preempta) 4/4.
 
 ### P2.3. GDI blits (BitBlt/StretchBlt) + clipboard
 

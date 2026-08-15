@@ -209,6 +209,84 @@ int task_create_user(const char *name, const char *exe, const char *cmdline,
     return task_init(t, name);
 }
 
+/* Fase 24-P2.2: tarea principal (is_thread=0) con ese PD, o NULL. */
+task_t *sched_proc_task(uint32_t cr3)
+{
+    task_t *t = current;
+    do {
+        if (t && t->cr3 == cr3 && !t->is_thread)
+            return t;
+        t = t->next;
+    } while (t != current);
+    return NULL;
+}
+
+/* Crea un HILO: tarea de usuario que comparte el PD del proceso (misma
+ * memoria/heap/globals) pero con pila de usuario y EIP propios. fn es
+ * una funcion ring-3 que recibe param (en [esp+4]); al retornar salta a
+ * thread_ret (kernel32, resuelto aqui) que llama SYS_THREADEXIT. Devuelve
+ * el pid del hilo o -1. */
+int task_create_thread(uint32_t pd, uint32_t fn, uint32_t param,
+                       uint32_t ret_va)
+{
+    uint32_t kstack, slot, thr_top, frame;
+    uint32_t *sp;
+    task_t *t;
+    task_t *proc = sched_proc_task(pd);
+    int slot_n = 0, tt;
+    task_t *scan;
+
+    t = free_slot();
+    if (t == NULL)
+        return -1;
+    kstack = pmm_alloc_frame();
+    if (kstack == 0)
+        return -1;
+
+    /* elige un slot de pila libre para el hilo (por debajo de la pila
+     * del proceso: USER_ESP0_TOP-USER_STACK_SIZE..USER_ESP0_TOP) */
+    for (tt = 0; tt < 16; tt++) {
+        slot = USER_ESP0_TOP - (uint32_t)(tt + 2) * USER_STACK_SIZE;
+        if (paging_is_user(pd, slot - USER_STACK_SIZE))
+            continue;               /* ya en uso */
+        slot_n = tt;
+        break;
+    }
+    slot = USER_ESP0_TOP - (uint32_t)(slot_n + 2) * USER_STACK_SIZE;
+    if (paging_user_map(pd, slot - USER_STACK_SIZE, USER_STACK_SIZE) != 0) {
+        pmm_free_frame(kstack);
+        return -1;
+    }
+    thr_top = slot - 8;
+    (void)proc;
+    (void)scan;
+
+    /* pila del hilo: [thr_top] = ret (thread_ret), [thr_top+4] = param */
+    frame = paging_user_frame(pd, thr_top & ~0xFFFu);
+    if (frame != 0) {
+        *(uint32_t *)(frame + (thr_top & 0xFFF)) = ret_va;
+        *(uint32_t *)(frame + (thr_top & 0xFFF) + 4) = param;
+    }
+
+    /* marco ring 3 falso (igual que task_create_user) */
+    sp = (uint32_t *)(kstack + 0x1000);
+    sp -= 18;
+    sp[0]  = 0x23;  sp[1]  = 0x23;  sp[2]  = 0;  sp[3]  = 0;
+    sp[4]  = 0;     sp[5]  = thr_top; sp[6] = 0; sp[7] = 0;
+    sp[8]  = 0;     sp[9]  = 0;     sp[10] = 0; sp[11] = 0;
+    sp[12] = fn;    sp[13] = 0x1B;  sp[14] = 0x202;
+    sp[15] = thr_top; sp[16] = 0x23;
+
+    t->esp = (uint32_t)sp;
+    t->stack_base = kstack;
+    t->esp0 = kstack + 0x1000;
+    t->cr3 = pd;
+    t->is_thread = 1;
+    t->exe_base = sched_current_exe_base();
+
+    return task_init(t, "thread");
+}
+
 int task_fork(registers_t *regs)
 {
     registers_t *cf;
@@ -255,6 +333,7 @@ int task_fork(registers_t *regs)
 
 void sched_kill_current(void)
 {
+    task_t *t;
     if (current == NULL)
         return;
     if (current->cr3 != 0 && current->cr3 != paging_kernel_pd()) {
@@ -263,12 +342,29 @@ void sched_kill_current(void)
          * correr ANTES de liberar el PD (aun valido para comprobar
          * duenos y recomponer). */
         wm_cleanup_pd(current->cr3);
-        /* Liberar PD + espacio de usuario. CR3 sigue apuntando al PD
-         * mientras la tarea termina en kernel (identity map intacto);
-         * el proximo sched_switch carga otro PD. */
-        paging_free_user_space(current->cr3);
-        paging_free_pd(current->cr3);
-        current->cr3 = 0;
+        /* Fase 24-P2.2: si es la tarea PRINCIPAL (proceso), mata tambien
+         * a sus hilos. Solo la ultima tarea del PD libera el espacio. */
+        if (!current->is_thread) {
+            t = current->next;
+            while (t != current) {
+                task_t *nx = t->next;
+                if (t->cr3 == current->cr3 && t->is_thread) {
+                    list_remove(t);
+                    t->state = TASK_FREE;
+                    task_count--;
+                    pmm_free_frame(t->stack_base);
+                }
+                t = nx;
+            }
+            /* libera PD + espacio de usuario */
+            paging_free_user_space(current->cr3);
+            paging_free_pd(current->cr3);
+            current->cr3 = 0;
+        } else {
+            /* hilo: libera solo su pila de kernel; el PD lo libera el
+             * proceso cuando termine */
+            current->cr3 = 0;
+        }
     }
     list_remove(current);
     current->state = TASK_FREE;
@@ -360,7 +456,10 @@ uint32_t sched_current_cr3(void)
 
 uint32_t sched_user_heap(void)
 {
-    return current ? current->heap_cur : 0;
+    task_t *t = current;
+    if (t && t->is_thread)        /* Fase 24-P2.2: el heap es del proceso */
+        t = sched_proc_task(t->cr3);
+    return t ? t->heap_cur : 0;
 }
 
 void sched_get_exe_name(char *dst, uint32_t max)
@@ -398,17 +497,26 @@ void sched_set_exe_base(uint32_t base)
 
 void sched_user_heap_set(uint32_t p)
 {
-    if (current)
-        current->heap_cur = p;
+    task_t *t = current;
+    if (t && t->is_thread)
+        t = sched_proc_task(t->cr3);
+    if (t)
+        t->heap_cur = p;
 }
 
 uint32_t sched_user_heap_head(void)
 {
-    return current ? current->heap_head : 0;
+    task_t *t = current;
+    if (t && t->is_thread)
+        t = sched_proc_task(t->cr3);
+    return t ? t->heap_head : 0;
 }
 
 void sched_user_heap_head_set(uint32_t p)
 {
-    if (current)
-        current->heap_head = p;
+    task_t *t = current;
+    if (t && t->is_thread)
+        t = sched_proc_task(t->cr3);
+    if (t)
+        t->heap_head = p;
 }
