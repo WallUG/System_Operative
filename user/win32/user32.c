@@ -13,6 +13,8 @@
 #define SYS_GFXINFO 15
 #define SYS_MOUSEINFO 16
 #define SYS_EVENT   17
+#define SYS_DLLBASE 31   /* ebx=nombre_dll -> base real (0 si no existe) */
+#define SYS_GETPROC 32   /* ebx=base_dll, ecx=nombre -> VA export */
 #define SYS_WINCREATE 18
 #define SYS_WINCLOSE 19
 #define SYS_WINMOVE 20
@@ -1567,38 +1569,52 @@ static uint32_t u32_brush_color(uint32_t h)
     }
 }
 
+/* Fase 24-P2.3: resolver un export de gdi32 (SYS_DLLBASE + SYS_GETPROC)
+ * y llamarlo __stdcall. Lazy cache. */
+static uint32_t sys_dllbase(const char *name)
+{
+    uint32_t r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_DLLBASE), "b"(name) : "memory");
+    return r;
+}
+static uint32_t sys_getproc(uint32_t base, const char *name)
+{
+    uint32_t r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_GETPROC), "b"(base), "c"(name) : "memory");
+    return r;
+}
+static uint32_t resolve_gdi_fn(const char *name)
+{
+    uint32_t base = sys_dllbase("gdi32.dll");
+    if (base == 0)
+        return 0;
+    return sys_getproc(base, name);
+}
+static uint32_t call_stdcall3(uint32_t fn, uint32_t a, uint32_t b, uint32_t c)
+{
+    uint32_t ret;
+    __asm__ volatile(
+        "pushl %3\n\t"
+        "pushl %2\n\t"
+        "pushl %1\n\t"
+        "call *%4\n\t"
+        : "=a"(ret)
+        : "r"(a), "r"(b), "r"(c), "r"(fn)
+        : "ecx", "edx", "memory");
+    return ret;
+}
+
 uint32_t __attribute__((stdcall)) FillRect(uint32_t hdc, const int32_t *rc, uint32_t brush)
 {
-    myos_dc_t *dc;
-    uint32_t c;
-    int l, t, r2, b2, x, y;
-    if (hdc < (uint32_t)&dc_pool[0] ||
-        hdc >= (uint32_t)&dc_pool[MAX_WNDPROCS])
-        return 0;
-    dc = (myos_dc_t *)hdc;
-    if (dc->magic != GDI_DC_MAGIC || rc == 0 || dc->buf == 0)
-        return 0;
-    l = rc[0]; t = rc[1]; r2 = rc[2]; b2 = rc[3];
-    if (l > r2) { int q = l; l = r2; r2 = q; }
-    if (t > b2) { int q = t; t = b2; b2 = q; }
-    c = (brush < 0x1000) ? u32_brush_color(brush)
-                         : (brush ? 0x00FFFFFFu : 0x00FFFFFFu);
-    for (y = t; y < b2; y++) {
-        int ay = dc->oy + y;
-        if (ay < 0 || ay >= dc->ch)
-            continue;
-        {
-            uint32_t *row = (uint32_t *)dc->buf +
-                            (uint32_t)ay * (uint32_t)dc->cw;
-            for (x = l; x < r2; x++) {
-                int ax = dc->ox + x;
-                if (ax < 0 || ax >= dc->cw)
-                    continue;
-                row[ax] = px_disp(c);
-            }
-        }
-    }
-    return 1;
+    /* Fase 24-P2.3: FillRect vive en USER32 (Windows) pero la logica
+     * (color de brushes creados, DC de memoria de gdi32) esta en gdi32.
+     * Se delega en gdi32.FillRect siempre. */
+    uint32_t fn = resolve_gdi_fn("FillRect");
+    if (fn)
+        return call_stdcall3(fn, hdc, (uint32_t)rc, brush);
+    return 0;
 }
 
 /* BeginPaint: rellena el PAINTSTRUCT (hdc, rcPaint=cliente) y devuelve
@@ -3778,12 +3794,54 @@ uint32_t __attribute__((stdcall)) EnableScrollBar(uint32_t hwnd, uint32_t a, uin
 { (void)hwnd; (void)a; (void)b; return 0; }
 uint32_t __attribute__((stdcall)) GetScrollInfo(uint32_t hwnd, uint32_t a, uint32_t b)
 { (void)hwnd; (void)a; (void)b; return 0; }
-uint32_t __attribute__((stdcall)) GetClipboardData(uint32_t f) { (void)f; return 0; }
-uint32_t __attribute__((stdcall)) SetClipboardData(uint32_t f, uint32_t h) { (void)f; (void)h; return 0; }
-uint32_t __attribute__((stdcall)) OpenClipboard(uint32_t hwnd) { (void)hwnd; return 0; }
-uint32_t __attribute__((stdcall)) CloseClipboard(void) { return 0; }
-uint32_t __attribute__((stdcall)) EmptyClipboard(void) { return 0; }
-uint32_t __attribute__((stdcall)) IsClipboardFormatAvailable(uint32_t f) { (void)f; return 0; }
+/* Fase 24-P2.3: clipboard funcional. Buffer global de texto; CF_TEXT. */
+#define CF_TEXT 1
+static char     clip_buf[4096];
+static int      clip_has;
+static int      clip_open;
+
+uint32_t __attribute__((stdcall)) GetClipboardData(uint32_t f)
+{
+    if (f != CF_TEXT || !clip_has)
+        return 0;
+    return (uint32_t)(uintptr_t)clip_buf;
+}
+uint32_t __attribute__((stdcall)) SetClipboardData(uint32_t f, uint32_t h)
+{
+    int k = 0;
+    const char *s = (const char *)(uintptr_t)h;
+    if (f != CF_TEXT)
+        return 0;
+    if (h == 0)
+        return 0;
+    while (s[k] && k < 4095) {
+        clip_buf[k] = s[k];
+        k++;
+    }
+    clip_buf[k] = 0;
+    clip_has = 1;
+    return h;
+}
+uint32_t __attribute__((stdcall)) OpenClipboard(uint32_t hwnd)
+{
+    (void)hwnd;
+    clip_open = 1;
+    return 1;
+}
+uint32_t __attribute__((stdcall)) CloseClipboard(void)
+{
+    clip_open = 0;
+    return 1;
+}
+uint32_t __attribute__((stdcall)) EmptyClipboard(void)
+{
+    clip_has = 0;
+    return 1;
+}
+uint32_t __attribute__((stdcall)) IsClipboardFormatAvailable(uint32_t f)
+{
+    return (f == CF_TEXT && clip_has) ? 1 : 0;
+}
 
 /* --- MessageBoxA --- */
 

@@ -206,14 +206,21 @@ global, main busy-wait; solo retorna si el timer preempta) 4/4.
 
 ### P2.3. GDI blits (BitBlt/StretchBlt) + clipboard
 
-**Tarea**: `BitBlt`/`StretchBlt` sobre el DC (copia regiones del buffer),
-`GetDC`/`ReleaseDC` con DCs por ventana ya existentes; clipboard
-funcional (OpenClipboard/SetClipboardData/GetClipboardData con un buffer
-global de texto).
-
-**Por qué**: apps que dibujan imágenes o copian texto.
-
-**Riesgo**: medio.
+**Estado: COMPLETADO.** gdi32: `BitBlt`/`StretchBlt` (SRCCOPY, entre DCs
+de ventana y de memoria), `GetPixel` (devuelve el valor crudo del buffer
+en formato px_disp), `CreateCompatibleDC`/`CreateCompatibleBitmap` +
+`SelectObject(bitmap)` (memoria DC). user32: clipboard funcional
+(OpenClipboard/EmptyClipboard/SetClipboardData/GetClipboardData/
+CloseClipboard/IsClipboardFormatAvailable, CF_TEXT en un buffer global).
+**FillRect**: vive en USER32 (Windows) pero la lógica (color de brushes
+creados, DC de memoria de gdi32) está en gdi32 → user32 delega en
+gdi32.FillRect (resuelto por SYS_DLLBASE+SYS_GETPROC y llamado stdcall).
+msvcrt: añadidos `strcpy`/`strcmp` (antes el app crasheaba al llamarlos).
+Test `tools/test_fase24p23.py` (blitclip.exe) 6/6.
+NOTAS: `GetPixel` devuelve px_disp (no COLORREF) — los valores empíricos
+son rojo=0x00FF0000, verde=0x0000FF00. `Rectangle` dibuja un borde con
+el pen negro por defecto (muestrear el interior, no la esquina).
+`FillRect` usa el brush pasado como argumento, no el del DC.
 
 ## Bloque P3 — UX / referencia
 

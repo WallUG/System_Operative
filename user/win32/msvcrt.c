@@ -592,6 +592,19 @@ int    strncmp(const char *a, const char *b, unsigned int n) { return u_strncmp(
 unsigned int strlen(const char *s) { return u_strlen(s); }
 void *memcpy(void *d, const void *s, unsigned int n) { return u_memcpy(d, s, n); }
 
+/* Fase 24-P2.3: strcpy/strcmp (blitclip usa ambos; antes crasheaban). */
+char *strcpy(char *d, const char *s)
+{
+    char *r = d;
+    while ((*d++ = *s++)) ;
+    return r;
+}
+int strcmp(const char *a, const char *b)
+{
+    while (*a && *a == *b) { a++; b++; }
+    return (unsigned char)*a - (unsigned char)*b;
+}
+
 unsigned int wcslen(const unsigned short *s)
 {
     unsigned int n = 0;
@@ -942,6 +955,8 @@ win32_export_t __exports[] __attribute__((section(".exports"))) = {
     { "signal",             (uint32_t)signal },
     { "strerror",           (uint32_t)strerror },
     { "strlen",             (uint32_t)strlen },
+    { "strcpy",              (uint32_t)strcpy },
+    { "strcmp",              (uint32_t)strcmp },
     { "strncmp",            (uint32_t)strncmp },
     { "memset",             (uint32_t)memset },
     { "memchr",             (uint32_t)memchr },

@@ -13,9 +13,27 @@
 #include "font8x16.h"
 
 #define SYS_GFXINFO 15
+#define SYS_WRITE 7
 
 /* --- syscalls --- */
 
+static int sys_write(const char *s, uint32_t len)
+{
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_WRITE), "b"(s), "c"(len) : "memory");
+    return r;
+}
+static void trace(const char *s)
+{
+    uint32_t n = 0;
+    while (s[n]) n++;
+    sys_write(s, n);
+}
+static void trace_hex(uint32_t v)
+{
+    (void)v;
+}
 static int sys_gfxinfo(uint32_t *info)
 {
     int r;
@@ -88,12 +106,15 @@ static uint32_t stock_color(int i)
 #define GDI_OBJ_TYPE_BRUSH 1
 #define GDI_OBJ_TYPE_PEN   2
 #define GDI_OBJ_TYPE_FONT  3
+#define GDI_OBJ_TYPE_BITMAP 4
 
 typedef struct {
     uint32_t used;
     uint32_t type;
     uint32_t color;
     uint32_t style;     /* pens: PS_SOLID/PS_NULL */
+    uint32_t bbuf;      /* Fase 24-P2.3: bitmap -> buffer de pixeles */
+    int      bw, bh;    /* dims del bitmap */
 } gdi_obj_t;
 
 static gdi_obj_t gdi_obj[GDI_OBJ_MAX];
@@ -121,6 +142,8 @@ static uint32_t obj_alloc(uint32_t type, uint32_t color, uint32_t style)
             gdi_obj[i].type = type;
             gdi_obj[i].color = color;
             gdi_obj[i].style = style;
+            gdi_obj[i].bbuf = 0;
+            gdi_obj[i].bw = gdi_obj[i].bh = 0;
             return OBJ_HANDLE(i);
         }
     return 0;
@@ -300,6 +323,14 @@ uint32_t __attribute__((stdcall)) SelectObject(uint32_t hdc, uint32_t obj)
             prev = dc->pen;
             dc->pen = obj;
             return prev ? prev : STOCK_HANDLE(BLACK_PEN);
+        case GDI_OBJ_TYPE_BITMAP:   /* Fase 24-P2.3: DC apunta al bitmap */
+            prev = dc->font;
+            dc->buf = o->bbuf;
+            dc->cw = o->bw;
+            dc->ch = o->bh;
+            dc->ox = 0;
+            dc->oy = 0;
+            return prev ? prev : 0;
         default:
             prev = dc->font;
             dc->font = obj;
@@ -463,8 +494,10 @@ uint32_t __attribute__((stdcall)) Rectangle(uint32_t hdc, int l, int t, int r, i
     int draw;
     uint32_t c;
     int x, y;
-    if (dc == 0)
+    if (dc == 0) {
+        trace("[gdi] Rectangle dc=0\n");
         return 0;
+    }
     if (l > r) { int t2 = l; l = r; r = t2; }
     if (t > b) { int t2 = t; t = b; b = t2; }
     dc_rect(dc, l, t, r - l, b - t, brush_color(dc->brush));
@@ -677,6 +710,131 @@ typedef struct {
     uint32_t fn;
 } win32_export_t;
 
+/* --- Fase 24-P2.3: memoria DC, bitmaps y blits (BitBlt/StretchBlt) --- */
+#define SYS_MALLOC 10
+#define SYS_FREE   11
+static uint32_t sys_malloc(uint32_t bytes)
+{
+    uint32_t r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_MALLOC), "b"(bytes) : "memory");
+    return r;
+}
+static void sys_free(uint32_t p)
+{
+    __asm__ volatile("int $0x80" : : "a"(SYS_FREE), "b"(p) : "memory");
+}
+
+#define SRCCOPY  0x00CC0020u
+
+static myos_dc_t mem_dc[4];        /* DCs de memoria (CreateCompatibleDC) */
+
+uint32_t __attribute__((stdcall)) CreateCompatibleDC(uint32_t hdc)
+{
+    int k;
+    (void)hdc;
+    for (k = 0; k < 4; k++)
+        if (mem_dc[k].magic != GDI_DC_MAGIC)
+            break;
+    if (k >= 4)
+        return 0;
+    {
+        myos_dc_t *d = &mem_dc[k];
+        d->magic = GDI_DC_MAGIC;
+        d->buf = 0; d->cw = 1; d->ch = 1; d->ox = 0; d->oy = 0;
+        d->fg = 0x00000000u; d->bg = 0x00FFFFFFu;
+        d->bk_mode = GDI_BK_TRANSPARENT; d->font = 0;
+        d->brush = STOCK_HANDLE(WHITE_BRUSH);
+        d->pen = STOCK_HANDLE(BLACK_PEN);
+        d->pen_x = d->pen_y = 0; d->hwnd = 0;
+        d->dirty_x = d->dirty_y = d->dirty_w = d->dirty_h = 0;
+        return (uint32_t)d;
+    }
+}
+
+uint32_t __attribute__((stdcall)) CreateCompatibleBitmap(uint32_t hdc, int w, int h)
+{
+    uint32_t slot;
+    gdi_obj_t *o;
+    (void)hdc;
+    if (w <= 0 || h <= 0)
+        return 0;
+    slot = obj_alloc(GDI_OBJ_TYPE_BITMAP, 0, 0);
+    if (slot == 0)
+        return 0;
+    o = &gdi_obj[OBJ_INDEX(slot)];
+    o->bw = w;
+    o->bh = h;
+    o->bbuf = sys_malloc((uint32_t)w * (uint32_t)h * 4);
+    if (o->bbuf == 0)
+        return 0;
+    return slot;
+}
+
+/* Lee un pixel del DC: devuelve el valor crudo del buffer (formato
+ * px_disp). El llamador (test) compara contra px_disp(COLORREF). */
+uint32_t __attribute__((stdcall)) GetPixel(uint32_t hdc, int x, int y)
+{
+    myos_dc_t *dc = dc_check(hdc);
+    int ax, ay;
+    if (dc == 0 || dc->buf == 0)
+        return 0xFFFFFFFFu;
+    ax = dc->ox + x;
+    ay = dc->oy + y;
+    if (ax < 0 || ay < 0 || ax >= dc->cw || ay >= dc->ch)
+        return 0xFFFFFFFFu;
+    {
+        uint32_t rv = ((uint32_t *)dc->buf)[(uint32_t)ay * (uint32_t)dc->cw + (uint32_t)ax];
+        return rv;
+    }
+}
+
+/* Copia w x h desde (xs,ys) del DC origen a (x,y) del destino (SRCCOPY). */
+uint32_t __attribute__((stdcall)) BitBlt(uint32_t hd, int x, int y, int w, int h,
+                  uint32_t hs, int xs, int ys, uint32_t rop)
+{
+    myos_dc_t *d = dc_check(hd), *s = dc_check(hs);
+    int i, j;
+    if (d == 0 || s == 0 || d->buf == 0 || s->buf == 0)
+        return 0;
+    (void)rop;
+    for (j = 0; j < h; j++)
+        for (i = 0; i < w; i++) {
+            int ax = d->ox + x + i, ay = d->oy + y + j;
+            int sx = s->ox + xs + i, sy = s->oy + ys + j;
+            if (ax < 0 || ay < 0 || ax >= d->cw || ay >= d->ch) continue;
+            if (sx < 0 || sy < 0 || sx >= s->cw || sy >= s->ch) continue;
+            ((uint32_t *)d->buf)[(uint32_t)ay * (uint32_t)d->cw + (uint32_t)ax] =
+                ((uint32_t *)s->buf)[(uint32_t)sy * (uint32_t)s->cw + (uint32_t)sx];
+        }
+    dc_dirty(d, d->ox + x, d->oy + y, w, h);
+    return 1;
+}
+
+/* Escala sw x sh del origen a w x h del destino (SRCCOPY). */
+uint32_t __attribute__((stdcall)) StretchBlt(uint32_t hd, int x, int y, int w, int h,
+                     uint32_t hs, int xs, int ys, int sw, int sh, uint32_t rop)
+{
+    myos_dc_t *d = dc_check(hd), *s = dc_check(hs);
+    int i, j;
+    int sxr = sw > 0 ? sw : 1, syr = sh > 0 ? sh : 1;
+    if (d == 0 || s == 0 || d->buf == 0 || s->buf == 0 || w <= 0 || h <= 0)
+        return 0;
+    (void)rop;
+    for (j = 0; j < h; j++)
+        for (i = 0; i < w; i++) {
+            int ax = d->ox + x + i, ay = d->oy + y + j;
+            int sx = s->ox + xs + i * sxr / w;
+            int sy = s->oy + ys + j * syr / h;
+            if (ax < 0 || ay < 0 || ax >= d->cw || ay >= d->ch) continue;
+            if (sx < 0 || sy < 0 || sx >= s->cw || sy >= s->ch) continue;
+            ((uint32_t *)d->buf)[(uint32_t)ay * (uint32_t)d->cw + (uint32_t)ax] =
+                ((uint32_t *)s->buf)[(uint32_t)sy * (uint32_t)s->cw + (uint32_t)sx];
+        }
+    dc_dirty(d, d->ox + x, d->oy + y, w, h);
+    return 1;
+}
+
 win32_export_t __exports[] __attribute__((section(".exports"))) = {
     { "GetStockObject",          (uint32_t)&GetStockObject },
     { "CreateSolidBrush",        (uint32_t)&CreateSolidBrush },
@@ -698,6 +856,11 @@ win32_export_t __exports[] __attribute__((section(".exports"))) = {
     { "Rectangle",               (uint32_t)&Rectangle },
     { "MoveToEx",                (uint32_t)&MoveToEx },
     { "LineTo",                  (uint32_t)&LineTo },
+    { "CreateCompatibleDC",      (uint32_t)&CreateCompatibleDC },
+    { "CreateCompatibleBitmap",  (uint32_t)&CreateCompatibleBitmap },
+    { "GetPixel",                (uint32_t)&GetPixel },
+    { "BitBlt",                  (uint32_t)&BitBlt },
+    { "StretchBlt",              (uint32_t)&StretchBlt },
     { "GetTextMetricsA",         (uint32_t)&GetTextMetricsA },
     { "GetTextFaceA",            (uint32_t)&GetTextFaceA },
     { "GetCharWidthA",           (uint32_t)&GetCharWidthA },

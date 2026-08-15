@@ -190,6 +190,14 @@ $(BUILD)/user/win32/thrtest.exe: user/win32/thrtest.c
 	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
 	           -Wl,--subsystem,console -s -o $@ $< -luser32 -lkernel32
 
+# blitclip.exe: GDI blits + clipboard (Fase 24-P2.3).
+WIN_APPS  += $(BUILD)/user/win32/blitclip.exe
+
+$(BUILD)/user/win32/blitclip.exe: user/win32/blitclip.c
+	@mkdir -p $(dir $@)
+	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
+	           -Wl,--subsystem,console -s -o $@ $< -luser32 -lgdi32 -lkernel32
+
 $(BUILD)/user/win32/heaptest.exe: user/win32/heaptest.c
 	@mkdir -p $(dir $@)
 	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
