@@ -32,6 +32,235 @@
 #define SYS_WRITE  7
 #define SYS_MALLOC 10
 #define SYS_FREE   11
+#define SYS_FSIZE  8
+#define SYS_DREAD  12
+#define SYS_FWRITE 27
+#define SYS_FCREATE_IN 38
+#define SYS_FLUSH  29
+
+/* --- Fase 23-C9: _open/_read/_write/_close (CRT low-level) ---
+ * Tabla local de archivos abiertos sobre las syscalls MEFS. _O_TEXT
+ * traduce LF<->CRLF; _O_BINARY pasa crudo. El oflag del mingw-w64 se
+ * codifica en dwFlagsAndAttributes (aqui se usa directo). */
+
+#define O_WRONLY   0x0001
+#define O_RDWR     0x0002
+#define O_CREAT    0x0100
+#define O_TRUNC    0x0200
+#define O_APPEND   0x0800
+#define O_TEXT     0x4000
+
+struct crt_file_s {
+    char     name[40];
+    uint32_t pos;
+    uint32_t wlen;
+    uint32_t mode;          /* 0 binario, 1 texto */
+    uint32_t pend_cr;
+    uint32_t writable;      /* abierto para escritura: solo se
+                             * persiste en _close si es de escritura */
+};
+
+static struct crt_file_s crt_files[16];
+static uint8_t crt_wbuf[65536];
+
+static struct crt_file_s *crt_file_of(int fd)
+{
+    int i = fd - 0x100;
+    if (i < 0 || i >= 16 || crt_files[i].name[0] == 0)
+        return 0;
+    return &crt_files[i];
+}
+
+static int sys_fsize(const char *name)
+{
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_FSIZE), "b"(name)
+                     : "memory");
+    return r;
+}
+
+static int sys_write(const char *s, uint32_t len);
+
+static int sys_dread(const char *name, void *buf, uint32_t off, uint32_t max)
+{
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_DREAD), "b"(name), "c"(buf), "d"(off),
+                       "S"(max)
+                     : "memory");
+    return r;
+}
+
+static int sys_fcreate_in(uint32_t parent, const char *name)
+{
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_FCREATE_IN), "b"(parent), "c"(name)
+                     : "memory");
+    return r;
+}
+
+static int sys_fwrite(const char *name, const void *buf, uint32_t len)
+{
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_FWRITE), "b"(name), "c"(buf), "d"(len)
+                     : "memory");
+    return r;
+}
+
+static int sys_flush(void)
+{
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_FLUSH)
+                     : "memory");
+    return r;
+}
+
+int __attribute__((cdecl)) _open(const char *name, int oflag, int pmode)
+{
+    int i, sz, writable;
+    (void)pmode;
+    if (name == 0)
+        return -1;
+    writable = (oflag & (O_WRONLY | O_RDWR)) != 0;
+    sz = sys_fsize(name);
+    if (sz < 0) {
+        if (!writable || !(oflag & O_CREAT))
+            return -1;
+        sys_fcreate_in(0xFFFFFFFFu, name);
+        sz = 0;
+    }
+    for (i = 0; i < 16; i++)
+        if (crt_files[i].name[0] == 0)
+            break;
+    if (i == 16)
+        return -1;
+    {
+        uint32_t k = 0;
+        while (k < 39 && name[k]) {
+            crt_files[i].name[k] = name[k];
+            k++;
+        }
+        crt_files[i].name[k] = 0;
+    }
+    crt_files[i].pos = 0;
+    crt_files[i].wlen = 0;
+    crt_files[i].mode = (oflag & O_TEXT) ? 1u : 0u;
+    crt_files[i].pend_cr = 0;
+    crt_files[i].writable = (uint32_t)writable;
+    if (oflag & O_TRUNC)
+        sys_fwrite(name, (const void *)"", 0);
+    return 0x100 + i;
+}
+
+int __attribute__((cdecl)) _read(int fd, void *buf, unsigned int n)
+{
+    struct crt_file_s *f = crt_file_of(fd);
+    uint8_t *dst = (uint8_t *)buf;
+    uint32_t out = 0;
+    if (fd == 0)
+        return 0;
+    if (f == 0)
+        return -1;
+    if (!f->mode) {
+        int r = sys_dread(f->name, buf, f->pos, n);
+        if (r <= 0)
+            return 0;
+        f->pos += (uint32_t)r;
+        return r;
+    }
+    /* texto: CRLF -> LF (CR suelto se conserva) */
+    {
+        uint8_t raw[512];
+        while (out < n) {
+            int r = sys_dread(f->name, raw, f->pos, sizeof(raw));
+            uint32_t k;
+            if (r <= 0)
+                break;
+            f->pos += (uint32_t)r;
+            for (k = 0; k < (uint32_t)r && out < n; k++) {
+                uint8_t c = raw[k];
+                if (f->pend_cr) {
+                    f->pend_cr = 0;
+                    if (c == '\n') {
+                        dst[out++] = '\n';
+                        continue;
+                    }
+                    dst[out++] = '\r';
+                    if (c == '\r') {
+                        f->pend_cr = 1;
+                        continue;
+                    }
+                    dst[out++] = c;
+                } else if (c == '\r') {
+                    f->pend_cr = 1;
+                } else {
+                    dst[out++] = c;
+                }
+            }
+        }
+        if (f->pend_cr && out < n) {
+            dst[out++] = '\r';
+            f->pend_cr = 0;
+        }
+    }
+    return (int)out;
+}
+
+int __attribute__((cdecl)) _write(int fd, const void *buf, unsigned int n)
+{
+    struct crt_file_s *f;
+    if (fd == 1 || fd == 2)
+        return sys_write((const char *)buf, n);
+    f = crt_file_of(fd);
+    if (f == 0)
+        return -1;
+    if (f->mode) {
+        uint32_t k;
+        for (k = 0; k < n && f->wlen < 65536; k++) {
+            uint8_t c = ((const uint8_t *)buf)[k];
+            if (c == '\n' && f->wlen + 1 < 65536) {
+                crt_wbuf[f->wlen++] = '\r';
+                crt_wbuf[f->wlen++] = '\n';
+            } else {
+                crt_wbuf[f->wlen++] = c;
+            }
+        }
+        return (int)k;
+    }
+    if (f->wlen + n > 65536)
+        n = 65536 - f->wlen;
+    {
+        uint32_t k;
+        for (k = 0; k < n; k++)
+            crt_wbuf[f->wlen + k] = ((const uint8_t *)buf)[k];
+    }
+    f->wlen += n;
+    return (int)n;
+}
+
+int __attribute__((cdecl)) _close(int fd)
+{
+    struct crt_file_s *f;
+    if (fd == 0 || fd == 1 || fd == 2)
+        return 0;
+    f = crt_file_of(fd);
+    if (f == 0)
+        return -1;
+    if (f->writable) {
+        if (f->wlen > 0)
+            sys_fwrite(f->name, crt_wbuf, f->wlen);
+        else
+            sys_fwrite(f->name, (const void *)"", 0);
+        sys_flush();
+    }
+    f->name[0] = 0;
+    f->wlen = 0;
+    return 0;
+}
 
 /* --- util --- */
 
@@ -657,6 +886,10 @@ typedef struct {
 } win32_export_t;
 
 win32_export_t __exports[] __attribute__((section(".exports"))) = {
+    { "_open",              (uint32_t)&_open },
+    { "_read",              (uint32_t)&_read },
+    { "_write",             (uint32_t)&_write },
+    { "_close",             (uint32_t)&_close },
     { "__p__iob",           (uint32_t)__p__iob },
     { "__p__acmdln",        (uint32_t)__p__acmdln },
     { "__lc_codepage",      LC_CODEPAGE_ADDR },

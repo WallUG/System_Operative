@@ -40,6 +40,8 @@ struct win32_file_s {
     uint32_t writable;      /* abierto para GENERIC_WRITE (Fase E) */
     uint32_t wlen;          /* bytes acumulados en wbuf               */
     uint8_t *wbuf;          /* buffer de escritura (apunta a wbuf_global) */
+    uint32_t mode;          /* Fase 23-C9: 0=binario, 1=texto (_O_TEXT) */
+    uint32_t pend_cr;       /* CR pendiente de la traduccion CRLF->LF  */
 };
 
 static struct win32_file_s open_files[16];
@@ -143,6 +145,22 @@ uint32_t __attribute__((stdcall)) WriteFile(uint32_t h, const void *buf,
         struct win32_file_s *f = win32_file_of((uint32_t)h);
         if (f == 0 || !f->writable)
             return 0;
+        if (f->mode) {
+            /* Fase 23-C9: modo texto: LF -> CRLF al acumular */
+            uint32_t k;
+            for (k = 0; k < n && f->wlen < 65536; k++) {
+                uint8_t c = ((const uint8_t *)buf)[k];
+                if (c == '\n' && f->wlen + 1 < 65536) {
+                    f->wbuf[f->wlen++] = '\r';
+                    f->wbuf[f->wlen++] = '\n';
+                } else {
+                    f->wbuf[f->wlen++] = c;
+                }
+            }
+            if (written)
+                *written = k;
+            return 1;
+        }
         if (f->wlen + n > 65536)
             n = 65536 - f->wlen;
         {
@@ -674,6 +692,10 @@ void *__attribute__((stdcall)) CreateFileA(const char *name, uint32_t access, ui
     open_files[i].writable = (uint32_t)writable;
     open_files[i].wlen = 0;
     open_files[i].wbuf = (writable) ? wbuf_global : 0;
+    /* Fase 23-C9: el CRT de mingw pasa el oflag (_O_TEXT=0x4000) en
+     * dwFlagsAndAttributes; default = binario (sin traduccion). */
+    open_files[i].mode = (flags & 0x4000u) ? 1u : 0u;
+    open_files[i].pend_cr = 0;
     return (void *)(uint32_t)(0x100 + i);
 }
 
@@ -682,20 +704,66 @@ uint32_t __attribute__((stdcall)) ReadFile(void *h, void *buf, uint32_t n, uint3
                   uint32_t ovl)
 {
     int i = (int)(uint32_t)h - 0x100;
-    int r;
     (void)ovl;
     if (i < 0 || i >= 16 || open_files[i].name[0] == 0) {
         if (read) *read = 0;
         return 0;
     }
-    r = sys_dread(open_files[i].name, buf, open_files[i].pos, n);
-    if (r <= 0) {
-        if (read) *read = 0;
-        return 0;
+    if (!open_files[i].mode) {
+        /* binario: crudo */
+        int r = sys_dread(open_files[i].name, buf, open_files[i].pos, n);
+        if (r <= 0) {
+            if (read) *read = 0;
+            return 0;
+        }
+        open_files[i].pos += (uint32_t)r;
+        if (read) *read = (uint32_t)r;
+        return 1;
     }
-    open_files[i].pos += (uint32_t)r;
-    if (read) *read = (uint32_t)r;
-    return 1;
+    /* Fase 23-C9: modo texto: CRLF -> LF (CR suelto se conserva). */
+    {
+        uint8_t raw[512];
+        uint32_t out = 0;
+        uint8_t *dst = (uint8_t *)buf;
+        while (out < n) {
+            int r = sys_dread(open_files[i].name, raw, open_files[i].pos,
+                              sizeof(raw));
+            if (r <= 0)
+                break;
+            open_files[i].pos += (uint32_t)r;
+            uint32_t k;
+            for (k = 0; k < (uint32_t)r && out < n; k++) {
+                uint8_t c = raw[k];
+                if (open_files[i].pend_cr) {
+                    open_files[i].pend_cr = 0;
+                    if (c == '\n') {
+                        if (out < n)
+                            dst[out++] = '\n';      /* CRLF -> \n */
+                        continue;
+                    }
+                    if (out < n)
+                        dst[out++] = '\r';          /* CR suelto -> CR */
+                    if (c == '\r') {
+                        open_files[i].pend_cr = 1;
+                        continue;
+                    }
+                    if (out < n)
+                        dst[out++] = c;
+                } else if (c == '\r') {
+                    open_files[i].pend_cr = 1;      /* ver si sigue \n */
+                } else {
+                    if (out < n)
+                        dst[out++] = c;
+                }
+            }
+        }
+        if (open_files[i].pend_cr && out < n) {
+            dst[out++] = '\r';                      /* CR al final */
+            open_files[i].pend_cr = 0;
+        }
+        if (read) *read = out;
+        return 1;
+    }
 }
 
 uint32_t __attribute__((stdcall)) GetFileSize(void *h, uint32_t *high)

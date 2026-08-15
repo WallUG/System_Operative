@@ -134,6 +134,13 @@ WIN_APPS  += $(BUILD)/user/win32/wintwo.exe
 WIN_APPS  += $(BUILD)/user/win32/movetest.exe
 # dlltest.exe: OLE32/SHLWAPI/WINSPOOL (Fase 23-B8).
 WIN_APPS  += $(BUILD)/user/win32/dlltest.exe
+# txtmode.exe: modos binario/texto _O_BINARY/_O_TEXT (Fase 23-C9).
+WIN_APPS  += $(BUILD)/user/win32/txtmode.exe
+
+$(BUILD)/user/win32/txtmode.exe: user/win32/txtmode.c
+	@mkdir -p $(dir $@)
+	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
+	           -Wl,--subsystem,console -s -o $@ $< -luser32 -lkernel32
 
 $(BUILD)/user/win32/dlltest.exe: user/win32/dlltest.c
 	@mkdir -p $(dir $@)
