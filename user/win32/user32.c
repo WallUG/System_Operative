@@ -808,6 +808,7 @@ static int      child_edit[CHILD_MAX];  /* 1 = control editable (EDIT/RichEdit) 
 static char     child_class[CHILD_MAX][16]; /* clase del hijo (GetClassNameA/W) */
 static uint32_t focus_edit;             /* control de edicion enfocado  */
 static uint32_t wm_focus_win = 1;       /* Fase 23-B6: foco por ventana */
+static uint32_t kbd_mods;               /* Fase 25-W2A: mods EV_KEY (1=ctrl) */
 
 /* Fase 23-C11: SysListView32 (comctl32). Hijo con columnas e items,
  * seleccion por teclado (flechas) y Enter -> WM_COMMAND al padre.
@@ -1059,6 +1060,8 @@ static void event_to_wm(const uint32_t *ev)
             msgq_push(hwnd, WM_MBUTTONUP, 0, (ev[2] << 16) | ev[1]);
         break;
     case EV_KEY: {
+        /* Fase 25-W2A: estado de modificadores para GetKeyState. */
+        kbd_mods = ev[3];
         /* Fase D: Alt+mnemonico de un top-level abre su desplegable. */
         if ((ev[3] & 2) && key >= 32 && key <= 126 &&
             menu_win_hwnd && wnd_proc[menu_win_hwnd]) {
@@ -2916,6 +2919,24 @@ uint32_t __attribute__((stdcall)) GetParent(uint32_t hwnd) { (void)hwnd; return 
 uint32_t __attribute__((stdcall)) EnableWindow(uint32_t hwnd, int en) { (void)hwnd; (void)en; return 0; }
 uint32_t __attribute__((stdcall)) GetKeyboardState(uint32_t s) { (void)s; return 0; }
 uint32_t __attribute__((stdcall)) SetKeyboardState(uint32_t s) { (void)s; return 0; }
+/* Fase 25-W2A: estado de teclado real (modificadores). El kernel
+ * entrega los modificadores de cada EV_KEY en ev[3] (1=ctrl, 2=alt,
+ * 4=shift); no hay eventos de tecla arriba, asi que el estado queda
+ * "pulsado" tras el primer evento con el modificador. Suficiente
+ * para Ctrl+S/Ctrl+O/Alt+letra de las apps reales. */
+int __attribute__((stdcall)) GetKeyState(int vk)
+{
+    switch (vk) {
+    case 0x11:                      /* VK_CONTROL */
+        return (kbd_mods & 1) ? 0x8000 : 0;
+    case 0x10:                      /* VK_SHIFT */
+        return (kbd_mods & 4) ? 0x8000 : 0;
+    case 0x12:                      /* VK_MENU */
+        return (kbd_mods & 2) ? 0x8000 : 0;
+    default:
+        return 0;
+    }
+}
 uint32_t __attribute__((stdcall)) IsDialogMessageA(uint32_t d, uint32_t m) { (void)d; (void)m; return 0; }
 uint32_t __attribute__((stdcall)) RegisterWindowMessageA(uint32_t s) { (void)s; return 0x0400; }
 uint32_t __attribute__((stdcall)) MessageBeep(uint32_t t) { (void)t; return 0; }
@@ -4581,8 +4602,9 @@ win32_export_t __exports[] __attribute__((section(".exports"))) = {
     { "SetCursor", (uint32_t)&SetCursor },
     { "GetParent", (uint32_t)&GetParent },
     { "EnableWindow", (uint32_t)&EnableWindow },
-    { "GetKeyboardState", (uint32_t)&GetKeyboardState },
-    { "SetKeyboardState", (uint32_t)&SetKeyboardState },
+{ "GetKeyboardState",   (uint32_t)&GetKeyboardState },
+    { "SetKeyboardState",   (uint32_t)&SetKeyboardState },
+    { "GetKeyState",         (uint32_t)&GetKeyState },
     { "IsDialogMessageA", (uint32_t)&IsDialogMessageA },
     { "RegisterWindowMessageA", (uint32_t)&RegisterWindowMessageA },
     { "MessageBeep", (uint32_t)&MessageBeep },

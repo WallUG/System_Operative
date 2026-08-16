@@ -225,12 +225,33 @@ msvcrt W:
    y nunca se notó. Fix: s=(char*)b; dst=(char*)b, max=(int)a.
 
 ### 4. Probar con el binario objetivo
-- **notepad.exe de Windows 98/2000** (~50 KB, imports pequeños, sin
-  manifiestos, sin comctl32 v6, sin .NET) — el mejor primer objetivo.
-- **Utilidades del resource kit de Win2000** (consola: añade
-  cobertura kernel32/msvcrt W sin GUI).
-- El loader da el diagnóstico exacto: "import X no resuelto" →
-  implementar X → repetir.
+**COMPLETADO** (w2demo.exe — ver "Progreso"): sin acceso a notepad.exe
+real (no hay ISO local y no se descarga de fuentes dudosas), el
+binario objetivo es w2demo.exe: **compilado con -DUNICODE -municode**
+(el mismo patrón de imports W de un notepad real MSVC). Validado con
+`tools/test_fase25w2a2.py` **8/8 PASS** (load del CRT W, WM_CREATE,
+teclas → WM_CHAR, Ctrl+S → CreateFileW/WriteFile, cat demo.txt=hola,
+Esc → WM_CLOSE → exit:0).
+
+Faltantes que el diagnóstico del loader reveló e implementados:
+- kernel32: **GetStartupInfoW** (STARTUPINFOW = 68 B a ceros).
+- msvcrt: **__p__wcmdln** (puntero a la cmdline W desde el TIB) y
+  **__p___winitenv** (entorno W vacío) — el CRT -municode los pide.
+- user32: **GetKeyState real** (kbd_mods = modificadores del último
+  EV_KEY: 1=ctrl 2=alt 4=shift; sin tecla-arriba queda "pulsado";
+  suficiente para Ctrl+S/Ctrl+O). GetKeyboardState sigue stub.
+
+Notas del binario W:
+- -municode es OBLIGATORIO para wWinMain (sin él: undefined
+  WinMain@16). Con -municode el CRT W llama __wgetmainargs,
+  GetStartupInfoW, __p__wcmdln.
+- Los WM_KEYDOWN de QEMU llegan con la MINUSCULA ('s' no 'S') —
+  comparar ambos casos o usar aceleradores.
+- Ctrl+X de QEMU produce 1 EV_KEY con mods=1 (no hay evento de la
+  tecla ctrl sola): el estado de GetKeyState sale del propio evento.
+- Esc NO genera WM_CHAR (solo imprimibles): cerrar por WM_KEYDOWN 27.
+- Con un notepad.exe real de Win98/2000 disponible, el flujo es el
+  mismo: `run notepad.exe` → "import X no resuelto" → implementar X.
 
 ### 5. Probar los drivers de audio y red con apps reales
 

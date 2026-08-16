@@ -810,10 +810,19 @@ uint32_t __attribute__((stdcall)) HeapSize(uint32_t heap, uint32_t flags, const 
 void __attribute__((stdcall)) GetStartupInfo(void *si)
 {
     trace("[k32] GetStartupInfo\n");
-    if (si) {
-        for (uint32_t i = 0; i < 16; i++)
-            ((uint32_t *)si)[i] = 0;
-    }
+    if (si)
+        for (int i = 0; i < 68; i++)
+            ((char *)si)[i] = 0;
+}
+
+/* Fase 25-W2A: STARTUPINFOW — mismo layout de 68 B pero lpDesktop/
+ * lpTitle son wchar_t (los dejamos vacios). */
+void __attribute__((stdcall)) GetStartupInfoW(void *si)
+{
+    trace("[k32] GetStartupInfoW\n");
+    if (si)
+        for (int i = 0; i < 68; i++)
+            ((char *)si)[i] = 0;
 }
 
 /* --- archivos (MEFS readonly via SYS_FSIZE/SYS_DREAD/SYS_DLIST) ---
@@ -2562,6 +2571,7 @@ win32_export_t __exports[] __attribute__((section(".exports"))) = {
     { "HeapReAlloc",           (uint32_t)&HeapReAlloc },
     { "HeapSize",              (uint32_t)&HeapSize },
     { "GetStartupInfoA",       (uint32_t)&GetStartupInfo },
+    { "GetStartupInfoW",       (uint32_t)&GetStartupInfoW },
     { "CreateFileA",           (uint32_t)&CreateFileA },
     { "ReadFile",              (uint32_t)&ReadFile },
     { "GetFileSize",           (uint32_t)&GetFileSize },

@@ -867,6 +867,36 @@ void *__attribute__((cdecl)) _wfopen(const unsigned short *path,
     return 0;
 }
 
+/* --- punteros del CRT W (mingw -municode) --- */
+
+#define WIN32_TIB_CMDLINE_LEN 128u
+
+static unsigned short w_cmdln[WIN32_TIB_CMDLINE_LEN];
+static unsigned short *w_cmdln_ptr;
+static unsigned short *w_initenv_arr[1];
+static unsigned short **w_initenv_p;
+
+/* __p__wcmdln: puntero a la linea de comandos W (la del TIB
+ * convertida). El CRT de mingw -municode lo lee al arrancar. */
+unsigned short **__attribute__((cdecl)) __p__wcmdln(void)
+{
+    const char *a = cmdline_from_tib();
+    uint32_t i;
+    for (i = 0; i < WIN32_TIB_CMDLINE_LEN - 1 && a[i]; i++)
+        w_cmdln[i] = (unsigned short)(unsigned char)a[i];
+    w_cmdln[i] = 0;
+    w_cmdln_ptr = w_cmdln;
+    return &w_cmdln_ptr;
+}
+
+/* __p___winitenv: entorno W (vacio). */
+unsigned short ***__attribute__((cdecl)) __p___winitenv(void)
+{
+    w_initenv_arr[0] = 0;
+    w_initenv_p = w_initenv_arr;
+    return &w_initenv_p;
+}
+
 static sighandler sigtab[32];
 
 void *signal(int sig, void *h)
@@ -895,6 +925,7 @@ void *localeconv(void) { return &lc; }
  * escribe al lanzar/exec), %fs:0x18 da la base del TIB actual. */
 #define WIN32_TIB_VA          0x84000000u
 #define WIN32_TIB_CMDLINE_OFF 0x100u
+#define WIN32_TIB_CMDLINE_LEN 128u
 
 static const char *cmdline_from_tib(void)
 {
@@ -1171,6 +1202,8 @@ win32_export_t __exports[] __attribute__((section(".exports"))) = {
     { "_close",             (uint32_t)&_close },
     { "__p__iob",           (uint32_t)__p__iob },
     { "__p__acmdln",        (uint32_t)__p__acmdln },
+    { "__p__wcmdln",        (uint32_t)__p__wcmdln },
+    { "__p___winitenv",     (uint32_t)__p___winitenv },
     { "__lc_codepage",      LC_CODEPAGE_ADDR },
     { "__p___initenv",      (uint32_t)__p___initenv },
     { "__p___mb_cur_max",   (uint32_t)__p___mb_cur_max },

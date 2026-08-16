@@ -194,6 +194,16 @@ $(BUILD)/user/win32/w2atest.exe: user/win32/w2atest.c
 	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
 	           -Wl,--subsystem,console -s -o $@ $< -luser32 -lkernel32
 
+# w2demo.exe: binario objetivo W (Fase 25-W2A paso 4): compilado con
+# -DUNICODE -D_UNICODE, mini-notepad con SOLO APIs W (el patron de
+# imports de un notepad.exe real MSVC).
+WIN_APPS  += $(BUILD)/user/win32/w2demo.exe
+
+$(BUILD)/user/win32/w2demo.exe: user/win32/w2demo.c
+	@mkdir -p $(dir $@)
+	$(MINGW32) -m32 -O1 -municode -Wl,--image-base,0x80000000 \
+	           -Wl,--subsystem,console -s -o $@ $< -luser32 -lkernel32
+
 # thrtest.exe: CreateThread preemptivo (Fase 24-P2.2).
 WIN_APPS  += $(BUILD)/user/win32/thrtest.exe
 
