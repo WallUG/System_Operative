@@ -7,6 +7,9 @@
 
 #include <windows.h>
 #include <string.h>
+#include <wchar.h>
+
+typedef int (__cdecl *wgetmainargs_fn)(int *, wchar_t ***, wchar_t ***, int *, int *);
 
 static void logstr(const char *s)
 {
@@ -273,6 +276,7 @@ int main(void)
         if (!MoveFileW(L"cf_src.txt", L"cf_moved.txt")) {
             logstr("w2atest: FAIL MoveFileW\n"); fails++;
         }
+        DeleteFileW(L"cf_src.txt");
         DeleteFileW(L"cf_dst.txt");
         DeleteFileW(L"cf_moved.txt");
         logstr("w2atest: copyw/movew ok\n");
@@ -303,6 +307,141 @@ int main(void)
         logstr("'\n");
         if (n == 0 || msg[0] == 0 || dt[0] == 0 || loc[0] == 0) {
             logstr("w2atest: FAIL fmt/date/locale W\n"); fails++;
+        }
+    }
+
+    /* ============ Fase 25 paso 3: user32 W + msvcrt W ============ */
+
+    /* 11) RegisterClassW + CreateWindowExW (clase W, top-level) */
+    {
+        WNDCLASSW wc;
+        HWND h;
+        memset(&wc, 0, sizeof(wc));
+        wc.lpfnWndProc = DefWindowProcA;
+        wc.lpszClassName = L"W2ACls";
+        if (!RegisterClassW(&wc)) {
+            logstr("w2atest: FAIL RegisterClassW\n"); fails++;
+        } else {
+            h = CreateWindowExW(0, L"W2ACls", L"w2a title", WS_OVERLAPPEDWINDOW,
+                                50, 50, 300, 200, 0, 0, 0, 0);
+            if (h == NULL) {
+                logstr("w2atest: FAIL CreateWindowExW\n"); fails++;
+            } else {
+                DestroyWindow(h);
+            }
+            logstr("w2atest: regw/createw ok\n");
+        }
+    }
+
+    /* 12) EDIT hijo: SetWindowTextW/GetWindowTextW/GetClassNameW/
+     * SendMessageW(WM_SETTEXT/WM_GETTEXT) */
+    {
+        HWND par, edit;
+        wchar_t buf[128];
+        par = CreateWindowExW(0, L"W2ACls", L"parent", WS_OVERLAPPEDWINDOW,
+                              20, 20, 320, 240, 0, 0, 0, 0);
+        if (par == NULL) {
+            logstr("w2atest: FAIL CreateWindowExW parent\n"); fails++;
+        } else {
+            edit = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_VISIBLE,
+                                   10, 10, 200, 20, (HWND)par, 0, 0, 0);
+            if (edit == NULL) {
+                logstr("w2atest: FAIL CreateWindowExW EDIT\n"); fails++;
+            } else {
+                if (!SetWindowTextW(edit, L"hello W")) {
+                    logstr("w2atest: FAIL SetWindowTextW\n"); fails++;
+                }
+                if (GetWindowTextW(edit, buf, 128) == 0 ||
+                    lstrcmpW(buf, L"hello W") != 0) {
+                    logstr("w2atest: FAIL GetWindowTextW\n"); fails++;
+                }
+                if (GetWindowTextLengthW(edit) != 7) {
+                    logstr("w2atest: FAIL GetWindowTextLengthW\n"); fails++;
+                }
+                if (GetClassNameW(edit, buf, 128) == 0 ||
+                    lstrcmpW(buf, L"EDIT") != 0) {
+                    logstr("w2atest: FAIL GetClassNameW\n"); fails++;
+                }
+                SendMessageW(edit, WM_SETTEXT, 0, (LPARAM)L"world");
+                if (GetWindowTextW(edit, buf, 128) == 0 ||
+                    lstrcmpW(buf, L"world") != 0) {
+                    logstr("w2atest: FAIL SendMessageW WM_SETTEXT\n"); fails++;
+                }
+                SendMessageW(edit, WM_GETTEXT, 128, (LPARAM)buf);
+                if (lstrcmpW(buf, L"world") != 0) {
+                    logstr("w2atest: FAIL SendMessageW WM_GETTEXT\n"); fails++;
+                }
+                logstr("w2atest: settextW/gettextW/classW/sendW ok\n");
+            }
+            DestroyWindow(par);
+        }
+    }
+
+    /* 13) CharUpperW/CharLowerW/CharNextW */
+    {
+        wchar_t s[16];
+        lstrcpyW(s, L"AbC dEf");
+        CharUpperW(s);
+        if (lstrcmpW(s, L"ABC DEF") != 0) {
+            logstr("w2atest: FAIL CharUpperW\n"); fails++;
+        }
+        CharLowerW(s);
+        if (lstrcmpW(s, L"abc def") != 0) {
+            logstr("w2atest: FAIL CharLowerW\n"); fails++;
+        }
+        if (CharUpperW((LPWSTR)(DWORD_PTR)'z') != (LPWSTR)(DWORD_PTR)'Z' ||
+            CharLowerW((LPWSTR)(DWORD_PTR)'Q') != (LPWSTR)(DWORD_PTR)'q') {
+            logstr("w2atest: FAIL CharUpperW/LowerW char\n"); fails++;
+        }
+        if (CharNextW((LPCWSTR)(DWORD_PTR)s) != (LPCWSTR)(s + 1) ||
+            CharNextW((LPCWSTR)(DWORD_PTR)(s + 7)) != NULL) {
+            logstr("w2atest: FAIL CharNextW\n"); fails++;
+        }
+        logstr("w2atest: charW ok\n");
+    }
+
+    /* 14) msvcrt W: wcscpy/wcscat/wcsstr/_wcsicmp/_wtoi/_itow/_wcslwr */
+    {
+        wchar_t s[64];
+        wcscpy(s, L"caf");
+        wcscat(s, L"eteria");
+        if (wcscmp(s, L"cafeteria") != 0 ||
+            wcsstr(s, L"teria") != s + 4 ||
+            _wcsicmp(L"CAFETERIA", L"cafeteria") != 0 ||
+            _wcsnicmp(L"ABCX", L"abcY", 3) != 0) {
+            logstr("w2atest: FAIL wcscat/wcsstr/_wcsicmp\n"); fails++;
+        }
+        if (wcslen(L"hola") != 4 || _wtoi(L"-42") != -42 ||
+            _wtoi(L"12ab") != 12 || _wtol(L"99") != 99) {
+            logstr("w2atest: FAIL _wtoi\n"); fails++;
+        }
+        _itow(1234, s, 10);
+        if (wcscmp(s, L"1234") != 0) {
+            logstr("w2atest: FAIL _itow\n"); fails++;
+        }
+        _wcslwr(s);
+        _itow(1234, s, 10);
+        if (wcscmp(s, L"1234") != 0) {
+            logstr("w2atest: FAIL _wcslwr\n"); fails++;
+        }
+        logstr("w2atest: msvcrt W ok\n");
+    }
+
+    /* 15) _wgetmainargs: argv W de la linea de comandos real */
+    {
+        int argc = 0, dontfree = 0, mode = 0;
+        wchar_t **argv = 0, **envp = 0;
+        wgetmainargs_fn wget = (wgetmainargs_fn)GetProcAddress(
+            GetModuleHandleA("msvcrt.dll"), "_wgetmainargs");
+        if (wget == NULL) {
+            logstr("w2atest: FAIL _wgetmainargs (no resuelto)\n"); fails++;
+        } else if (wget(&argc, &argv, &envp, &dontfree, &mode) != 0 ||
+            argc < 1 || argv == 0 || argv[0] == 0 ||
+            lstrcmpW(argv[0], L"w2atest.exe") != 0 || argv[argc] != 0) {
+            logstr("w2atest: FAIL _wgetmainargs\n"); fails++;
+        } else {
+            logstr("w2atest: wgetmainargs argc="); lognum(argc);
+            logstr(" argv0='"); logw(argv[0], 32); logstr("'\n");
         }
     }
 

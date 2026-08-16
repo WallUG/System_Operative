@@ -140,6 +140,26 @@ def run():
         print('FAIL - fmtW'); qemu.terminate(); return
     check('FormatMessageW/GetDateFormatW/GetLocaleInfoW', True)
 
+    if not waitstr('w2atest: regw/createw ok', 10):
+        print('FAIL - regw/createw'); qemu.terminate(); return
+    check('RegisterClassW + CreateWindowExW (clase W)', True)
+
+    if not waitstr('w2atest: settextW/gettextW/classW/sendW ok', 10):
+        print('FAIL - settextW'); qemu.terminate(); return
+    check('SetWindowTextW/GetWindowTextW/GetClassNameW/SendMessageW text', True)
+
+    if not waitstr('w2atest: charW ok', 10):
+        print('FAIL - charW'); qemu.terminate(); return
+    check('CharUpperW/CharLowerW/CharNextW', True)
+
+    if not waitstr('w2atest: msvcrt W ok', 10):
+        print('FAIL - msvcrt W'); qemu.terminate(); return
+    check('msvcrt W (wcscpy/wcsstr/_wcsicmp/_wtoi/_itow)', True)
+
+    if not waitstr('w2atest: wgetmainargs argc=', 10):
+        print('FAIL - _wgetmainargs'); qemu.terminate(); return
+    check('_wgetmainargs (argv W del CRT MSVC)', True)
+
     if not waitstr('exit:0', 10):
         print('FAIL - exit != 0'); qemu.terminate(); return
     check('w2atest termina con exit 0', True)

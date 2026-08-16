@@ -7,7 +7,7 @@ LD        = ld
 OBJCOPY   = objcopy
 QEMU      = qemu-system-i386
 KERNEL_SECTORS = 128            # tamano de kernel en sectores (1 = 512 bytes)
-FS_SECTORS     = 2000           # fs.bin rellenado a 2000 sectores (1 MB; apps + margen Fase E para escrituras; boot.asm usa el mismo valor)
+FS_SECTORS     = 2400           # fs.bin rellenado a 2400 sectores (1.2 MB; apps + margen Fase E; boot.asm usa el mismo valor)
 
 BUILD     = build
 CFLAGS    = -m32 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \

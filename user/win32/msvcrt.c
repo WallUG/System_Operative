@@ -616,6 +616,257 @@ unsigned int wcslen(const unsigned short *s)
 
 typedef void (*sighandler)(int);
 
+/* ==================================================================
+ * Fase 25-W2A paso 3: entrada W del CRT (MSVC) + cadenas wchar_t.
+ * El CRT de MSVC arranca con _wgetmainargs (VC7+: "_wgetmainargs",
+ * VC6: "__wgetmainargs") y usa wcscpy/wcslen/_wcsicmp/_wtoi...
+ * ================================================================== */
+
+int __getmainargs(int *argc, char ***argv, char ***envp,
+                  int dowildcard, void *startup);
+
+/* Parsea la linea de comandos del TIB a tokens wchar_t. */
+static int wsplit_cmdline(const char *cmd, unsigned short *out,
+                          unsigned short **argv, int max)
+{
+    int n = 0;
+    while (*cmd) {
+        while (*cmd == ' ' || *cmd == '\t')
+            cmd++;
+        if (*cmd == 0)
+            break;
+        if (n >= max - 1)
+            break;
+        argv[n++] = out;
+        if (*cmd == '"') {
+            cmd++;
+            while (*cmd && *cmd != '"')
+                *out++ = (unsigned short)(unsigned char)*cmd++;
+            if (*cmd == '"')
+                cmd++;
+        } else {
+            while (*cmd && *cmd != ' ' && *cmd != '\t')
+                *out++ = (unsigned short)(unsigned char)*cmd++;
+        }
+        *out++ = 0;
+    }
+    return n;
+}
+
+static unsigned short *w_argv_list[33];
+static unsigned short w_buf[256];
+
+int __attribute__((cdecl)) _wgetmainargs(int *argc, unsigned short ***argv,
+                                         unsigned short ***envp,
+                                         int *dontfree, int *mode)
+{
+    static unsigned short *w_envp_list[1];
+    (void)dontfree; (void)mode;
+    *argc = wsplit_cmdline(cmdline_from_tib(), w_buf, w_argv_list, 33);
+    if (*argc < 1) {
+        w_argv_list[0] = (unsigned short *)L"program.exe";
+        *argc = 1;
+    }
+    w_argv_list[*argc] = 0;
+    w_envp_list[0] = 0;
+    *argv = w_argv_list;
+    if (envp)
+        *envp = w_envp_list;
+    return 0;
+}
+
+int __attribute__((cdecl)) _getmainargs(int *argc, char ***argv, char ***envp,
+                                        int dowildcard, void *startup)
+{
+    return __getmainargs(argc, argv, envp, dowildcard, startup);
+}
+
+/* --- cadenas wchar_t (ANSI C: sin _; msvcrt: wcslen ya esta) --- */
+
+unsigned short *__attribute__((cdecl)) wcscpy(unsigned short *d, const unsigned short *s)
+{
+    unsigned int i = 0;
+    do { d[i] = s[i]; } while (s[i++]);
+    return d;
+}
+
+unsigned short *__attribute__((cdecl)) wcscat(unsigned short *d, const unsigned short *s)
+{
+    unsigned int i = 0, k = 0;
+    while (d[i]) i++;
+    while (s[k]) d[i++] = s[k++];
+    d[i] = 0;
+    return d;
+}
+
+int __attribute__((cdecl)) wcscmp(const unsigned short *a, const unsigned short *b)
+{
+    while (*a && *b && *a == *b) { a++; b++; }
+    return (int)*a - (int)*b;
+}
+
+int __attribute__((cdecl)) wcsncmp(const unsigned short *a, const unsigned short *b,
+                                   unsigned int n)
+{
+    unsigned int i;
+    for (i = 0; i < n; i++) {
+        if (a[i] != b[i])
+            return (int)a[i] - (int)b[i];
+        if (a[i] == 0)
+            return 0;
+    }
+    return 0;
+}
+
+unsigned short *__attribute__((cdecl)) wcsncpy(unsigned short *d,
+                        const unsigned short *s, unsigned int n)
+{
+    unsigned int i;
+    for (i = 0; i < n && s[i]; i++)
+        d[i] = s[i];
+    for (; i < n; i++)
+        d[i] = 0;
+    return d;
+}
+
+unsigned short *__attribute__((cdecl)) wcschr(const unsigned short *s, unsigned short c)
+{
+    while (*s && *s != c) s++;
+    return (*s == c) ? (unsigned short *)s : 0;
+}
+
+unsigned short *__attribute__((cdecl)) wcsrchr(const unsigned short *s, unsigned short c)
+{
+    const unsigned short *last = 0;
+    while (*s) {
+        if (*s == c)
+            last = s;
+        s++;
+    }
+    if (c == 0)
+        return (unsigned short *)s;
+    return (unsigned short *)last;
+}
+
+unsigned short *__attribute__((cdecl)) wcsstr(const unsigned short *h,
+                        const unsigned short *n)
+{
+    unsigned int i, k;
+    if (*n == 0)
+        return (unsigned short *)h;
+    for (i = 0; h[i]; i++) {
+        for (k = 0; n[k] && h[i + k] == n[k]; k++) ;
+        if (n[k] == 0)
+            return (unsigned short *)&h[i];
+    }
+    return 0;
+}
+
+int __attribute__((cdecl)) _wcsicmp(const unsigned short *a, const unsigned short *b)
+{
+    for (;;) {
+        unsigned short ca = *a, cb = *b;
+        if (ca >= 'A' && ca <= 'Z') ca += 32;
+        if (cb >= 'A' && cb <= 'Z') cb += 32;
+        if (ca != cb)
+            return (int)ca - (int)cb;
+        if (ca == 0)
+            return 0;
+        a++; b++;
+    }
+}
+
+int __attribute__((cdecl)) _wcsnicmp(const unsigned short *a, const unsigned short *b,
+                                     unsigned int n)
+{
+    unsigned int i;
+    for (i = 0; i < n; i++) {
+        unsigned short ca = a[i], cb = b[i];
+        if (ca >= 'A' && ca <= 'Z') ca += 32;
+        if (cb >= 'A' && cb <= 'Z') cb += 32;
+        if (ca != cb)
+            return (int)ca - (int)cb;
+        if (ca == 0)
+            return 0;
+    }
+    return 0;
+}
+
+unsigned short *__attribute__((cdecl)) _wcslwr(unsigned short *s)
+{
+    unsigned int i;
+    for (i = 0; s[i]; i++)
+        if (s[i] >= 'A' && s[i] <= 'Z')
+            s[i] += 32;
+    return s;
+}
+
+unsigned short *__attribute__((cdecl)) _wcsupr(unsigned short *s)
+{
+    unsigned int i;
+    for (i = 0; s[i]; i++)
+        if (s[i] >= 'a' && s[i] <= 'z')
+            s[i] -= 32;
+    return s;
+}
+
+int __attribute__((cdecl)) _wtoi(const unsigned short *s)
+{
+    int v = 0, neg = 0;
+    while (*s == ' ' || *s == '\t') s++;
+    if (*s == '-') { neg = 1; s++; }
+    else if (*s == '+') s++;
+    while (*s >= '0' && *s <= '9') {
+        v = v * 10 + (*s - '0');
+        s++;
+    }
+    return neg ? -v : v;
+}
+
+long __attribute__((cdecl)) _wtol(const unsigned short *s)
+{
+    return (long)_wtoi(s);
+}
+
+unsigned short *__attribute__((cdecl)) _itow(int v, unsigned short *buf, int radix)
+{
+    char tmp[16];
+    int p = 0, u = (v < 0 && radix == 10) ? -v : v;
+    int i;
+    (void)radix;
+    do { tmp[p++] = (char)('0' + u % 10); u /= 10; } while (u);
+    if (v < 0 && radix == 10)
+        tmp[p++] = '-';
+    for (i = 0; i < p; i++)
+        buf[i] = (unsigned short)tmp[p - 1 - i];
+    buf[i] = 0;
+    return buf;
+}
+
+/* _wfopen: sin fopen real en el CRT; log + NULL (el binario objetivo
+ * dara el diagnostico si lo necesita). */
+void *__attribute__((cdecl)) _wfopen(const unsigned short *path,
+                                     const unsigned short *mode)
+{
+    char p[128], m[16];
+    int i;
+    if (path != 0) {
+        for (i = 0; i < 127 && path[i]; i++)
+            p[i] = (char)path[i];
+        p[i] = 0;
+        sys_write(p, (uint32_t)i);
+    }
+    if (mode != 0) {
+        for (i = 0; i < 15 && mode[i]; i++)
+            m[i] = (char)mode[i];
+        m[i] = 0;
+        sys_write(" mode=", 6);
+        sys_write(m, (uint32_t)i);
+    }
+    sys_write("\n", 1);
+    return 0;
+}
+
 static sighandler sigtab[32];
 
 void *signal(int sig, void *h)
@@ -971,7 +1222,26 @@ win32_export_t __exports[] __attribute__((section(".exports"))) = {
     { "isspace",            (uint32_t)isspace },
     { "vfprintf",           (uint32_t)vfprintf },
     { "__getmainargs",      (uint32_t)__getmainargs },
+    { "_getmainargs",        (uint32_t)_getmainargs },
+    { "_wgetmainargs",       (uint32_t)_wgetmainargs },
+    { "__wgetmainargs",      (uint32_t)_wgetmainargs },
     { "wcslen",             (uint32_t)wcslen },
+    { "wcscpy",             (uint32_t)wcscpy },
+    { "wcscat",             (uint32_t)wcscat },
+    { "wcscmp",             (uint32_t)wcscmp },
+    { "wcsncmp",            (uint32_t)wcsncmp },
+    { "wcsncpy",            (uint32_t)wcsncpy },
+    { "wcschr",             (uint32_t)wcschr },
+    { "wcsrchr",            (uint32_t)wcsrchr },
+    { "wcsstr",             (uint32_t)wcsstr },
+    { "_wcsicmp",           (uint32_t)_wcsicmp },
+    { "_wcsnicmp",          (uint32_t)_wcsnicmp },
+    { "_wcslwr",            (uint32_t)_wcslwr },
+    { "_wcsupr",            (uint32_t)_wcsupr },
+    { "_wtoi",              (uint32_t)_wtoi },
+    { "_wtol",              (uint32_t)_wtol },
+    { "_itow",              (uint32_t)_itow },
+    { "_wfopen",            (uint32_t)_wfopen },
     { "_crt_ret",           (uint32_t)_crt_ret },
     { "", 0 },
 };

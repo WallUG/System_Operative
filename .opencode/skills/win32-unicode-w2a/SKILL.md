@@ -185,12 +185,44 @@ inicializado en una DLL requiere relocación de .rel.data — verificar
 con `readelf -r` si aparecen #PF raros en datos.
 
 ### 3. Thunks W→A de user32 (~15) + msvcrt
-RegisterClassW, CreateWindowExW, SetWindowTextW, GetWindowTextW,
-GetWindowTextLengthW, MessageBoxW, LoadStringW, DefWindowProcW,
-SendMessageW, GetClassNameW, CharNextW, DrawTextW, TextOutW (gdi32),
-GetTextExtentPoint32W (gdi32).
-msvcrt: `_wgetmainargs` (entrada en modo W del CRT de MSVC),
-`_wfopen`, `_wcsicmp`, `_wtoi`, `_wcslen`, `_wcscpy`.
+**COMPLETADO** (commit con el paso 2): ~38 exports W nuevos en user32 +
+msvcrt W:
+- user32: RegisterClassW (copia WNDCLASS de 40 B a la pila y parchea
+  lpszClassName/lpszMenuName), CreateWindowExW, SetWindowTextW,
+  GetWindowTextW, GetWindowTextLengthW, MessageBoxW, LoadStringW,
+  SendMessageW (convierte WM_SETTEXT/WM_GETTEXT), GetClassNameA/W
+  (almacena child_class[] al crear el hijo), CharNextA/W,
+  CharUpperA/W, CharLowerW, CharUpperBuffW/CharLowerBuffW,
+  LoadMenuW/LoadIconW/LoadCursorW/LoadAcceleratorsW,
+  GetWindowLongW/SetWindowLongW/SetClassLongW,
+  RegisterWindowMessageW, GetDlgItemTextW/SetDlgItemTextW,
+  DialogBoxParamW/CreateDialogParamW, y alias sin cadenas:
+  GetMessageW/PeekMessageW/PostMessageW/DispatchMessageW/
+  DefWindowProcW/SendDlgItemMessageW/IsDialogMessageW/
+  TranslateAcceleratorW (MSG y paquetes tienen el mismo layout).
+- msvcrt: `_wgetmainargs` + `__wgetmainargs` (VC6) + `_getmainargs`
+  (alias A) — argv wchar_t desde el TIB. wcscpy/wcscat/wcscmp/
+  wcsncmp/wcsncpy/wcschr/wcsrchr/wcsstr, _wcsicmp/_wcsnicmp/
+  _wcslwr/_wcsupr/_wtoi/_wtol/_itow, _wfopen (stub con log; sin
+  fopen real en el CRT). Ojo: mingw NO enlaza _wgetmainargs
+  (no está en libmsvcrt) — en los tests se resuelve por
+  GetProcAddress(GetModuleHandleA("msvcrt.dll"), "_wgetmainargs").
+- **FS ampliado a 2400 sectores** (1.2 MB): con user32 a 73 KB el
+  bitmap de 2000 sectores desbordaba (IndexError en makefs.py).
+  Cambiar Makefile FS_SECTORS Y boot.asm FS_SECTORS equ (idénticos).
+- Validado: w2atest.exe pasos 3-5 (clase W + ventana + EDIT con texto
+  W por Set/SendMessage, GetClassNameW, Char*W, msvcrt W,
+  _wgetmainargs), test 24/24 PASS.
+
+**3 bugs reales de user32 arreglados**:
+1. RegisterClassA guardaba el PUNTERO del nombre del caller; el W
+   convertía a un buffer de su pila → nombre colgando. Fix: pool
+   estático class_name_pool[MAX_CLASSES][16], RegisterClassA copia.
+2. class_find comparaba punteros (==) en vez de contenido — un cls
+   convertido a buffer temporal nunca encontraba la clase. Fix: ci_eq.
+3. builtin_wndproc leía WM_SETTEXT/WM_GETTEXT del parámetro 3 (wParam)
+   pero el texto va en el 4 (lParam); GetWindowTextA escribía directo
+   y nunca se notó. Fix: s=(char*)b; dst=(char*)b, max=(int)a.
 
 ### 4. Probar con el binario objetivo
 - **notepad.exe de Windows 98/2000** (~50 KB, imports pequeños, sin

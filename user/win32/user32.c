@@ -771,11 +771,13 @@ uint32_t __attribute__((stdcall)) IsCharUpperA(uint32_t c) { (void)c; return 0; 
 
 #define WNDCLASS_LPFN  4   /* lpfnWndProc */
 #define WNDCLASS_HINST 16  /* hInstance */
+#define WNDCLASS_MENU  32  /* lpszMenuName */
 #define WNDCLASS_NAME  36  /* lpszClassName */
 #define MAX_CLASSES    16
 #define MAX_WNDPROCS   64
 
 static uint32_t class_names[MAX_CLASSES];
+static char     class_name_pool[MAX_CLASSES][16];   /* copias estaticas */
 static uint32_t class_procs[MAX_CLASSES];
 static uint32_t class_count;
 
@@ -803,6 +805,7 @@ static int      child_w[CHILD_MAX], child_h[CHILD_MAX];
 static char     child_text[CHILD_MAX][CHILD_TXTLEN];
 static int      child_cur[CHILD_MAX];   /* caret (indice en child_text)  */
 static int      child_edit[CHILD_MAX];  /* 1 = control editable (EDIT/RichEdit) */
+static char     child_class[CHILD_MAX][16]; /* clase del hijo (GetClassNameA/W) */
 static uint32_t focus_edit;             /* control de edicion enfocado  */
 static uint32_t wm_focus_win = 1;       /* Fase 23-B6: foco por ventana */
 
@@ -941,7 +944,7 @@ static int class_find(uint32_t name)
 {
     int i;
     for (i = 0; i < (int)class_count; i++)
-        if (class_names[i] == name)
+        if (ci_eq((const char *)class_names[i], (const char *)name))
             return i;
     return -1;
 }
@@ -1109,7 +1112,17 @@ uint32_t __attribute__((stdcall)) RegisterClassA(uint32_t wc)
     console_print("\n");
     if (proc == 0 || !str_valid((const char *)name))
         return 0;
-    class_names[class_count] = name;
+    /* Fase 25-W2A: copia el nombre a un pool estatico (RegisterClassW
+     * convierte a un buffer temporal; el puntero debe sobrevivir). */
+    {
+        uint32_t i = 0;
+        while (i < 15 && ((const char *)name)[i]) {
+            class_name_pool[class_count][i] = ((const char *)name)[i];
+            i++;
+        }
+        class_name_pool[class_count][i] = 0;
+    }
+    class_names[class_count] = (uint32_t)class_name_pool[class_count];
     class_procs[class_count] = proc;
     class_count++;
     console_print("[user32] RegisterClassA ok\n");
@@ -1168,6 +1181,15 @@ uint32_t __attribute__((stdcall)) CreateWindowExA(uint32_t e, uint32_t cls, uint
         child_h[i] = h;
         child_text[i][0] = 0;
         child_cur[i] = 0;
+        child_class[i][0] = 0;
+        {
+            int k2 = 0;
+            while (k2 < 15 && ((const char *)cls)[k2]) {
+                child_class[i][k2] = ((const char *)cls)[k2];
+                k2++;
+            }
+            child_class[i][k2] = 0;
+        }
         child_edit[i] = ci_eq((const char *)cls, "EDIT") ||
                         ci_eq((const char *)cls, "RichEdit20A") ? 1 : 0;
         if (child_edit[i])
@@ -2459,7 +2481,7 @@ uint32_t builtin_wndproc(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
     if (m == WM_SETTEXT) {
         uint32_t i = hwnd - CHILD_BASE;
         int k = 0;
-        const char *s = (const char *)a;
+        const char *s = (const char *)b;    /* Fase 25-W2A: el texto va en lParam */
         if (s == 0)
             s = "";
         while (s[k] && k < CHILD_TXTLEN - 1) {
@@ -2474,10 +2496,10 @@ uint32_t builtin_wndproc(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
     if (m == WM_GETTEXT) {
         uint32_t i = hwnd - CHILD_BASE;
         int k = 0;
-        char *dst = (char *)a;
+        char *dst = (char *)b;              /* Fase 25-W2A: el buffer va en lParam */
         if (dst == 0)
             return 0;
-        while (child_text[i][k] && k < (int)b - 1) {
+        while (child_text[i][k] && k < (int)a - 1) {
             dst[k] = child_text[i][k];
             k++;
         }
@@ -4118,6 +4140,398 @@ typedef struct {
     uint32_t fn;
 } win32_export_t;
 
+/* ==================================================================
+ * Fase 25 (W2A) paso 3: thunks W->A de user32. El texto interno
+ * (child_text, titulos, clases) es A; las versiones W convierten
+ * UTF-16<->ASCII (lossy como utf16_to_ascii de los menus). Las
+ * funciones sin cadenas (GetMessageW, DefWindowProcW...) son
+ * alias directos: el layout de MSG/MSGQ es identico.
+ * ================================================================== */
+
+static void ascii_to_utf16(uint16_t *dst, uint32_t max, const char *src)
+{
+    uint32_t k = 0;
+    if (max == 0)
+        return;
+    while (k < max - 1 && src[k]) {
+        dst[k] = (uint16_t)(uint8_t)src[k];
+        k++;
+    }
+    dst[k] = 0;
+}
+
+uint32_t __attribute__((stdcall)) RegisterClassW(uint32_t wc)
+{
+    uint8_t copy[40];
+    uint16_t wname[64], wmenu[64];
+    char aname[64], amenu[64];
+    uint32_t i, name, menu;
+
+    if (wc == 0)
+        return 0;
+    for (i = 0; i < 40; i++)
+        copy[i] = *(const uint8_t *)((uint32_t)wc + i);
+    name = rd32u(copy + WNDCLASS_NAME);
+    menu = rd32u(copy + WNDCLASS_MENU);
+    if (name != 0) {
+        for (i = 0; i < 63 && rd16u((const uint8_t *)name + i * 2); i++)
+            wname[i] = rd16u((const uint8_t *)name + i * 2);
+        wname[i] = 0;
+        utf16_to_ascii(aname, (const uint8_t *)wname, sizeof(aname));
+        wr32u(copy + WNDCLASS_NAME, (uint32_t)aname);
+    }
+    if (menu != 0) {
+        for (i = 0; i < 63 && rd16u((const uint8_t *)menu + i * 2); i++)
+            wmenu[i] = rd16u((const uint8_t *)menu + i * 2);
+        wmenu[i] = 0;
+        utf16_to_ascii(amenu, (const uint8_t *)wmenu, sizeof(amenu));
+        wr32u(copy + WNDCLASS_MENU, (uint32_t)amenu);
+    }
+    return RegisterClassA((uint32_t)copy);
+}
+
+uint32_t __attribute__((stdcall)) CreateWindowExW(uint32_t e, uint32_t cls, uint32_t name,
+                         uint32_t style, int x, int y, int w, int h,
+                         uint32_t parent, uint32_t menu, uint32_t inst,
+                         uint32_t param)
+{
+    char acls[64], aname[64];
+    if (cls != 0)
+        utf16_to_ascii(acls, (const uint8_t *)cls, sizeof(acls));
+    if (name != 0)
+        utf16_to_ascii(aname, (const uint8_t *)name, sizeof(aname));
+    return CreateWindowExA(e, cls ? (uint32_t)acls : 0,
+                           name ? (uint32_t)aname : 0, style, x, y, w, h,
+                           parent, menu, inst, param);
+}
+
+uint32_t __attribute__((stdcall)) SetWindowTextW(uint32_t hwnd, uint32_t t)
+{
+    char a[512];
+    if (t != 0) {
+        utf16_to_ascii(a, (const uint8_t *)t, sizeof(a));
+        return SetWindowTextA(hwnd, (uint32_t)a);
+    }
+    return SetWindowTextA(hwnd, 0);
+}
+
+uint32_t __attribute__((stdcall)) GetWindowTextW(uint32_t hwnd, uint32_t b, int n)
+{
+    char a[512];
+    int r;
+    if (b == 0 || n <= 0)
+        return 0;
+    r = (int)GetWindowTextA(hwnd, (uint32_t)a, (n < 512) ? n : 512);
+    if (r == 0)
+        return 0;
+    ascii_to_utf16((uint16_t *)b, (uint32_t)n, a);
+    return (uint32_t)r;
+}
+
+uint32_t __attribute__((stdcall)) GetWindowTextLengthW(uint32_t hwnd)
+{
+    return GetWindowTextLengthA(hwnd);
+}
+
+int __attribute__((stdcall)) MessageBoxW(void *h, const uint16_t *text,
+                        const uint16_t *caption, uint32_t type)
+{
+    char t[512], c[256];
+    if (text != 0)
+        utf16_to_ascii(t, (const uint8_t *)text, sizeof(t));
+    if (caption != 0)
+        utf16_to_ascii(c, (const uint8_t *)caption, sizeof(c));
+    return MessageBoxA(h, text ? t : 0, caption ? c : 0, type);
+}
+
+uint32_t __attribute__((stdcall)) LoadStringW(uint32_t i, uint32_t id, uint32_t b,
+                        int n)
+{
+    char a[512];
+    int r;
+    if (b == 0 || n <= 0)
+        return 0;
+    r = (int)LoadStringA(i, id, (uint32_t)a, (n < 512) ? n : 512);
+    if (r == 0)
+        return 0;
+    ascii_to_utf16((uint16_t *)b, (uint32_t)n, a);
+    return (uint32_t)r;
+}
+
+/* Sin cadenas: alias directos (MSG y paquetes identicos). */
+uint32_t __attribute__((stdcall)) GetMessageW(uint32_t msg, uint32_t hwnd,
+                        uint32_t a, uint32_t b)
+{ return GetMessageA(msg, hwnd, a, b); }
+
+uint32_t __attribute__((stdcall)) PeekMessageW(uint32_t msg, uint32_t hwnd,
+                        uint32_t a, uint32_t b, uint32_t r)
+{ return PeekMessageA(msg, hwnd, a, b, r); }
+
+uint32_t __attribute__((stdcall)) PostMessageW(uint32_t hwnd, uint32_t m,
+                        uint32_t a, uint32_t b)
+{ return PostMessageA(hwnd, m, a, b); }
+
+uint32_t __attribute__((stdcall)) DispatchMessageW(uint32_t msg)
+{ return DispatchMessageA(msg); }
+
+uint32_t __attribute__((stdcall)) DefWindowProcW(uint32_t hwnd, uint32_t m,
+                        uint32_t a, uint32_t b)
+{ return DefWindowProcA(hwnd, m, a, b); }
+
+uint32_t __attribute__((stdcall)) SendDlgItemMessageW(uint32_t d, uint32_t i,
+                        uint32_t m, uint32_t a, uint32_t b)
+{ return SendDlgItemMessageA(d, i, m, a, b); }
+
+uint32_t __attribute__((stdcall)) SendMessageW(uint32_t hwnd, uint32_t m,
+                        uint32_t a, uint32_t b)
+{
+    /* WM_SETTEXT: el lParam es una cadena W -> A. WM_GETTEXT: el
+     * lParam es un buffer W; wParam = max wchar_t. */
+    if (m == WM_SETTEXT) {
+        char t[512];
+        if (b != 0) {
+            utf16_to_ascii(t, (const uint8_t *)b, sizeof(t));
+            return SendMessageA(hwnd, m, a, (uint32_t)t);
+        }
+        return SendMessageA(hwnd, m, a, 0);
+    }
+    if (m == WM_GETTEXT) {
+        char t[512];
+        uint32_t r;
+        r = SendMessageA(hwnd, m, (a < 512) ? a : 512, (uint32_t)t);
+        if (r == 0)
+            return 0;
+        ascii_to_utf16((uint16_t *)b, a, t);
+        return r;
+    }
+    return SendMessageA(hwnd, m, a, b);
+}
+
+uint32_t __attribute__((stdcall)) GetClassNameA(uint32_t hwnd, uint32_t b, int n)
+{
+    char *dst = (char *)b;
+    const char *cls;
+    int k;
+    if (dst == 0 || n <= 0)
+        return 0;
+    if (is_child(hwnd)) {
+        uint32_t i = hwnd - CHILD_BASE;
+        cls = child_class[i];
+    } else {
+        cls = "MyOS";
+    }
+    for (k = 0; cls[k] && k < n - 1; k++)
+        dst[k] = cls[k];
+    dst[k] = 0;
+    return (uint32_t)k;
+}
+
+uint32_t __attribute__((stdcall)) GetClassNameW(uint32_t hwnd, uint32_t b, int n)
+{
+    char a[32];
+    int r;
+    if (b == 0 || n <= 0)
+        return 0;
+    r = (int)GetClassNameA(hwnd, (uint32_t)a, sizeof(a));
+    if (r == 0)
+        return 0;
+    ascii_to_utf16((uint16_t *)b, (uint32_t)n, a);
+    return (uint32_t)r;
+}
+
+/* CharNextA/W: avanza un "caracter" (1 byte en A, 1 wchar en W);
+ * en el NUL final devuelve NULL (semantica Windows). */
+uint32_t __attribute__((stdcall)) CharNextA(uint32_t s)
+{
+    if (s == 0 || *(const char *)s == 0)
+        return 0;
+    return s + 1;
+}
+
+uint32_t __attribute__((stdcall)) CharNextW(uint32_t s)
+{
+    if (s == 0 || rd16u((const uint8_t *)s) == 0)
+        return 0;
+    return s + 2;
+}
+
+/* CharUpperA/W, CharLowerA/W: si la palabra alta es 0 es un unico
+ * caracter; si no, una cadena (conversion in-place). */
+uint32_t __attribute__((stdcall)) CharUpperA(uint32_t c)
+{
+    if (c & 0xFFFF0000u) {
+        char *s = (char *)c;
+        while (*s) {
+            if (*s >= 'a' && *s <= 'z')
+                *s -= 32;
+            s++;
+        }
+        return c;
+    }
+    return (c >= 'a' && c <= 'z') ? c - 32 : c;
+}
+
+uint32_t __attribute__((stdcall)) CharLowerW(uint32_t c)
+{
+    if (c & 0xFFFF0000u) {
+        uint16_t *s = (uint16_t *)c;
+        while (*s) {
+            if (*s >= 'A' && *s <= 'Z')
+                *s += 32;
+            s++;
+        }
+        return c;
+    }
+    return (c >= 'A' && c <= 'Z') ? c + 32 : c;
+}
+
+uint32_t __attribute__((stdcall)) CharUpperW(uint32_t c)
+{
+    if (c & 0xFFFF0000u) {
+        uint16_t *s = (uint16_t *)c;
+        while (*s) {
+            if (*s >= 'a' && *s <= 'z')
+                *s -= 32;
+            s++;
+        }
+        return c;
+    }
+    return (c >= 'a' && c <= 'z') ? c - 32 : c;
+}
+
+uint32_t __attribute__((stdcall)) CharLowerBuffW(uint32_t s, uint32_t n)
+{
+    uint16_t *p = (uint16_t *)s;
+    uint32_t i;
+    for (i = 0; i < n; i++)
+        if (p[i] >= 'A' && p[i] <= 'Z')
+            p[i] += 32;
+    return n;
+}
+
+uint32_t __attribute__((stdcall)) CharUpperBuffW(uint32_t s, uint32_t n)
+{
+    uint16_t *p = (uint16_t *)s;
+    uint32_t i;
+    for (i = 0; i < n; i++)
+        if (p[i] >= 'a' && p[i] <= 'z')
+            p[i] -= 32;
+    return n;
+}
+
+uint32_t __attribute__((stdcall)) IsDialogMessageW(uint32_t d, uint32_t m)
+{ return IsDialogMessageA(d, m); }
+
+uint32_t __attribute__((stdcall)) TranslateAcceleratorW(uint32_t hwnd,
+                        uint32_t haccel, uint32_t m)
+{ return TranslateAcceleratorA(hwnd, haccel, m); }
+
+uint32_t __attribute__((stdcall)) LoadMenuW(uint32_t hinst, const uint16_t *name)
+{
+    char a[64];
+    if (name == 0)
+        return LoadMenuA(hinst, 0);
+    utf16_to_ascii(a, (const uint8_t *)name, sizeof(a));
+    return LoadMenuA(hinst, a);
+}
+
+uint32_t __attribute__((stdcall)) LoadAcceleratorsW(uint32_t hinst,
+                        const uint16_t *name)
+{
+    char a[64];
+    if (name == 0)
+        return LoadAcceleratorsA(hinst, 0);
+    utf16_to_ascii(a, (const uint8_t *)name, sizeof(a));
+    return LoadAcceleratorsA(hinst, (uint32_t)a);
+}
+
+uint32_t __attribute__((stdcall)) LoadIconW(uint32_t hinst, const uint16_t *name)
+{
+    char a[64];
+    if (name == 0)
+        return LoadIconA(hinst, 0);
+    utf16_to_ascii(a, (const uint8_t *)name, sizeof(a));
+    return LoadIconA(hinst, a);
+}
+
+uint32_t __attribute__((stdcall)) LoadCursorW(uint32_t i, const uint16_t *name)
+{
+    char a[64];
+    if (name == 0)
+        return LoadCursorA(i, 0);
+    utf16_to_ascii(a, (const uint8_t *)name, sizeof(a));
+    return LoadCursorA(i, (uint32_t)a);
+}
+
+uint32_t __attribute__((stdcall)) GetWindowLongW(uint32_t hwnd, int idx)
+{ return GetWindowLongA(hwnd, idx); }
+
+uint32_t __attribute__((stdcall)) SetWindowLongW(uint32_t hwnd, int idx, uint32_t v)
+{ return SetWindowLongA(hwnd, idx, v); }
+
+uint32_t __attribute__((stdcall)) SetClassLongW(uint32_t hwnd, int idx, uint32_t v)
+{ return SetClassLongA(hwnd, idx, v); }
+
+uint32_t __attribute__((stdcall)) RegisterWindowMessageW(const uint16_t *s)
+{
+    char a[64];
+    if (s == 0)
+        return 0x0400;
+    utf16_to_ascii(a, (const uint8_t *)s, sizeof(a));
+    return RegisterWindowMessageA((uint32_t)a);
+}
+
+uint32_t __attribute__((stdcall)) GetDlgItemTextW(uint32_t d, int id, uint32_t b,
+                        int n)
+{
+    char a[512];
+    int r;
+    if (b == 0 || n <= 0)
+        return 0;
+    r = (int)GetDlgItemTextA(d, id, (uint32_t)a, (n < 512) ? n : 512);
+    if (r == 0)
+        return 0;
+    ascii_to_utf16((uint16_t *)b, (uint32_t)n, a);
+    return (uint32_t)r;
+}
+
+uint32_t __attribute__((stdcall)) SetDlgItemTextW(uint32_t d, int id, const uint16_t *b)
+{
+    char a[512];
+    if (b == 0)
+        return SetDlgItemTextA(d, id, 0);
+    utf16_to_ascii(a, (const uint8_t *)b, sizeof(a));
+    return SetDlgItemTextA(d, id, (uint32_t)a);
+}
+
+uint32_t __attribute__((stdcall)) DialogBoxParamW(uint32_t i, uint32_t t,
+                        uint32_t p, uint32_t f, uint32_t param)
+{
+    char a[64];
+    uint32_t name = t;
+    if (t != 0 && !(t & 0xFFFF0000u) && t < 0x10000) {
+        /* id numerico: pasa igual */
+    } else if (t != 0) {
+        utf16_to_ascii(a, (const uint8_t *)t, sizeof(a));
+        name = (uint32_t)a;
+    }
+    return DialogBoxParamA(i, name, p, f, param);
+}
+
+uint32_t __attribute__((stdcall)) CreateDialogParamW(uint32_t i, uint32_t t,
+                        uint32_t p, uint32_t f, uint32_t param)
+{
+    char a[64];
+    uint32_t name = t;
+    if (t != 0 && !(t & 0xFFFF0000u) && t < 0x10000) {
+        /* id numerico: pasa igual */
+    } else if (t != 0) {
+        utf16_to_ascii(a, (const uint8_t *)t, sizeof(a));
+        name = (uint32_t)a;
+    }
+    return CreateDialogParamA(i, name, p, f, param);
+}
+
 win32_export_t __exports[] __attribute__((section(".exports"))) = {
     { "MessageBoxA", (uint32_t)&MessageBoxA },
     { "LoadMenuA", (uint32_t)&LoadMenuA },
@@ -4212,5 +4626,43 @@ win32_export_t __exports[] __attribute__((section(".exports"))) = {
     { "CloseClipboard", (uint32_t)&CloseClipboard },
     { "EmptyClipboard", (uint32_t)&EmptyClipboard },
     { "IsClipboardFormatAvailable", (uint32_t)&IsClipboardFormatAvailable },
+    /* Fase 25-W2A paso 3: thunks W->A */
+    { "RegisterClassW",        (uint32_t)&RegisterClassW },
+    { "CreateWindowExW",       (uint32_t)&CreateWindowExW },
+    { "SetWindowTextW",        (uint32_t)&SetWindowTextW },
+    { "GetWindowTextW",        (uint32_t)&GetWindowTextW },
+    { "GetWindowTextLengthW",  (uint32_t)&GetWindowTextLengthW },
+    { "MessageBoxW",           (uint32_t)&MessageBoxW },
+    { "LoadStringW",           (uint32_t)&LoadStringW },
+    { "GetMessageW",           (uint32_t)&GetMessageW },
+    { "PeekMessageW",          (uint32_t)&PeekMessageW },
+    { "PostMessageW",          (uint32_t)&PostMessageW },
+    { "DispatchMessageW",      (uint32_t)&DispatchMessageW },
+    { "DefWindowProcW",        (uint32_t)&DefWindowProcW },
+    { "SendMessageW",          (uint32_t)&SendMessageW },
+    { "SendDlgItemMessageW",   (uint32_t)&SendDlgItemMessageW },
+    { "GetClassNameA",         (uint32_t)&GetClassNameA },
+    { "GetClassNameW",         (uint32_t)&GetClassNameW },
+    { "CharNextA",             (uint32_t)&CharNextA },
+    { "CharNextW",             (uint32_t)&CharNextW },
+    { "CharUpperA",            (uint32_t)&CharUpperA },
+    { "CharUpperW",            (uint32_t)&CharUpperW },
+    { "CharLowerW",            (uint32_t)&CharLowerW },
+    { "CharUpperBuffW",        (uint32_t)&CharUpperBuffW },
+    { "CharLowerBuffW",        (uint32_t)&CharLowerBuffW },
+    { "IsDialogMessageW",      (uint32_t)&IsDialogMessageW },
+    { "TranslateAcceleratorW", (uint32_t)&TranslateAcceleratorW },
+    { "LoadMenuW",             (uint32_t)&LoadMenuW },
+    { "LoadAcceleratorsW",     (uint32_t)&LoadAcceleratorsW },
+    { "LoadIconW",             (uint32_t)&LoadIconW },
+    { "LoadCursorW",           (uint32_t)&LoadCursorW },
+    { "GetWindowLongW",        (uint32_t)&GetWindowLongW },
+    { "SetWindowLongW",        (uint32_t)&SetWindowLongW },
+    { "SetClassLongW",         (uint32_t)&SetClassLongW },
+    { "RegisterWindowMessageW",(uint32_t)&RegisterWindowMessageW },
+    { "GetDlgItemTextW",       (uint32_t)&GetDlgItemTextW },
+    { "SetDlgItemTextW",       (uint32_t)&SetDlgItemTextW },
+    { "DialogBoxParamW",       (uint32_t)&DialogBoxParamW },
+    { "CreateDialogParamW",    (uint32_t)&CreateDialogParamW },
     { "", 0 },
 };
