@@ -226,12 +226,40 @@ el pen negro por defecto (muestrear el interior, no la esquina).
 
 ### P3.1. Desktop con iconos (taskbar ya existe)
 
-**Estado**: desktop.c ELF con taskbar + fork+exec de apps, sin iconos.
-
-**Tarea**: renderizar iconos (de recursos .rsrc o un set embebido) en el
-escritorio + doble clic para lanzar.
-
-**Por qué**: valor de UX alto, % de compatibilidad bajo.
+**Estado: COMPLETADO.** `desktop.c` renderiza iconos en el escritorio
++ doble clic para lanzar:
+- **Iconos desde el .rsrc**: `pe_icon_load` lee el `.exe` del MEFS
+  (`sys_fsize`+`sys_dread`), camina el árbol tipo/id/lang y extrae el
+  primer icono 32x32 (preferente 32bpp; soporta 4/8bpp con paleta +
+  AND mask) del `RT_GROUP_ICON` → `RT_ICON`. NOTA FORMATO: los
+  offsets de los DIRECTORIOS del árbol son relativos a la sección
+  `.rsrc`, pero `OffsetToData` de los datos es un **RVA absoluto de
+  imagen** (`img + raw_off + (val - dir_rva)`). Sin eso se lee fuera
+  del buffer (PF). Fallbacks procedurales por tipo de app
+  (carpeta/burbuja/pantalla).
+- **Clic simple** → selección (resaltado + borde, blit por región con
+  `sys_winupdate_rect`); **doble clic** (mismo icono, 2 UPs en <300 ms
+  vía `SYS_TICKS 41` — nuevo syscall de `timer_get_ticks`, 100 Hz)
+  → fork+exec. Los eventos inyectados (SYS_MOUSE_INJECT) recorren
+  wm_route como reales.
+- **Tests headless**: teclas `i`/`d` en el desktop inyectan clic
+  simple/doble en el icono 1 (metapad); tras el lanzamiento el
+  desktop inyecta clics periódicos en el botón X (676,43) cada 2.5 s
+  (X_PERIOD=250 ticks, X_TRIES=14) porque el teclado ya va a metapad
+  (foco). El monitor QEMU no inyecta PS/2 fiable.
+- **3 bugs reales arreglados en el camino** (todos pre-existentes):
+  (1) `ata_wait_ready` sin salida de éxito: cada escritura de disco
+  giraba los 4 M de intentos (~0.7 s/sector) y el cierre de metapad
+  (registro → FWRITE+FLUSH, decenas de sectores) congelaba el sistema
+  minutos; (2) `DestroyWindow` no entregaba `WM_DESTROY` → las apps
+  que cierran limpio nunca hacen PostQuitMessage y quedan vivas sin
+  ventana (la shell no recupera el teclado); (3) `val_enc` (advapi32)
+  escribía sin cota en `line[256]` → un REG_SZ sin NUL o un REG_BINARY
+  de 128 B desbordaba la pila (eip=0x30303030).
+Test `tools/test_fase24p31.py` **10/10 PASS** (iconos renderizados y
+colores verificados en PPM — NOTA: el PPM de QEMU muestra el color
+lógico 0x00RRGGBB como (G,B,R) para el path de wl_putpixel; el
+bootscreen (sin swap) aparece como (B,G,R), ojo al comparar).
 
 ### P3.2. Explorer Win32 completo (listview ya validado en C11)
 

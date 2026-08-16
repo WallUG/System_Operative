@@ -53,6 +53,7 @@
                                subdirectorio (Fase 23-A4)                */
 #define SYS_THREADCREATE 39 /* ebx=fn, ecx=param, edx=&tid (Fase 24-P2.2) */
 #define SYS_THREADEXIT 40   /* ebx=code: termina el hilo actual          */
+#define SYS_TICKS    41      /* ticks del timer (100 Hz; doble clic P3.1) */
 
 void syscall_init(void);            /* registra el gate 0x80 (DPL=3) */
 void syscall_handler(registers_t *regs);

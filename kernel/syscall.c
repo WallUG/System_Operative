@@ -23,6 +23,7 @@
 #include "mem/paging.h"
 #include "mem/heap.h"
 #include "mem/uheap.h"
+#include "drivers/timer.h"
 #include "elf.h"
 #include "pe.h"
 #include "win32.h"
@@ -384,6 +385,11 @@ void syscall_handler(registers_t *regs)
     case SYS_THREADEXIT: { /* Fase 24-P2.2: termina el hilo actual */
         (void)regs->ebx;
         exit_current(regs);
+        break;
+    }
+    case SYS_TICKS: { /* Fase 24-P3.1: ticks del timer (100 Hz), para
+                       * detectar doble clic en el escritorio */
+        regs->eax = timer_get_ticks();
         break;
     }
     case SYS_FWRITE: { /* ebx=nombre, ecx=buf, edx=len: sobrescribe */

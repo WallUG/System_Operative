@@ -45,12 +45,22 @@ static int ata_wait_ready(void)
 {
     for (uint32_t tries = 0; tries < 4000000; tries++) {
         uint8_t st = inb(ATA_STATUS);
-        if (st & 0x80)                  /* BSY: aun ocupado */
+        if (st & 0x80) {                /* BSY: aun ocupado */
+            if (tries % 100000 == 0)
+                io_wait();
             continue;
+        }
         if (st & 0x01)                  /* ERR */
             return -1;
-        if (tries % 100000 == 0)
-            io_wait();
+        return 0;                       /* listo: BSY=0 y ERR=0.
+                                         * Fase 24-P3.1: faltaba este
+                                         * retorno; cada escritura de
+                                         * disco giraba los 4 M de
+                                         * intentos (~0.7 s por sector)
+                                         * y el cierre de metapad
+                                         * (registro -> FLUSH, decenas
+                                         * de sectores) congelaba el
+                                         * sistema decenas de segundos */
     }
     return 0;
 }

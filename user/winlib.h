@@ -35,6 +35,7 @@
 #define SYS_FCREATE_IN 38
 #define SYS_FWRITE 27
 #define SYS_FLUSH 29
+#define SYS_TICKS 41
 
 /* --- eventos (kernel/drivers/mouse.h) --- */
 #define EV_MOVE         1
@@ -232,6 +233,37 @@ static inline int sys_winupdate(int id)
     __asm__ volatile("int $0x80" : "=a"(r)
                      : "a"(SYS_WINUPDATE), "b"(id), "c"(0)
                      : "memory");
+    return r;
+}
+
+/* Fase 24-P3.1: actualizacion por region (x,y,w,h en coords de cliente). */
+static inline int sys_winupdate_rect(int id, int x, int y, int w, int h)
+{
+    int r;
+    uint32_t rect[4];
+    rect[0] = (uint32_t)x;
+    rect[1] = (uint32_t)y;
+    rect[2] = (uint32_t)w;
+    rect[3] = (uint32_t)h;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_WINUPDATE), "b"(id), "c"(rect) : "memory");
+    return r;
+}
+
+/* Fase 24-P3.1: ticks del timer del kernel (100 Hz; doble clic). */
+static inline uint32_t sys_ticks(void)
+{
+    uint32_t r;
+    __asm__ volatile("int $0x80" : "=a"(r) : "a"(SYS_TICKS));
+    return r;
+}
+
+/* Tamano de un archivo del MEFS (-1 si no existe). */
+static inline int sys_fsize(const char *name)
+{
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_FSIZE), "b"(name) : "memory");
     return r;
 }
 

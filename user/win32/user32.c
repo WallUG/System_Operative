@@ -1317,11 +1317,21 @@ uint32_t __attribute__((stdcall)) DestroyWindow(uint32_t hwnd)
             wnd_proc[hwnd] = 0;
             return 1;
         }
-        if (wnd_buf[hwnd])
-            sys_free(wnd_buf[hwnd]);
-        wnd_buf[hwnd] = 0;
-        wnd_proc[hwnd] = 0;
-        sys_winclose(hwnd);
+        if (wnd_proc[hwnd]) {
+            uint32_t proc = wnd_proc[hwnd];
+            if (wnd_buf[hwnd])
+                sys_free(wnd_buf[hwnd]);
+            wnd_buf[hwnd] = 0;
+            sys_winclose(hwnd);
+            /* Fase 24-P3.1: entregar WM_DESTROY al wndproc antes de
+             * retirarlo (semantica real de DestroyWindow). Sin esto,
+             * las apps que cierran "limpio" (metapad con el boton X)
+             * nunca hacen PostQuitMessage y quedan vivas sin ventana:
+             * la shell nunca recupera el teclado ni llega exit:0. */
+            wnd_proc[hwnd] = 0;
+            ((uint32_t(*)(uint32_t, uint32_t, uint32_t, uint32_t))proc)
+                (hwnd, WM_DESTROY, 0, 0);
+        }
     }
     return 1;
 }

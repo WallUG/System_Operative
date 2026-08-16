@@ -174,28 +174,47 @@ static void rkey_path(uint32_t hkey, const char *subkey, char *out)
 }
 
 /* --- persistencia a registry.ini --- */
-/* Serializa un valor a "name=tt:valor". */
-static void val_enc(rval_t *v, char *out)
+/* Serializa un valor a "name=tt:valor". 'end' limita el buffer de
+ * salida (line[256] en reg_save): los valores largos se cortan en vez
+ * de desbordar la pila (Fase 24-P3.1: un REG_SZ sin NUL o un REG_BINARY
+ * de 128 B escribian hex/'0's sobre el ret addr -> eip=0x30303030). */
+static void val_enc(rval_t *v, char *out, char *end)
 {
-    int i;
+    int i, n;
     mcpy(out, v->name);
     out += mlen(out);
     *out++ = '=';
     if (v->type == REG_DWORD) {
-        *out++ = 'd'; *out++ = ':';
-        mi2a(out, *(uint32_t *)v->data);
-    } else if (v->type == REG_SZ) {
-        *out++ = 's'; *out++ = ':';
-        mcpy(out, (char *)v->data);
-    } else {                       /* binary: hex */
-        *out++ = 'b'; *out++ = ':';
-        for (i = 0; i < (int)v->size; i++) {
-            static const char *hx = "0123456789abcdef";
-            out[0] = hx[v->data[i] >> 4];
-            out[1] = hx[v->data[i] & 0xF];
-            out += 2;
+        if (out + 10 < end) {
+            *out++ = 'd'; *out++ = ':';
+            mi2a(out, *(uint32_t *)v->data);
         }
-        *out = 0;
+    } else if (v->type == REG_SZ) {
+        n = (int)v->size;
+        if (n > VAL_MAX)
+            n = VAL_MAX;
+        if (out + 2 + n + 1 <= end) {
+            *out++ = 's'; *out++ = ':';
+            for (i = 0; i < n; i++)
+                out[i] = ((const char *)v->data)[i];
+            out[n] = 0;
+        }
+    } else {                       /* binary: hex */
+        n = (int)v->size;
+        if (n > VAL_MAX)
+            n = VAL_MAX;
+        if (out + 2 + n * 2 + 1 > end)
+            n = (int)((end - out - 3) / 2);     /* cortar al caber */
+        if (n > 0) {
+            static const char *hx = "0123456789abcdef";
+            *out++ = 'b'; *out++ = ':';
+            for (i = 0; i < n; i++) {
+                out[0] = hx[v->data[i] >> 4];
+                out[1] = hx[v->data[i] & 0xF];
+                out += 2;
+            }
+            *out = 0;
+        }
     }
 }
 
@@ -213,7 +232,7 @@ static void reg_save(void)
         for (v = 0; v < rval_n; v++) {
             if (mcmp(rvals[v].path, rkeys[k]) != 0)
                 continue;
-            val_enc(&rvals[v], line);
+            val_enc(&rvals[v], line, line + sizeof(line) - 1);
             for (int i = 0; line[i] && p < end - 1; i++) *p++ = line[i];
             *p++ = '\n';
         }
