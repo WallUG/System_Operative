@@ -255,18 +255,42 @@ Notas del binario W:
 
 ### 5. Probar los drivers de audio y red con apps reales
 
-**Audio (winmm.dll — el siguiente grupo tras el set W)**:
-- Implementar **winmm.dll** con: `PlaySoundA`, `waveOutOpen`,
-  `waveOutWrite`, `waveOutClose`, `waveOutReset`, `waveOutGetDevCaps`,
-  `mciSendStringA`, `timeGetTime` — todos sobre el AC'97 (un buffer
-  de DMA a la vez, como el beep de arranque).
-- Apps de prueba: **sndrec32.exe** (Grabadora de sonidos de Win98 —
-  reproduce WAV), **CD Player de Win98** (mciSendStringA), o un
-  player WAV mingw hecho a medida que use waveOutWrite.
-- Métrica: que un .exe real reproduzca un WAV por el AC'97 (el test
-  verifica el wav del host con `-audiodev wav` — las muestras ya no
-  deben ser ceros; ojo: los buffers de DMA deben ir en el HEAP
-  (kmalloc), la BSS estática se lee como 0x00 por DMA en QEMU).
+**Audio (winmm.dll — HECHO, commit 697ce05)**:
+- winmm.dll implementada y probada: `PlaySoundA` (SND_FILENAME),
+  `waveOutOpen/Write/Close/Reset/GetDevCaps/PrepareHeader/
+  UnprepareHeader` (WAVEHDR real: lpData en +0, dwBufferLength en +4),
+  `mciSendStringA` (open/play/close), `timeGetTime` — todo sobre el
+  AC'97 vía **SYS_AUDIO_PLAY 46** (ebx=buf user, ecx=bytes, edx=rate;
+  el kernel copia a kmalloc — el DMA NO toca páginas de usuario — y
+  reproduce en trozos de 1 s bloqueando; poll del SR, sin IRQ).
+- wavplay.exe (mingw `-lwinmm`, imagen base 0x80000000): genera
+  tone.wav (440 Hz, 0.5 s, 22050 muestras mono 16-bit) con
+  CreateFileA/WriteFile y lo reproduce con las 3 APIs. Test
+  tools/test_fase25w2a5.py = 13/13 PASS.
+- Conversiones en winmm: 8<->16 bit (unsigned) y mono<->stereo
+  (duplicado); la TASA se pasa al codec tal cual (8000-48000, la
+  escribe el kernel con outw por reproducción).
+- **Lección crítica del driver AC97 (corrige P4.5)**: los registros
+  NAM de QEMU son SOLO de 16 bits — inl/outl devuelven 0xFFFFFFFF y
+  son no-ops POR DISEÑO. El codec nunca había respondido (P4.5 solo
+  validaba el poll del bus master, que completa aunque no haya
+  codec). Ahora: reset con outw(NAM+0x00), id=0x8384 (Sigmatel),
+  volumen master/PCM con outw (0x02/0x18, valor 0 = sin mute),
+  tasa con outw(0x2C) — VRA ya activo tras el reset (0x28=0x0009).
+  BD: `ac97_bd[1] = len | 0x80000000` (IOC = bit 31; el bit 0 forma
+  parte del length y lo rompe).
+- **Bug conocido de QEMU 10.2.2**: el wav del host sale distorsionado
+  (regresión 42061a14 "audio/mixeng: replace redundant pcm_info
+  fields", conv/clip usa hw->info.af en vez de sw->info.af; fix
+  924b0be8 aún sin empaquetar en Debian/Kali; `out.mixing-engine=off`
+  rompe el backend wav). La validación de contenido se apoya en el
+  lado GUEST: el kernel imprime `ac97: play rate=.. bytes=.. cksum=
+  .. res=0` por reproducción (DMA completado con los datos correctos)
+  + el wav del host con cabecera correcta (44100/2/16) y muestras no
+  nulas (>30000: beep + 3 plays; cada segmento sale x2 por el bug).
+- sndrec32.exe de Win98 no se ha probado aún (requiere más imports:
+  waveOutGetNumDevs, GetShortPathNameA, etc.) — wavplay cubre el
+  camino.
 
 **Internet (stack TCP/IP — primero, los navegadores lo necesitan)**:
 - El driver RTL8139 hoy hace ARP + ICMP. Para navegar hace falta
