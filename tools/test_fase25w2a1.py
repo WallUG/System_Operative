@@ -100,6 +100,46 @@ def run():
         print('FAIL - w2atest no pasa'); qemu.terminate(); return
     check('Set W completo (cmdlineW/moduleW/envW/tid/ticks/qpc/filetime/cs)', True)
 
+    if not waitstr('w2atest: createw/writew/attrsW/deletew ok', 10):
+        print('FAIL - CreateFileW'); qemu.terminate(); return
+    check('CreateFileW/GetFileAttributesW/DeleteFileW', True)
+
+    if not waitstr('w2atest: cp437 unicode name ok', 10):
+        print('FAIL - cp437'); qemu.terminate(); return
+    check('cp437: nombre unicode cafe.txt (0x82) crea y borra', True)
+
+    if not waitstr('w2atest: findw items=', 10):
+        print('FAIL - FindFirstFileW'); qemu.terminate(); return
+    check('FindFirstFileW/FindNextFileW listan y encuentran', True)
+
+    if not waitstr('w2atest: paths W: temp=C:\\TEMP', 10):
+        print('FAIL - paths W'); qemu.terminate(); return
+    check('GetTempPathW/GetWindowsDirectoryW/GetSystemDirectoryW/GetCurrentDirectoryW', True)
+
+    if not waitstr("w2atest: envW PATH='.'", 10):
+        print('FAIL - envW'); qemu.terminate(); return
+    check('GetEnvironmentVariableW (PATH=.)', True)
+
+    if not waitstr('w2atest: lstr*W ok', 10):
+        print('FAIL - lstr*W'); qemu.terminate(); return
+    check('lstrlenW/lstrcpyW/lstrcatW/lstrcmpW/lstrcmpiW', True)
+
+    if not waitstr("w2atest: fullW='metapad.exe' drvW='C:\\'", 10):
+        print('FAIL - fullpath/drives'); qemu.terminate(); return
+    check('GetFullPathNameW + GetLogicalDriveStringsW', True)
+
+    if not waitstr('w2atest: copyw/movew ok', 10):
+        print('FAIL - copyw/movew'); qemu.terminate(); return
+    check('CopyFileW + MoveFileW', True)
+
+    if not waitstr('w2atest: mkdirW/rmdirW ok', 10):
+        print('FAIL - mkdirW/rmdirW'); qemu.terminate(); return
+    check('CreateDirectoryW + RemoveDirectoryW', True)
+
+    if not waitstr('w2atest: fmtW n=', 10):
+        print('FAIL - fmtW'); qemu.terminate(); return
+    check('FormatMessageW/GetDateFormatW/GetLocaleInfoW', True)
+
     if not waitstr('exit:0', 10):
         print('FAIL - exit != 0'); qemu.terminate(); return
     check('w2atest termina con exit 0', True)

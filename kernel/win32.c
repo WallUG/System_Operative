@@ -91,6 +91,8 @@ static int parse_exports(win32_module_t *m, const uint8_t *bin)
     m->rel_text_size = 0;
     m->rel_data_off = 0;
     m->rel_data_size = 0;
+    m->rel_exports_off = 0;
+    m->rel_exports_size = 0;
     m->rel_rodata_off = 0;
     m->rel_rodata_size = 0;
     for (i = 0; i < h->e_shnum; i++) {
@@ -101,10 +103,12 @@ static int parse_exports(win32_module_t *m, const uint8_t *bin)
         } else if (strcmp(nm, ".rel.text") == 0) {
             m->rel_text_off = sh[i].sh_offset;
             m->rel_text_size = sh[i].sh_size;
-        } else if (strcmp(nm, ".rel.data") == 0 ||
-                   strcmp(nm, ".rel.exports") == 0) {
+        } else if (strcmp(nm, ".rel.data") == 0) {
             m->rel_data_off = sh[i].sh_offset;
             m->rel_data_size = sh[i].sh_size;
+        } else if (strcmp(nm, ".rel.exports") == 0) {
+            m->rel_exports_off = sh[i].sh_offset;
+            m->rel_exports_size = sh[i].sh_size;
         } else if (strcmp(nm, ".rel.rodata") == 0) {
             m->rel_rodata_off = sh[i].sh_offset;
             m->rel_rodata_size = sh[i].sh_size;
@@ -114,7 +118,7 @@ static int parse_exports(win32_module_t *m, const uint8_t *bin)
         return -1;
     m->rel_off = m->rel_text_off ? m->rel_text_off : m->rel_data_off;
     m->rel_size = m->rel_text_size + m->rel_data_size +
-                  m->rel_rodata_size;
+                  m->rel_exports_size + m->rel_rodata_size;
     return 0;
 }
 
@@ -172,6 +176,19 @@ static int apply_relocs(win32_module_t *m, uint32_t old_base,
     }
     for (i = 0; i < m->rel_data_size; i += 8) {
         uint32_t off = m->rel_data_off + i;
+        uint32_t r_offset = *(uint32_t *)(void *)(bin + off);
+        uint32_t info = *(uint32_t *)(void *)(bin + off + 4);
+        uint32_t type = info & 0xFFu;
+        uint32_t fo;
+        if (type != R_386_32)
+            continue;
+        fo = reloc_va_to_off(m, r_offset);
+        if (fo == (uint32_t)-1 || fo + 4 > m->file_size)
+            continue;
+        *(uint32_t *)(void *)(bin + fo) += delta;
+    }
+    for (i = 0; i < m->rel_exports_size; i += 8) {
+        uint32_t off = m->rel_exports_off + i;
         uint32_t r_offset = *(uint32_t *)(void *)(bin + off);
         uint32_t info = *(uint32_t *)(void *)(bin + off + 4);
         uint32_t type = info & 0xFFu;

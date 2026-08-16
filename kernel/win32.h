@@ -83,7 +83,8 @@ typedef struct {
     uint32_t rel_off;           /* primera seccion de relocs (.rel.text) */
     uint32_t rel_size;
     uint32_t rel_text_off, rel_text_size;   /* .rel.text (codigo) */
-    uint32_t rel_data_off, rel_data_size;   /* .rel.data/.rel.exports */
+    uint32_t rel_data_off, rel_data_size;   /* .rel.data (punteros .data) */
+    uint32_t rel_exports_off, rel_exports_size; /* .rel.exports (tabla) */
     uint32_t rel_rodata_off, rel_rodata_size; /* .rel.rodata (tablas) */
     const uint8_t *bin;         /* binario ELF en RAM del kernel */
 } win32_module_t;

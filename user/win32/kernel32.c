@@ -28,6 +28,7 @@
 #define SYS_FWRITE  27
 #define SYS_FDELETE 28
 #define SYS_FLUSH   29
+#define SYS_MKDIR   37
 #define SYS_THREADCREATE 39 /* Fase 24-P2.2: ebx=fn, ecx=param, edx=&tid */
 #define SYS_THREADEXIT 40   /* Fase 24-P2.2: ebx=code */
 #define SYS_TICKS   41      /* ticks del timer (100 Hz) */
@@ -84,6 +85,96 @@ static int ci_eq(const char *a, const char *b)
 static unsigned int strlen_u(const char *s)
 {
     unsigned int n = 0;
+    while (s[n]) n++;
+    return n;
+}
+
+static uint32_t copy_str_n(char *dst, uint32_t n, const char *src);
+
+/* --- Fase 25 (W2A): conversion UTF-16 <-> cp437 ---
+ * cp437 = la codepage de la consola/MEFS de MyOS. Los puntos Unicode
+ * comunes (Latin-1 + simbolos) mapean a su byte cp437; lo no mapeado
+ * se aplana a '?' (W->A) o U+FFFD (A->W). ASCII pasa directo. */
+
+typedef struct { uint16_t u; uint8_t c; } cp437_map_t;
+
+static const cp437_map_t cp437_map[] = {
+    { 0x00C7,0x80 },{ 0x00FC,0x81 },{ 0x00E9,0x82 },{ 0x00E2,0x83 },
+    { 0x00E4,0x84 },{ 0x00E0,0x85 },{ 0x00E5,0x86 },{ 0x00E7,0x87 },
+    { 0x00EA,0x88 },{ 0x00EB,0x89 },{ 0x00E8,0x8A },{ 0x00EF,0x8B },
+    { 0x00EE,0x8C },{ 0x00EC,0x8D },{ 0x00C4,0x8E },{ 0x00C5,0x8F },
+    { 0x00C9,0x90 },{ 0x00E6,0x91 },{ 0x00C6,0x92 },{ 0x00F4,0x93 },
+    { 0x00F6,0x94 },{ 0x00F2,0x95 },{ 0x00FB,0x96 },{ 0x00F9,0x97 },
+    { 0x00FF,0x98 },{ 0x00D6,0x99 },{ 0x00DC,0x9A },{ 0x00A2,0x9B },
+    { 0x00A3,0x9C },{ 0x00A5,0x9D },{ 0x20A7,0x9E },{ 0x0192,0x9F },
+    { 0x00E1,0xA0 },{ 0x00ED,0xA1 },{ 0x00F3,0xA2 },{ 0x00FA,0xA3 },
+    { 0x00F1,0xA4 },{ 0x00D1,0xA5 },{ 0x00AA,0xA6 },{ 0x00BA,0xA7 },
+    { 0x00BF,0xA8 },{ 0x2310,0xA9 },{ 0x00AC,0xAA },{ 0x00BD,0xAB },
+    { 0x00BC,0xAC },{ 0x00A1,0xAD },{ 0x00AB,0xAE },{ 0x00BB,0xAF },
+    { 0x03B1,0xE0 },{ 0x00DF,0xE1 },{ 0x0393,0xE2 },{ 0x03C0,0xE3 },
+    { 0x03A3,0xE4 },{ 0x03C3,0xE5 },{ 0x00B5,0xE6 },{ 0x03C4,0xE7 },
+    { 0x03A6,0xE8 },{ 0x0398,0xE9 },{ 0x03A9,0xEA },{ 0x03B4,0xEB },
+    { 0x221E,0xEC },{ 0x03C6,0xED },{ 0x03B5,0xEE },{ 0x2229,0xEF },
+    { 0x2261,0xF0 },{ 0x00B1,0xF1 },{ 0x2265,0xF2 },{ 0x2264,0xF3 },
+    { 0x2320,0xF4 },{ 0x2321,0xF5 },{ 0x00F7,0xF6 },{ 0x2248,0xF7 },
+    { 0x00B0,0xF8 },{ 0x00B9,0xF9 },{ 0x00B7,0xFA },{ 0x221A,0xFB },
+    { 0x00B3,0xFC },{ 0x00B2,0xFD },{ 0x25A0,0xFE },{ 0x00A0,0xFF },
+};
+
+/* UTF-16 (terminada en 0) -> cadena cp437 en out (max = bytes, NUL
+ * incluido). */
+static void utf16_to_cp437(char *out, const uint16_t *in, int max)
+{
+    int k = 0;
+    if (max <= 0)
+        return;
+    while (k < max - 1 && in[k]) {
+        uint16_t u = in[k];
+        if (u < 0x80) {
+            out[k] = (char)u;
+        } else {
+            unsigned i;
+            char c = '?';
+            for (i = 0; i < sizeof(cp437_map) / sizeof(cp437_map[0]); i++)
+                if (cp437_map[i].u == u) {
+                    c = (char)cp437_map[i].c;
+                    break;
+                }
+            out[k] = c;
+        }
+        k++;
+    }
+    out[k] = 0;
+}
+
+/* cp437 (terminada en 0) -> UTF-16 en out (max = wchar_t, NUL
+ * incluido). Devuelve el numero de wchar_t escritos (sin el NUL). */
+static uint32_t cp437_to_utf16(uint16_t *out, uint32_t max, const char *in)
+{
+    uint32_t k = 0, i;
+    if (max == 0)
+        return 0;
+    for (i = 0; in[i] && k < max - 1; i++) {
+        uint8_t b = (uint8_t)in[i];
+        uint16_t u = (b < 0x80) ? (uint16_t)b : 0xFFFD;
+        if (b >= 0x80) {
+            unsigned j;
+            for (j = 0; j < sizeof(cp437_map) / sizeof(cp437_map[0]); j++)
+                if (cp437_map[j].c == b) {
+                    u = cp437_map[j].u;
+                    break;
+                }
+        }
+        out[k++] = u;
+    }
+    out[k] = 0;
+    return k;
+}
+
+/* Longitud UTF-16 (sin el NUL). */
+static uint32_t wstrlen(const uint16_t *s)
+{
+    uint32_t n = 0;
     while (s[n]) n++;
     return n;
 }
@@ -299,7 +390,7 @@ static uint16_t w_cmdline[WIN32_TIB_CMDLINE_LEN];
 uint16_t *__attribute__((stdcall)) GetCommandLineW(void)
 {
     char *a = GetCommandLineA();
-    int i;
+    uint32_t i;
     for (i = 0; i < WIN32_TIB_CMDLINE_LEN - 1 && a[i]; i++)
         w_cmdline[i] = (uint16_t)(uint8_t)a[i];
     w_cmdline[i] = 0;
@@ -795,6 +886,15 @@ static int sys_flush(void)
     return r;
 }
 
+static int sys_mkdir(const char *name, uint32_t parent)
+{
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_MKDIR), "b"(name), "c"(parent)
+                     : "memory");
+    return r;
+}
+
 /* Abre un archivo del FS. Devuelve HANDLE (0x100+slot) o -1. */
 void *__attribute__((stdcall)) CreateFileA(const char *name, uint32_t access, uint32_t share,
                   uint32_t sec_attrs, uint32_t creation, uint32_t flags,
@@ -1048,16 +1148,14 @@ void __attribute__((stdcall)) GetCurrentDirectoryA(uint32_t n, char *buf)
     trace("[k32] GetCurrentDirectoryA n=");
     trace_hex(n);
     trace("\n");
-    (void)n;
-    if (buf)
-        buf[0] = 0;
+    copy_str_n(buf, n, "C:\\MyOS");
 }
 
 void __attribute__((stdcall)) GetCurrentDirectoryW(uint32_t n, uint16_t *buf)
 {
-    (void)n;
-    if (buf)
-        buf[0] = 0;
+    char a[64];
+    GetCurrentDirectoryA(sizeof(a), a);
+    cp437_to_utf16(buf, n, a);
 }
 
 void __attribute__((stdcall)) SetCurrentDirectoryA(const char *d)
@@ -1068,7 +1166,12 @@ void __attribute__((stdcall)) SetCurrentDirectoryA(const char *d)
     trace("'\n");
 }
 
-void __attribute__((stdcall)) SetCurrentDirectoryW(const uint16_t *d) { (void)d; }
+void __attribute__((stdcall)) SetCurrentDirectoryW(const uint16_t *d)
+{
+    char a[64];
+    utf16_to_cp437(a, d, sizeof(a));
+    SetCurrentDirectoryA(a);
+}
 
 /* --- Fase 24-P1.4: directorios y version de arranque ---
  * La raiz del MEFS se mapea a "C:\" (paths virtuales fijos). */
@@ -1853,6 +1956,558 @@ uint32_t __attribute__((stdcall)) FormatMessageA(uint32_t flags, const void *src
     return o;
 }
 
+/* ==================================================================
+ * Fase 25 (W2A): thunks W->A de kernel32 + funciones A complementarias
+ * (msvcrt llama GetEnvironmentVariableA al arrancar). Direccion del
+ * thunk: entrada de cadena = utf16_to_cp437 -> A; salida = A ->
+ * cp437_to_utf16. Las lstr*W operan directo sobre UTF-16.
+ * ================================================================== */
+
+/* --- A complementarias que no existian --- */
+
+static const char *env_find(const char *name)
+{
+    uint32_t i, n = strlen_u(name);
+    for (i = 0; env_block[i]; i++) {
+        const char *e = env_block[i];
+        uint32_t k;
+        for (k = 0; k < n && e[k] && e[k] != '='; k++)
+            if (e[k] != name[k])
+                break;
+        if (k == n && e[k] == '=')
+            return e + k + 1;
+    }
+    return 0;
+}
+
+uint32_t __attribute__((stdcall)) GetEnvironmentVariableA(const char *name, char *buf,
+                          uint32_t size)
+{
+    const char *v;
+    trace("[k32] GetEnvironmentVariableA '");
+    if (name)
+        trace(name);
+    trace("'\n");
+    v = (name == 0) ? 0 : env_find(name);
+    if (v == 0)
+        return 0;
+    if (buf == 0 || size == 0)
+        return strlen_u(v);
+    return copy_str_n(buf, size, v);
+}
+
+uint32_t __attribute__((stdcall)) SetEnvironmentVariableA(const char *name, const char *value)
+{
+    (void)name; (void)value;
+    return 1;
+}
+
+uint32_t __attribute__((stdcall)) DeleteFileA(const char *name)
+{
+    int r;
+    if (name == 0)
+        return 0;
+    r = sys_fdelete(name);
+    return (uint32_t)(r == 0);
+}
+
+uint32_t __attribute__((stdcall)) CopyFileA(const char *src, const char *dst,
+                        uint32_t fail_if_exists)
+{
+    uint32_t n;
+    int sz;
+    char *buf;
+    (void)fail_if_exists;
+    if (src == 0 || dst == 0)
+        return 0;
+    sz = sys_fsize(src);
+    if (sz < 0)
+        return 0;
+    buf = (char *)win_malloc((uint32_t)sz + 1);
+    if (buf == 0)
+        return 0;
+    n = sys_dread(src, buf, 0, (uint32_t)sz);
+    if (n != (uint32_t)sz) {
+        win_free(buf);
+        return 0;
+    }
+    buf[sz] = 0;
+    if (sys_fcreate(dst) != 0 || sys_fwrite(dst, buf, (uint32_t)sz) != 0) {
+        win_free(buf);
+        return 0;
+    }
+    sys_flush();
+    win_free(buf);
+    return 1;
+}
+
+uint32_t __attribute__((stdcall)) MoveFileA(const char *src, const char *dst)
+{
+    if (CopyFileA(src, dst, 0) == 0)
+        return 0;
+    sys_fdelete(src);
+    sys_flush();
+    return 1;
+}
+
+uint32_t __attribute__((stdcall)) CreateDirectoryA(const char *name, const void *sa)
+{
+    int r;
+    (void)sa;
+    if (name == 0)
+        return 0;
+    r = sys_mkdir(name, 0);     /* parent = raiz del MEFS */
+    return (uint32_t)(r == 0);
+}
+
+uint32_t __attribute__((stdcall)) RemoveDirectoryA(const char *name)
+{
+    int r;
+    if (name == 0)
+        return 0;
+    r = sys_fdelete(name);      /* mefs_delete vacia dirs sin hijos */
+    return (uint32_t)(r == 0);
+}
+
+uint32_t __attribute__((stdcall)) GetLogicalDriveStringsA(uint32_t n, char *buf)
+{
+    /* "C:\" + doble NUL */
+    if (buf == 0 || n == 0)
+        return 4;
+    if (n >= 4) {
+        buf[0] = 'C'; buf[1] = ':'; buf[2] = '\\'; buf[3] = 0;
+        return 4;
+    }
+    return 4;
+}
+
+/* WIN32_FIND_DATAW: mismo layout que WIN32_FIND_DATAA pero con
+ * cFileName/cAlternateFileName en UTF-16. */
+typedef struct {
+    uint32_t dwFileAttributes;
+    uint32_t ftCreationTime_low, ftCreationTime_high;
+    uint32_t ftLastAccess_low, ftLastAccess_high;
+    uint32_t ftLastWrite_low, ftLastWrite_high;
+    uint32_t nFileSizeHigh, nFileSizeLow;
+    uint32_t dwReserved0, dwReserved1;
+    uint16_t cFileName[260];
+    uint16_t cAlternateFileName[14];
+} WIN32_FIND_DATAW;
+
+static int find_next_entry_w(find_state_t *st, const char *pat,
+                             WIN32_FIND_DATAW *fd)
+{
+    WIN32_FIND_DATAA a;
+    uint32_t i;
+    if (find_next_entry(st, pat, &a) == 0)
+        return 0;
+    for (i = 0; i < sizeof(*fd) / sizeof(uint16_t); i++)
+        ((uint16_t *)fd)[i] = 0;
+    fd->dwFileAttributes = a.dwFileAttributes;
+    fd->nFileSizeHigh    = a.nFileSizeHigh;
+    fd->nFileSizeLow     = a.nFileSizeLow;
+    cp437_to_utf16(fd->cFileName, 260, a.cFileName);
+    return 1;
+}
+
+void *__attribute__((stdcall)) FindFirstFileW(const uint16_t *pat, WIN32_FIND_DATAW *fd)
+{
+    char p[64];
+    find_state_t *st;
+    if (find_st_n >= 4)
+        return (void *)INVALID_HANDLE_VALUE;
+    utf16_to_cp437(p, pat, sizeof(p));
+    st = &find_st[find_st_n++];
+    st->idx = 0;
+    {
+        uint32_t k = 0;
+        while (k < 63 && p[k]) {
+            st->pat[k] = p[k];
+            k++;
+        }
+        st->pat[k] = 0;
+    }
+    if (find_next_entry_w(st, st->pat, fd))
+        return (void *)(uint32_t)(0x200 + (find_st_n - 1));
+    find_st_n--;
+    return (void *)INVALID_HANDLE_VALUE;
+}
+
+int __attribute__((stdcall)) FindNextFileW(void *h, WIN32_FIND_DATAW *fd)
+{
+    int i = (uint32_t)h - 0x200;
+    if (i < 0 || i >= find_st_n)
+        return 0;
+    return find_next_entry_w(&find_st[i], find_st[i].pat, fd);
+}
+
+/* --- thunks W->A de cadenas de entrada --- */
+
+uint32_t __attribute__((stdcall)) CreateFileW(const uint16_t *name, uint32_t access,
+                       uint32_t share, uint32_t sec_attrs,
+                       uint32_t creation, uint32_t flags, uint32_t tmpl)
+{
+    char a[64];
+    if (name == 0)
+        return (uint32_t)INVALID_HANDLE_VALUE;
+    utf16_to_cp437(a, name, sizeof(a));
+    return (uint32_t)CreateFileA(a, access, share, sec_attrs, creation,
+                                 flags, tmpl);
+}
+
+uint32_t __attribute__((stdcall)) GetFileAttributesW(const uint16_t *name)
+{
+    char a[64];
+    if (name == 0)
+        return 0xFFFFFFFFu;
+    utf16_to_cp437(a, name, sizeof(a));
+    return GetFileAttributesA(a);
+}
+
+uint32_t __attribute__((stdcall)) SetFileAttributesW(const uint16_t *name, uint32_t attrs)
+{
+    char a[64];
+    if (name == 0)
+        return 0;
+    utf16_to_cp437(a, name, sizeof(a));
+    return SetFileAttributesA(a, attrs);
+}
+
+uint32_t __attribute__((stdcall)) DeleteFileW(const uint16_t *name)
+{
+    char a[64];
+    if (name == 0)
+        return 0;
+    utf16_to_cp437(a, name, sizeof(a));
+    return DeleteFileA(a);
+}
+
+uint32_t __attribute__((stdcall)) MoveFileW(const uint16_t *src, const uint16_t *dst)
+{
+    char s[64], d[64];
+    if (src == 0 || dst == 0)
+        return 0;
+    utf16_to_cp437(s, src, sizeof(s));
+    utf16_to_cp437(d, dst, sizeof(d));
+    return MoveFileA(s, d);
+}
+
+uint32_t __attribute__((stdcall)) CopyFileW(const uint16_t *src, const uint16_t *dst,
+                    uint32_t fail_if_exists)
+{
+    char s[64], d[64];
+    if (src == 0 || dst == 0)
+        return 0;
+    utf16_to_cp437(s, src, sizeof(s));
+    utf16_to_cp437(d, dst, sizeof(d));
+    return CopyFileA(s, d, fail_if_exists);
+}
+
+uint32_t __attribute__((stdcall)) CreateDirectoryW(const uint16_t *name, const void *sa)
+{
+    char a[64];
+    if (name == 0)
+        return 0;
+    utf16_to_cp437(a, name, sizeof(a));
+    return CreateDirectoryA(a, sa);
+}
+
+uint32_t __attribute__((stdcall)) RemoveDirectoryW(const uint16_t *name)
+{
+    char a[64];
+    if (name == 0)
+        return 0;
+    utf16_to_cp437(a, name, sizeof(a));
+    return RemoveDirectoryA(a);
+}
+
+uint32_t __attribute__((stdcall)) GetEnvironmentVariableW(const uint16_t *name, uint16_t *buf,
+                          uint32_t size)
+{
+    char a[64], v[128];
+    uint32_t n;
+    if (name == 0)
+        return 0;
+    utf16_to_cp437(a, name, sizeof(a));
+    n = GetEnvironmentVariableA(a, v, sizeof(v));
+    if (n == 0)
+        return 0;
+    if (buf == 0 || size == 0)
+        return n;
+    return cp437_to_utf16(buf, size, v);
+}
+
+uint32_t __attribute__((stdcall)) SetEnvironmentVariableW(const uint16_t *name,
+                          const uint16_t *value)
+{
+    char a[64], v[64];
+    if (name == 0)
+        return 0;
+    utf16_to_cp437(a, name, sizeof(a));
+    if (value != 0)
+        utf16_to_cp437(v, value, sizeof(v));
+    return SetEnvironmentVariableA(a, (value == 0) ? 0 : v);
+}
+
+uint32_t __attribute__((stdcall)) GetTempPathW(uint32_t n, uint16_t *buf)
+{
+    char a[64];
+    uint32_t r = GetTempPathA(sizeof(a), a);
+    if (buf == 0 || n == 0)
+        return r;
+    cp437_to_utf16(buf, n, a);
+    return r;
+}
+
+uint32_t __attribute__((stdcall)) GetWindowsDirectoryW(uint16_t *buf, uint32_t n)
+{
+    char a[64];
+    uint32_t r = GetWindowsDirectoryA(a, sizeof(a));
+    if (buf == 0 || n == 0)
+        return r;
+    cp437_to_utf16(buf, n, a);
+    return r;
+}
+
+uint32_t __attribute__((stdcall)) GetSystemDirectoryW(uint16_t *buf, uint32_t n)
+{
+    char a[64];
+    uint32_t r = GetSystemDirectoryA(a, sizeof(a));
+    if (buf == 0 || n == 0)
+        return r;
+    cp437_to_utf16(buf, n, a);
+    return r;
+}
+
+uint32_t __attribute__((stdcall)) GetFullPathNameW(const uint16_t *name, uint32_t n,
+                    uint16_t *buf, uint16_t **filepart)
+{
+    char a[128], out[128];
+    uint32_t r, i;
+    if (name == 0 || buf == 0 || n == 0)
+        return 0;
+    utf16_to_cp437(a, name, sizeof(a));
+    r = GetFullPathNameA(a, sizeof(out), out, 0);
+    if (r == 0)
+        return 0;
+    if (n <= r)
+        return 0;
+    cp437_to_utf16(buf, n, out);
+    if (filepart) {
+        uint32_t last = 0;
+        for (i = 0; out[i]; i++)
+            if (out[i] == '\\' || out[i] == '/')
+                last = i + 1;
+        *filepart = buf + last;
+    }
+    return r;
+}
+
+/* --- lstr*W: operan directo sobre UTF-16 --- */
+
+uint32_t __attribute__((stdcall)) lstrlenW(const uint16_t *s)
+{
+    if (s == 0)
+        return 0;
+    return wstrlen(s);
+}
+
+uint16_t *__attribute__((stdcall)) lstrcpyW(uint16_t *dst, const uint16_t *src)
+{
+    uint32_t i = 0;
+    if (dst == 0 || src == 0)
+        return dst;
+    do { dst[i] = src[i]; } while (src[i++]);
+    return dst;
+}
+
+uint16_t *__attribute__((stdcall)) lstrcpynW(uint16_t *dst, const uint16_t *src, uint32_t n)
+{
+    uint32_t i;
+    if (dst == 0)
+        return dst;
+    if (n == 0)
+        return dst;
+    for (i = 0; i < n - 1 && src[i]; i++)
+        dst[i] = src[i];
+    dst[i] = 0;
+    return dst;
+}
+
+uint16_t *__attribute__((stdcall)) lstrcatW(uint16_t *dst, const uint16_t *src)
+{
+    uint32_t d = 0, i = 0;
+    if (dst == 0)
+        return dst;
+    while (dst[d]) d++;
+    if (src == 0)
+        return dst;
+    while (src[i]) dst[d++] = src[i++];
+    dst[d] = 0;
+    return dst;
+}
+
+int32_t __attribute__((stdcall)) lstrcmpW(const uint16_t *a, const uint16_t *b)
+{
+    if (a == 0) a = (const uint16_t *)L"";
+    if (b == 0) b = (const uint16_t *)L"";
+    while (*a && *b && *a == *b) { a++; b++; }
+    return (int32_t)*a - (int32_t)*b;
+}
+
+int32_t __attribute__((stdcall)) lstrcmpiW(const uint16_t *a, const uint16_t *b)
+{
+    if (a == 0) a = (const uint16_t *)L"";
+    if (b == 0) b = (const uint16_t *)L"";
+    for (;;) {
+        uint16_t ca = *a, cb = *b;
+        if (ca >= 'A' && ca <= 'Z') ca += 32;
+        if (cb >= 'A' && cb <= 'Z') cb += 32;
+        if (ca != cb)
+            return (int32_t)ca - (int32_t)cb;
+        if (ca == 0)
+            return 0;
+        a++; b++;
+    }
+}
+
+/* --- directorios/volumen con salida multi-cadena o struct --- */
+
+uint32_t __attribute__((stdcall)) GetLogicalDriveStringsW(uint32_t n, uint16_t *buf)
+{
+    char a[8];
+    uint32_t r = GetLogicalDriveStringsA(sizeof(a), a);
+    if (buf == 0 || n == 0)
+        return r;
+    cp437_to_utf16(buf, n, a);
+    return r;
+}
+
+/* VolumeInformation: buf_vol (W), fsname (W); serial + flags numericos. */
+uint32_t __attribute__((stdcall)) GetVolumeInformationW(const uint16_t *root, uint16_t *vol,
+                    uint32_t vn, uint32_t *serial, uint32_t *max_comp,
+                    uint32_t *flags, uint16_t *fs, uint32_t fn)
+{
+    (void)root;
+    if (serial)   *serial = 0x4D594F53u;      /* "MYOS" */
+    if (max_comp) *max_comp = 15;
+    if (flags)    *flags = 0x00080000u;       /* FILE_SUPPORTS_LONG_NAMES */
+    if (vol && vn > 0)
+        cp437_to_utf16(vol, vn, "MyOS");
+    if (fs && fn > 0)
+        cp437_to_utf16(fs, fn, "MEFS");
+    return 1;
+}
+
+uint32_t __attribute__((stdcall)) GetVersionExW(void *vi_w)
+{
+    my_OSVERSIONINFOA a;
+    uint32_t r;
+    (void)vi_w;
+    a.dwOSVersionInfoSize = sizeof(my_OSVERSIONINFOA);
+    r = GetVersionExA(&a);
+    if (r == 0)
+        return 0;
+    return 1;
+}
+
+/* GetModuleHandleW: solo el exe (NULL) o kernel32.dll; el resto 0. */
+uint32_t __attribute__((stdcall)) GetModuleHandleW(const uint16_t *name)
+{
+    char a[64];
+    if (name == 0)
+        return 0xB0000000u;     /* la base del propio modulo */
+    utf16_to_cp437(a, name, sizeof(a));
+    return GetModuleHandleA(a);
+}
+
+uint32_t __attribute__((stdcall)) GetPrivateProfileStringW(const uint16_t *sec,
+                    const uint16_t *key, const uint16_t *def,
+                    uint16_t *out, uint32_t size, const uint16_t *file)
+{
+    char s[64], k[64], d[128], f[64], o[256];
+    if (out == 0 || size == 0)
+        return 0;
+    if (sec) utf16_to_cp437(s, sec, sizeof(s));
+    if (key) utf16_to_cp437(k, key, sizeof(k));
+    if (def) utf16_to_cp437(d, def, sizeof(d));
+    if (file) utf16_to_cp437(f, file, sizeof(f));
+    GetPrivateProfileStringA(sec ? s : 0, key ? k : 0, def ? d : 0,
+                             o, sizeof(o), file ? f : 0);
+    return cp437_to_utf16(out, size, o);
+}
+
+uint32_t __attribute__((stdcall)) WritePrivateProfileStringW(const uint16_t *sec,
+                    const uint16_t *key, const uint16_t *value,
+                    const uint16_t *file)
+{
+    char s[64], k[64], v[128], f[64];
+    if (sec) utf16_to_cp437(s, sec, sizeof(s));
+    if (key) utf16_to_cp437(k, key, sizeof(k));
+    if (value) utf16_to_cp437(v, value, sizeof(v));
+    if (file) utf16_to_cp437(f, file, sizeof(f));
+    return WritePrivateProfileStringA(sec ? s : 0, key ? k : 0,
+                                      value ? v : 0, file ? f : 0);
+}
+
+uint32_t __attribute__((stdcall)) GetDateFormatW(uint32_t locale, uint32_t flags,
+                    const void *st, const uint16_t *fmt, uint16_t *buf,
+                    uint32_t size)
+{
+    char f[64], o[256];
+    uint32_t n;
+    if (buf == 0 || size == 0)
+        return 0;
+    if (fmt) utf16_to_cp437(f, fmt, sizeof(f));
+    n = GetDateFormatA(locale, flags, st, fmt ? f : 0, o, sizeof(o));
+    if (n == 0)
+        return 0;
+    return cp437_to_utf16(buf, size, o);
+}
+
+uint32_t __attribute__((stdcall)) GetTimeFormatW(uint32_t locale, uint32_t flags,
+                    const void *st, const uint16_t *fmt, uint16_t *buf,
+                    uint32_t size)
+{
+    char f[64], o[256];
+    uint32_t n;
+    if (buf == 0 || size == 0)
+        return 0;
+    if (fmt) utf16_to_cp437(f, fmt, sizeof(f));
+    n = GetTimeFormatA(locale, flags, st, fmt ? f : 0, o, sizeof(o));
+    if (n == 0)
+        return 0;
+    return cp437_to_utf16(buf, size, o);
+}
+
+uint32_t __attribute__((stdcall)) GetLocaleInfoW(uint32_t locale, uint32_t type,
+                    uint16_t *buf, uint32_t size)
+{
+    char o[256];
+    uint32_t n;
+    if (buf == 0 || size == 0)
+        return 0;
+    n = GetLocaleInfoA(locale, type, o, sizeof(o));
+    if (n == 0)
+        return 0;
+    return cp437_to_utf16(buf, size, o);
+}
+
+/* FormatMessageW: igual que la A pero el buffer de salida es UTF-16. */
+uint32_t __attribute__((stdcall)) FormatMessageW(uint32_t flags, const void *src,
+                    uint32_t msgid, uint32_t lang, uint16_t *buf,
+                    uint32_t size, uint32_t *args)
+{
+    char o[512];
+    uint32_t n;
+    if (buf == 0 || size == 0)
+        return 0;
+    n = FormatMessageA(flags, src, msgid, lang, o, sizeof(o), args);
+    if (n == 0)
+        return 0;
+    return cp437_to_utf16(buf, size, o);
+}
+
 /* --- tabla de exports --- */
 
 win32_export_t __exports[] __attribute__((section(".exports"))) = {
@@ -1951,5 +2606,46 @@ win32_export_t __exports[] __attribute__((section(".exports"))) = {
     { "GetTimeFormatA",        (uint32_t)&GetTimeFormatA },
     { "GetLocaleInfoA",        (uint32_t)&GetLocaleInfoA },
     { "FormatMessageA",        (uint32_t)&FormatMessageA },
+    /* Fase 25 (W2A): thunks W->A */
+    { "CreateFileW",           (uint32_t)&CreateFileW },
+    { "FindFirstFileW",        (uint32_t)&FindFirstFileW },
+    { "FindNextFileW",         (uint32_t)&FindNextFileW },
+    { "GetEnvironmentVariableA", (uint32_t)&GetEnvironmentVariableA },
+    { "SetEnvironmentVariableA", (uint32_t)&SetEnvironmentVariableA },
+    { "GetEnvironmentVariableW", (uint32_t)&GetEnvironmentVariableW },
+    { "SetEnvironmentVariableW", (uint32_t)&SetEnvironmentVariableW },
+    { "DeleteFileA",           (uint32_t)&DeleteFileA },
+    { "DeleteFileW",           (uint32_t)&DeleteFileW },
+    { "MoveFileA",             (uint32_t)&MoveFileA },
+    { "MoveFileW",             (uint32_t)&MoveFileW },
+    { "CopyFileA",             (uint32_t)&CopyFileA },
+    { "CopyFileW",             (uint32_t)&CopyFileW },
+    { "CreateDirectoryA",      (uint32_t)&CreateDirectoryA },
+    { "CreateDirectoryW",      (uint32_t)&CreateDirectoryW },
+    { "RemoveDirectoryA",      (uint32_t)&RemoveDirectoryA },
+    { "RemoveDirectoryW",      (uint32_t)&RemoveDirectoryW },
+    { "GetLogicalDriveStringsA", (uint32_t)&GetLogicalDriveStringsA },
+    { "GetLogicalDriveStringsW", (uint32_t)&GetLogicalDriveStringsW },
+    { "GetVolumeInformationW", (uint32_t)&GetVolumeInformationW },
+    { "GetVersionExW",         (uint32_t)&GetVersionExW },
+    { "GetModuleHandleW",      (uint32_t)&GetModuleHandleW },
+    { "GetFullPathNameW",      (uint32_t)&GetFullPathNameW },
+    { "GetTempPathW",          (uint32_t)&GetTempPathW },
+    { "GetWindowsDirectoryW",  (uint32_t)&GetWindowsDirectoryW },
+    { "GetSystemDirectoryW",   (uint32_t)&GetSystemDirectoryW },
+    { "GetFileAttributesW",    (uint32_t)&GetFileAttributesW },
+    { "SetFileAttributesW",    (uint32_t)&SetFileAttributesW },
+    { "lstrlenW",              (uint32_t)&lstrlenW },
+    { "lstrcpyW",              (uint32_t)&lstrcpyW },
+    { "lstrcpynW",             (uint32_t)&lstrcpynW },
+    { "lstrcatW",              (uint32_t)&lstrcatW },
+    { "lstrcmpW",              (uint32_t)&lstrcmpW },
+    { "lstrcmpiW",             (uint32_t)&lstrcmpiW },
+    { "GetPrivateProfileStringW", (uint32_t)&GetPrivateProfileStringW },
+    { "WritePrivateProfileStringW", (uint32_t)&WritePrivateProfileStringW },
+    { "GetDateFormatW",        (uint32_t)&GetDateFormatW },
+    { "GetTimeFormatW",        (uint32_t)&GetTimeFormatW },
+    { "GetLocaleInfoW",        (uint32_t)&GetLocaleInfoW },
+    { "FormatMessageW",        (uint32_t)&FormatMessageW },
     { "", 0 },
 };

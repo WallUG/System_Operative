@@ -149,16 +149,40 @@ VirtualProtect (no-op TRUE). Validado con `tools/test_fase25w2a1.py`
 y w2atest.exe.
 
 ### 2. Thunks W→A de kernel32 (~50)
-CreateFileW, FindFirstFileW, FindNextFileW, GetModuleFileNameW,
-GetCommandLineW, GetEnvironmentStringsW, GetEnvironmentVariableW,
-SetEnvironmentVariableW, GetTempPathW, GetCurrentDirectoryW,
-SetCurrentDirectoryW, DeleteFileW, MoveFileW, CopyFileW,
-GetFullPathNameW, lstrlenW, lstrcpyW, lstrcatW, lstrcmpW,
-lstrcmpiW, CharUpperW, CharLowerW, wsprintfW, GetFileAttributesW,
-SetFileAttributesW, CreateDirectoryW, RemoveDirectoryW,
-GetLogicalDriveStringsW, GetSystemDirectoryW, GetWindowsDirectoryW,
-GetVolumeInformationW, SetFilePointerW (no existe — es A), y las
-que pida el binario objetivo (diagnóstico del loader).
+**COMPLETADO** (commit con el paso 1): 45 exports nuevos en kernel32:
+- Tabla **UTF-16→cp437** `cp437_map[]` (78 entradas: Latin-1, griego,
+  símbolos) + `utf16_to_cp437` (W→A, lossy '?') y `cp437_to_utf16`
+  (A→W, U+FFFD). Arriba del todo de kernel32.c.
+- Thunks de entrada: CreateFileW, FindFirstFileW/FindNextFileW
+  (WIN32_FIND_DATAW), GetFileAttributesW, SetFileAttributesW,
+  DeleteFileW, MoveFileW, CopyFileW, CreateDirectoryW,
+  RemoveDirectoryW, GetEnvironmentVariableW, SetEnvironmentVariableW,
+  GetTempPathW, GetWindowsDirectoryW, GetSystemDirectoryW,
+  GetFullPathNameW (filepart), GetModuleHandleW, GetVersionExW,
+  GetVolumeInformationW, GetLogicalDriveStringsW,
+  GetPrivateProfileStringW, WritePrivateProfileStringW,
+  GetDateFormatW, GetTimeFormatW, GetLocaleInfoW, FormatMessageW.
+- lstr*W directos sobre UTF-16 (sin conversión): lstrlenW, lstrcpyW,
+  lstrcpynW, lstrcatW, lstrcmpW, lstrcmpiW.
+- A complementarias nuevas: GetEnvironmentVariableA (busca en el
+  bloque PATH/HOME), SetEnvironmentVariableA, DeleteFileA,
+  MoveFileA/CopyFileA (sys_dread+fcreate+fwrite+fdelete reales),
+  CreateDirectoryA (SYS_MKDIR parent=0), RemoveDirectoryA (mefs_delete
+  borra dirs vacíos), GetLogicalDriveStringsA ("C:\\").
+  GetCurrentDirectoryA ahora devuelve "C:\\MyOS" (antes vacío).
+- Validado: w2atest.exe ampliado (10 bloques nuevos), test 19/19 PASS.
+
+**BUG REAL DEL KERNEL ARREGLADO en el camino**: `parse_exports`
+(win32.c) fusionaba `.rel.data` y `.rel.exports` en el mismo par de
+offsets — el último ganaba, así que los punteros inicializados de
+`.data` (p.ej. `env_block[]`) NUNCA se reubicaban con el delta
+0x200000: el primer dereferenciado daba #PF (GetEnvironmentVariableA
+leyó 0xB0005170 sin mapear). Fix: `rel_exports_off/size` separados y
+`apply_relocs` procesa las tres secciones por separado. Síntoma de
+diagnóstico: IAT resuelta correcta (0xB0203BC0) pero datos de .data
+con direcciones de la base vieja. Lección: cualquier puntero estático
+inicializado en una DLL requiere relocación de .rel.data — verificar
+con `readelf -r` si aparecen #PF raros en datos.
 
 ### 3. Thunks W→A de user32 (~15) + msvcrt
 RegisterClassW, CreateWindowExW, SetWindowTextW, GetWindowTextW,

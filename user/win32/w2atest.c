@@ -135,6 +135,177 @@ int main(void)
         }
         logstr("w2atest: u64cmp ok\n");
     }
+
+    /* ============ Fase 25 paso 2: thunks W->A ============ */
+
+    /* 1) CreateFileW + WriteFile + GetFileAttributesW + DeleteFileW */
+    {
+        HANDLE h = CreateFileW(L"wfile_w.txt", 0x40000000, 0, 0, 2, 0, 0);
+        DWORD wr = 0;
+        if (h == INVALID_HANDLE_VALUE) {
+            logstr("w2atest: FAIL CreateFileW\n"); fails++;
+        } else {
+            static const char data[] = "hola W2A";
+            if (!WriteFile(h, data, sizeof(data) - 1, &wr, 0) || wr != sizeof(data) - 1) {
+                logstr("w2atest: FAIL WriteFile\n"); fails++;
+            }
+            CloseHandle(h);
+        }
+        if (GetFileAttributesW(L"wfile_w.txt") == 0xFFFFFFFFu) {
+            logstr("w2atest: FAIL GetFileAttributesW\n"); fails++;
+        }
+        if (!DeleteFileW(L"wfile_w.txt")) {
+            logstr("w2atest: FAIL DeleteFileW\n"); fails++;
+        }
+        if (GetFileAttributesW(L"wfile_w.txt") != 0xFFFFFFFFu) {
+            logstr("w2atest: FAIL DeleteFileW (sigue existiendo)\n"); fails++;
+        }
+        logstr("w2atest: createw/writew/attrsW/deletew ok\n");
+    }
+
+    /* 2) CreateFileW con nombre no-ASCII (cp437): "café.txt" -> 0x82 */
+    {
+        HANDLE h = CreateFileW(L"caf\x00e9.txt", 0x40000000, 0, 0, 2, 0, 0);
+        DWORD wr = 0;
+        if (h == INVALID_HANDLE_VALUE) {
+            logstr("w2atest: FAIL cp437 create\n"); fails++;
+        } else {
+            CloseHandle(h);
+        }
+        if (!DeleteFileW(L"caf\x00e9.txt")) {
+            logstr("w2atest: FAIL cp437 delete\n"); fails++;
+        }
+        logstr("w2atest: cp437 unicode name ok\n");
+    }
+
+    /* 3) FindFirstFileW/FindNextFileW: listar la raiz, buscar
+     * w2atest.exe */
+    {
+        WIN32_FIND_DATAW fd;
+        HANDLE h = FindFirstFileW(L"*", &fd);
+        int found = 0, n = 0;
+        if (h == INVALID_HANDLE_VALUE) {
+            logstr("w2atest: FAIL FindFirstFileW\n"); fails++;
+        } else {
+            do {
+                n++;
+                if (lstrcmpW(fd.cFileName, L"w2atest.exe") == 0)
+                    found = 1;
+            } while (FindNextFileW(h, &fd));
+            FindClose(h);
+        }
+        logstr("w2atest: findw items="); lognum(n);
+        logstr(" found="); lognum(found); logstr("\n");
+        if (n == 0 || !found) {
+            logstr("w2atest: FAIL FindFirstFileW\n"); fails++;
+        }
+    }
+
+    /* 4) directorios y paths W */
+    {
+        wchar_t tmp[MAX_PATH], win[MAX_PATH], sys[MAX_PATH], cur[MAX_PATH];
+        GetTempPathW(MAX_PATH, tmp);
+        GetWindowsDirectoryW(win, MAX_PATH);
+        GetSystemDirectoryW(sys, MAX_PATH);
+        GetCurrentDirectoryW(MAX_PATH, cur);
+        logstr("w2atest: paths W: temp=");
+        logw(tmp, 32); logstr(" win="); logw(win, 32);
+        logstr(" sys="); logw(sys, 32); logstr(" cur="); logw(cur, 32);
+        logstr("\n");
+        if (lstrcmpW(tmp, L"C:\\TEMP") || lstrcmpW(win, L"C:\\WINDOWS") ||
+            lstrcmpW(sys, L"C:\\WINDOWS\\System32") ||
+            lstrcmpW(cur, L"C:\\MyOS")) {
+            logstr("w2atest: FAIL paths W\n"); fails++;
+        }
+    }
+
+    logstr("w2atest: m4 done\n");
+    /* 5) GetEnvironmentVariableW */
+    {
+        wchar_t v[64];
+        DWORD n = GetEnvironmentVariableW(L"PATH", v, 64);
+        if (n == 0 || lstrcmpW(v, L".") != 0) {
+            logstr("w2atest: FAIL GetEnvironmentVariableW\n"); fails++;
+        }
+        logstr("w2atest: envW PATH='"); logw(v, 16); logstr("'\n");
+    }
+
+    logstr("w2atest: m5 done\n");
+    /* 6) lstr*W directos */
+    {
+        wchar_t buf[64];
+        lstrcpyW(buf, L"Hello");
+        lstrcatW(buf, L" World");
+        if (lstrlenW(buf) != 11 || lstrcmpW(buf, L"Hello World") != 0 ||
+            lstrcmpiW(buf, L"hello WORLD") != 0) {
+            logstr("w2atest: FAIL lstr*W\n"); fails++;
+        }
+        logstr("w2atest: lstr*W ok\n");
+    }
+
+    logstr("w2atest: m6 done\n");
+    /* 7) GetFullPathNameW + GetLogicalDriveStringsW */
+    {
+        wchar_t full[MAX_PATH], *fp, drv[8];
+        DWORD n = GetFullPathNameW(L"metapad.exe", MAX_PATH, full, &fp);
+        GetLogicalDriveStringsW(8, drv);
+        logstr("w2atest: fullW='");
+        logw(full, 40); logstr("' drvW='"); logw(drv, 4); logstr("'\n");
+        if (n == 0 || lstrcmpW(full, L"metapad.exe") != 0 ||
+            lstrcmpW(drv, L"C:\\") != 0) {
+            logstr("w2atest: FAIL fullpath/drives W\n"); fails++;
+        }
+    }
+
+    logstr("w2atest: m7 done\n");
+    /* 8) CopyFileW + MoveFileW */
+    {
+        HANDLE h = CreateFileW(L"cf_src.txt", 0x40000000, 0, 0, 2, 0, 0);
+        if (h != INVALID_HANDLE_VALUE) {
+            static const char d[] = "copy me";
+            DWORD wr = 0;
+            WriteFile(h, d, sizeof(d) - 1, &wr, 0);
+            CloseHandle(h);
+        }
+        if (!CopyFileW(L"cf_src.txt", L"cf_dst.txt", 0)) {
+            logstr("w2atest: FAIL CopyFileW\n"); fails++;
+        }
+        if (!MoveFileW(L"cf_src.txt", L"cf_moved.txt")) {
+            logstr("w2atest: FAIL MoveFileW\n"); fails++;
+        }
+        DeleteFileW(L"cf_dst.txt");
+        DeleteFileW(L"cf_moved.txt");
+        logstr("w2atest: copyw/movew ok\n");
+    }
+
+    logstr("w2atest: m8 done\n");
+    /* 9) CreateDirectoryW + RemoveDirectoryW */
+    {
+        if (!CreateDirectoryW(L"w2adir", 0)) {
+            logstr("w2atest: FAIL CreateDirectoryW\n"); fails++;
+        }
+        if (!RemoveDirectoryW(L"w2adir")) {
+            logstr("w2atest: FAIL RemoveDirectoryW\n"); fails++;
+        }
+        logstr("w2atest: mkdirW/rmdirW ok\n");
+    }
+
+    logstr("w2atest: m9 done\n");
+    /* 10) FormatMessageW / GetDateFormatW / GetLocaleInfoW */
+    {
+        wchar_t msg[128], dt[64], loc[64];
+        DWORD n = FormatMessageW(0x1000, 0, 2, 0, msg, 128, 0);
+        GetDateFormatW(0, 0, 0, 0, dt, 64);
+        GetLocaleInfoW(0, 0x02, loc, 64);
+        logstr("w2atest: fmtW n="); lognum(n);
+        logstr(" msg='"); logw(msg, 32);
+        logstr("' date='"); logw(dt, 32); logstr("' loc='"); logw(loc, 24);
+        logstr("'\n");
+        if (n == 0 || msg[0] == 0 || dt[0] == 0 || loc[0] == 0) {
+            logstr("w2atest: FAIL fmt/date/locale W\n"); fails++;
+        }
+    }
+
     if (fails) {
         logstr("w2atest:FAIL\n");
         return 1;
