@@ -791,9 +791,11 @@ static uint32_t focus_edit;             /* control de edicion enfocado  */
 static uint32_t wm_focus_win = 1;       /* Fase 23-B6: foco por ventana */
 
 /* Fase 23-C11: SysListView32 (comctl32). Hijo con columnas e items,
- * seleccion por teclado (flechas) y Enter -> WM_COMMAND al padre. */
+ * seleccion por teclado (flechas) y Enter -> WM_COMMAND al padre.
+ * Fase 24-P3.2: scroll (lv_scroll) con Home/End/PgUp/PgDn y 'b'/'q'
+ * al padre; col 1 negativa = "/" (marcador de directorio). */
 #define LV_COLS_MAX 4
-#define LV_ITEMS_MAX 48
+#define LV_ITEMS_MAX 64
 #define LV_NAMELEN  33
 static int      child_type[CHILD_MAX];              /* 0=edit, 1=listview */
 static char     lv_col[CHILD_MAX][LV_COLS_MAX][LV_NAMELEN];
@@ -803,6 +805,7 @@ static char     lv_item[CHILD_MAX][LV_ITEMS_MAX][LV_NAMELEN];
 static int      lv_isz[CHILD_MAX][LV_ITEMS_MAX];    /* tamano (col 1) */
 static int      lv_nitem[CHILD_MAX];
 static int      lv_sel[CHILD_MAX];                  /* fila seleccionada */
+static int      lv_scroll[CHILD_MAX];               /* primera fila visible */
 static uint32_t focus_child;                        /* hijo con foco */
 
 /* Fase 24-P2.1: mas controles comctl32. child_type: 0=edit, 1=listview,
@@ -1159,6 +1162,7 @@ uint32_t __attribute__((stdcall)) CreateWindowExA(uint32_t e, uint32_t cls, uint
             lv_ncol[i] = 0;
             lv_nitem[i] = 0;
             lv_sel[i] = 0;
+            lv_scroll[i] = 0;
             if (focus_child == 0)
                 focus_child = id;   /* foco de teclado del listview */
         }
@@ -1721,6 +1725,19 @@ static void child_paint(uint32_t i)
      * gris y filas con la seleccion resaltada en azul. */
     if (child_type[i] == 1) {
         int f;
+        int vis = ((int)wnd_ch[parent] - py0 - LV_HEADER_H) / 16;
+        if (vis < 1)
+            vis = 1;
+        /* Fase 24-P3.2: scroll — la seleccion siempre queda visible y
+         * se dibuja un scrollbar (patron Fase 23-A2) a la derecha. */
+        if (lv_sel[i] < lv_scroll[i])
+            lv_scroll[i] = lv_sel[i];
+        else if (lv_sel[i] >= lv_scroll[i] + vis)
+            lv_scroll[i] = lv_sel[i] - vis + 1;
+        if (lv_scroll[i] > lv_nitem[i] - vis)
+            lv_scroll[i] = lv_nitem[i] > vis ? lv_nitem[i] - vis : 0;
+        if (lv_scroll[i] < 0)
+            lv_scroll[i] = 0;
         for (y = py0; y < py0 + ph && y < cw && y < wnd_ch[parent]; y++) {
             uint32_t *row = px + (uint32_t)y * (uint32_t)cw;
             for (x = px0; x < px0 + pw && x < cw; x++)
@@ -1764,8 +1781,8 @@ static void child_paint(uint32_t i)
                 s++;
             }
         }
-        for (f = 0; f < lv_nitem[i]; f++) {
-            int fy = py0 + LV_HEADER_H + f * 16;
+        for (f = lv_scroll[i]; f < lv_nitem[i]; f++) {
+            int fy = py0 + LV_HEADER_H + (f - lv_scroll[i]) * 16;
             const char *s = lv_item[i][f];
             int cx = px0 + 4, idx = 0, c;
             if (fy + 16 > py0 + ph || fy + 16 > wnd_ch[parent])
@@ -1805,10 +1822,14 @@ static void child_paint(uint32_t i)
                 int cx2 = px0 + 4;
                 for (c = 0; c < 1; c++)
                     cx2 += lv_colw[i][c];
-                do {
-                    num[np++] = (char)('0' + v % 10);
-                    v /= 10;
-                } while (v);
+                if (v < 0) {            /* Fase 24-P3.2: dir -> "/" */
+                    num[np++] = '/';
+                } else {
+                    do {
+                        num[np++] = (char)('0' + v % 10);
+                        v /= 10;
+                    } while (v);
+                }
                 for (cc = np - 1; cc >= 0; cc--) {
                     const unsigned char *g =
                         font8x16_basic[num[cc] - 32];
@@ -1826,6 +1847,33 @@ static void child_paint(uint32_t i)
                             }
                     cx2 += 8;
                 }
+            }
+        }
+        if (lv_nitem[i] > vis) {
+            /* scrollbar a la derecha (patron Fase 23-A2) */
+            int sx = px0 + pw - 12, track, th, ty;
+            int span = lv_nitem[i] - vis;
+            track = (int)wnd_ch[parent] - py0 - LV_HEADER_H;
+            th = track * vis / lv_nitem[i];
+            if (th < 8)
+                th = 8;
+            if (th > track)
+                th = track;
+            ty = py0 + LV_HEADER_H +
+                 (track - th) * lv_scroll[i] / span;
+            if (ty < py0 + LV_HEADER_H)
+                ty = py0 + LV_HEADER_H;
+            for (y = py0 + LV_HEADER_H; y < py0 + LV_HEADER_H + track &&
+                        y < cw && y < wnd_ch[parent]; y++) {
+                uint32_t *row = px + (uint32_t)y * (uint32_t)cw;
+                for (x = sx; x < sx + 12 && x < px0 + pw && x < cw; x++)
+                    row[x] = px_disp(0x00C0C0C0u);
+            }
+            for (y = ty; y < ty + th && y < cw && y < wnd_ch[parent];
+                 y++) {
+                uint32_t *row = px + (uint32_t)y * (uint32_t)cw;
+                for (x = sx; x < sx + 12 && x < px0 + pw && x < cw; x++)
+                    row[x] = px_disp(0x008080A0u);
             }
         }
         return;
@@ -2166,7 +2214,7 @@ uint32_t builtin_wndproc(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
                     else if (txt[k] != ' ')
                         sig = 1;
                 }
-                lv_isz[i][iitem] = neg ? -v : v;
+                lv_isz[i][iitem] = neg ? (v > 0 ? -v : -1) : v;
                 (void)sig;
             }
             child_repaint(i);
@@ -2216,6 +2264,8 @@ uint32_t builtin_wndproc(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
         if (m == 0x1043) {          /* LVM_SETSELECTIONMARK: a=sel */
             if ((int)a >= 0 && (int)a < lv_nitem[i]) {
                 lv_sel[i] = (int)a;
+                if (lv_sel[i] < lv_scroll[i])
+                    lv_scroll[i] = lv_sel[i];
                 child_repaint(i);
             }
             return 1;
@@ -2424,9 +2474,14 @@ uint32_t builtin_wndproc(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
     }
     if (m == WM_KEYDOWN) {
         /* Fase 23-C11: listview: flechas mueven la seleccion, Enter
-         * envia WM_COMMAND al padre con (id<<16)|1. */
+         * envia WM_COMMAND al padre con (id<<16)|1. Fase 24-P3.2:
+         * Home/End/PgUp/PgDn con scroll y 'b'/'q' al padre (subir/
+         * cerrar). */
         if (is_child(hwnd) && child_type[hwnd - CHILD_BASE] == 1) {
             uint32_t i = hwnd - CHILD_BASE;
+            int vis = ((int)child_h[i] - LV_HEADER_H) / 16;
+            if (vis < 1)
+                vis = 1;
             if (a == 0x102 /*up*/) {
                 if (lv_sel[i] > 0) {
                     lv_sel[i]--;
@@ -2441,11 +2496,72 @@ uint32_t builtin_wndproc(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
                 }
                 return 0;
             }
+            if (a == 0x104 /*home*/) {
+                lv_sel[i] = 0;
+                child_repaint(i);
+                return 0;
+            }
+            if (a == 0x105 /*end*/) {
+                lv_sel[i] = lv_nitem[i] > 0 ? lv_nitem[i] - 1 : 0;
+                child_repaint(i);
+                return 0;
+            }
+            if (a == 0x106 /*pgup*/) {
+                if (lv_sel[i] > vis)
+                    lv_sel[i] -= vis;
+                else
+                    lv_sel[i] = 0;
+                child_repaint(i);
+                return 0;
+            }
+            if (a == 0x107 /*pgdn*/) {
+                if (lv_sel[i] + vis < lv_nitem[i] - 1)
+                    lv_sel[i] += vis;
+                else if (lv_nitem[i] > 0)
+                    lv_sel[i] = lv_nitem[i] - 1;
+                child_repaint(i);
+                return 0;
+            }
             if (a == '\n') {
                 uint32_t parent = child_parent[i];
                 if (parent < MAX_WNDPROCS && wnd_proc[parent])
                     msgq_push(parent, WM_COMMAND,
                               (hwnd - CHILD_BASE + 1) << 16 | 1, 0);
+                return 0;
+            }
+            if (a == 'b') {         /* subir al directorio padre */
+                uint32_t parent = child_parent[i];
+                if (parent < MAX_WNDPROCS && wnd_proc[parent])
+                    msgq_push(parent, WM_COMMAND,
+                              (hwnd - CHILD_BASE + 1) << 16 | 2, 0);
+                return 0;
+            }
+            if (a == 'q') {         /* cerrar */
+                uint32_t parent = child_parent[i];
+                if (parent < MAX_WNDPROCS && wnd_proc[parent])
+                    msgq_push(parent, WM_COMMAND,
+                              (hwnd - CHILD_BASE + 1) << 16 | 3, 0);
+                return 0;
+            }
+            if (a == 'i') {         /* test: clic simple fila 0 */
+                uint32_t parent = child_parent[i];
+                if (parent < MAX_WNDPROCS && wnd_proc[parent])
+                    msgq_push(parent, WM_COMMAND,
+                              (hwnd - CHILD_BASE + 1) << 16 | 4, 0);
+                return 0;
+            }
+            if (a == 'd') {         /* test: doble clic fila 0 */
+                uint32_t parent = child_parent[i];
+                if (parent < MAX_WNDPROCS && wnd_proc[parent])
+                    msgq_push(parent, WM_COMMAND,
+                              (hwnd - CHILD_BASE + 1) << 16 | 5, 0);
+                return 0;
+            }
+            if (a == 'm') {         /* test: ultimo .exe */
+                uint32_t parent = child_parent[i];
+                if (parent < MAX_WNDPROCS && wnd_proc[parent])
+                    msgq_push(parent, WM_COMMAND,
+                              (hwnd - CHILD_BASE + 1) << 16 | 6, 0);
                 return 0;
             }
             return 0;

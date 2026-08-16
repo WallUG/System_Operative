@@ -263,13 +263,39 @@ bootscreen (sin swap) aparece como (B,G,R), ojo al comparar).
 
 ### P3.2. Explorer Win32 completo (listview ya validado en C11)
 
-**Estado**: listview.exe prueba el SysListView32; el explorer real sigue
-siendo ELF.
-
-**Tarea**: reescribir explorer.exe Win32 con el ListView (columnas nombre/
-tamaño, navegación, doble clic abre/lanza) usando el listview de C11.
-
-**Por qué**: unifica el sistema en Win32.
+**Estado: COMPLETADO.** `explorer.exe` (Win32) sustituye al explorer ELF:
+- **SysListView32** (comctl32) con columnas Nombre(300)/Tam(90); filas
+  del MEFS vía SYS_DLISTDIR inline; subdirectorios con "/" en la col
+  Tam (col 1 negativa = marcador, parse `neg ? (v>0 ? -v : -1) : v`).
+- **Navegación**: ".." virtual al tope (si no es la raíz), Enter/`b`/
+  doble clic en subdir → SYS_DLOOKUP+cd, `b` → SYS_DPARENT; `.exe/.elf`
+  → fork+exec; resto → **visor** (GDI: GetDC/FillRect/TextOutA en el
+  cliente del top-level, RichEdit NO — el listview se destruye y el
+  padre pinta; `b` vuelve recreando el listview).
+- **Clic**: WM_LBUTTONDOWN trae coords de PANTALLA (event_to_wm no
+  convierte): fila = (y - win_top - TITLE - FRAME - CHILD_Y -
+  LV_HDR)/ROW_H; LVM_SETSELECTIONMARK; doble clic = misma fila en
+  <300 ms (SYS_TICKS 41, patrón P3.1).
+- **Scroll del listview (user32)**: lv_scroll + auto-follow de la
+  selección + Home/End/PgUp/PgDn + scrollbar visual (patrón A2). El
+  listview además enruta `b`/`q`/`i`/`d`/`m` al padre como WM_COMMAND
+  (id<<16)|2..6.
+- **Bucle de mensajes con poll**: `PeekMessageA` (no bloquea) + chequeo
+  de `pending_x` (clics en el X de la app lanzada cada 2.5 s, 14
+  intentos) — con GetMessageA los inyectados nunca se procesan (el
+  bucle se bloquea dentro de user32).
+- **Teclas de test headless**: `d` = doble clic fila 0 (lanza
+  hello.elf), `m` = lanzar el ÚLTIMO .exe de la lista (metapad) — no
+  depende de la posición del FS; `i` = clic simple fila 0.
+- **Lecciones del test** (tools/test_fase24p32.py, 15/15): (1) la tecla
+  UP del listview es FLAKY (~1/2 registra) — el test NO depende de
+  flechas para alcanzar filas concretas (End+Enter + hooks); (2)
+  `waitstr` del log acumulado matchea marcadores ANTIGUOS (el exit:0
+  del instalador) → esperar "exp: lanzando X" y luego buscar en
+  acc[mark:]; (3) el PPM del visor es (B,G,R) de 0x00101020 = (32,16,16);
+  (4) metapad tarda ~10 s en cargar — los clics del X necesitan
+  margen; (5) el FS de la raíz varía según los residuos de tests
+  previos (registry.ini de metapad) → `make persist_disk` en cada run.
 
 ## Orden sugerido de ejecución
 

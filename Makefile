@@ -198,6 +198,14 @@ $(BUILD)/user/win32/blitclip.exe: user/win32/blitclip.c
 	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
 	           -Wl,--subsystem,console -s -o $@ $< -luser32 -lgdi32 -lkernel32
 
+# explorer.exe: explorador Win32 con SysListView32 (Fase 24-P3.2).
+WIN_APPS  += $(BUILD)/user/win32/explorer.exe
+
+$(BUILD)/user/win32/explorer.exe: user/win32/explorer.c
+	@mkdir -p $(dir $@)
+	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
+	           -Wl,--subsystem,console -s -o $@ $< -luser32 -lgdi32 -lcomctl32
+
 $(BUILD)/user/win32/heaptest.exe: user/win32/heaptest.c
 	@mkdir -p $(dir $@)
 	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
