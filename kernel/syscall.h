@@ -57,6 +57,8 @@
 #define SYS_REDRAW_RECT 42   /* ebx=&{x,y,w,h} pantalla: wm_redraw_rect   */
 #define SYS_WINVIS 43        /* ebx=id, ecx=0/1: mostrar/ocultar ventana  */
 #define SYS_WINFIND 44       /* ebx=pid -> id de ventana (0 si ninguna)   */
+#define SYS_QPC 45           /* edx:eax = contador PIT de alta resolucion
+                                (unidades = divisor del PIT, Fase 25)    */
 
 void syscall_init(void);            /* registra el gate 0x80 (DPL=3) */
 void syscall_handler(registers_t *regs);

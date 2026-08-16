@@ -10,5 +10,9 @@ void timer_init(uint32_t hz);
 void timer_tick(void);
 /* Contador global de ticks desde timer_init. */
 uint32_t timer_get_ticks(void);
+/* Fase 25 (W2A): contador de alta resolucion "real" (solo el PIT):
+ * unidades = divisor del PIT (1193182/100 = 11931) por segundo,
+ * monotono creciente, continuo entre ticks (latch del contador). */
+uint64_t timer_qpc(void);
 
 #endif

@@ -3,7 +3,7 @@
 
 Verifica el explorador reescrito como .exe (comctl32 listview):
 - Tras crear installed/ con installer.elf, el explorer lista la raiz
-  con columnas Nombre/Tam ("exp: items=50 cols=2") y screendump con
+  con columnas Nombre/Tam ("exp: items=51 cols=2") y screendump con
   header, filas y scrollbar (thumb visible).
 - 'd' (hook de test) inyecta doble clic en la fila 0: lanza hello.elf
   ("exp: lanzando hello.elf" + exit:0) — el clic selecciona y el
@@ -96,9 +96,9 @@ check('instalador crea installed/', True)
 sendcmd('run explorer.exe')
 if not waitstr('exp: start', 15):
     print('FAIL - explorer no arranca'); print(''.join(acc)[-500:]); qemu.terminate(); sys.exit(1)
-if not waitstr('exp: items=50 cols=2', 10):
+if not waitstr('exp: items=51 cols=2', 10):
     print('FAIL - items'); print(''.join(acc)[-500:]); qemu.terminate(); sys.exit(1)
-check('explorer lista la raiz (items=50, 2 columnas)', True)
+check('explorer lista la raiz (items=51, 2 columnas)', True)
 time.sleep(0.5)
 if os.environ.get('NODUMP') != '1':
     hmp('screendump /tmp/opencode/p32_root.ppm', 0.8)

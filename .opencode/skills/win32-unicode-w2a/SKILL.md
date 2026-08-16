@@ -27,6 +27,38 @@ diálogos, botones de título) NO debe romperse.
   (red: ARP + ICMP contra 10.0.2.2). Sin stack TCP/UDP aún.
 - Detalle completo del análisis: `docs/compat_fase24p4.md`.
 
+## Progreso (Fase 25, paso 1 COMPLETADO — commit pendiente)
+
+El set de inicialización W está hecho y validado (`tools/test_fase25w2a1.py`
+9/9 PASS + regresión completa PASS):
+- **Reloj real**: `SYS_QPC 45` (nuevo syscall, devuelve edx:eax =
+  contador PIT de alta resolución: latch + `ticks*divisor + (divisor-cnt)`,
+  serie continua entre ticks; `kernel/drivers/timer.c` `timer_qpc()`).
+  `GetSystemTimeAsFileTime` = FILETIME real con origen 2024-01-01
+  (constante 133485408000000000 = 0x01DA3C45_7689C000; TODO en
+  aritmética 32-bit — **sin `__udivdi3`/`__muldi3` en ring 3**, el
+  linker falla con undefined reference). `QueryPerformanceCounter`/
+  `Frequency` (frec = 1193182). `GetTickCount` = ticks×10.
+- **Sleep real** (espera por ticks, antes era busy-wait corto que no
+  avanzaba GetTickCount en el test).
+- **Versiones W**: `GetCommandLineW` (TIB ASCII → UTF-16, buffer
+  estático en kernel32 — privado por proceso), `GetEnvironmentStringsW`
+  (+ Free), `GetModuleFileNameW`, `GetCurrentThreadId` (= pid de la
+  tarea actual; cada hilo del kernel tiene pid propio).
+- Ya existían y se validaron: secciones críticas (spinlock de 1 bit),
+  VirtualProtect (no-op TRUE), VirtualAlloc (win_malloc), Tls*.
+- Ajuste de regresión: `test_fase24p32.py` esperaba items=50; la raíz
+  ganó w2atest.exe → items=51.
+
+Lecciones de la implementación:
+- ring 3 (kernel32.dll) NO tiene libgcc: toda aritmética 64-bit debe
+  hacerse con ops 32-bit (u32×u32 → u64 con `mull`, sumas y shifts).
+- Los buffers estáticos de las DLL son por-proceso (cada PD mapea su
+  copia), seguro para GetCommandLineW/GetEnvironmentStringsW.
+- No confiar en discos persistidos viejos al hacer tests manuales:
+  `make persist_disk` antes de cada run (un disco stale produjo un
+  hang fantasma durante el debug).
+
 ## El problema: MSVC ≠ mingw
 
 - mingw compila con APIs **A** (ANSI). MSVC define `UNICODE` y usa
@@ -42,13 +74,20 @@ diálogos, botones de título) NO debe romperse.
 
 | Función | Estado | Trabajo |
 |---|---|---|
-| GetSystemTimeAsFileTime | stub {0,0} | **RELoj real** (ver abajo) |
-| QueryPerformanceCounter | stub 0 | real vía PIT |
+| GetSystemTimeAsFileTime | **REAL** (origen 2024-01-01, aritmética 32-bit) | — |
+| QueryPerformanceCounter | **REAL** (SYS_QPC 45, frec 1193182) | — |
+| GetTickCount | **REAL** (ticks×10) | — |
+| Sleep | **REAL** (espera por ticks) | — |
+| GetCommandLineW | **REAL** (TIB ASCII→UTF-16) | — |
+| GetEnvironmentStringsW | **REAL** (bloque UTF-16 PATH/HOME) | — |
+| GetModuleFileNameW | **REAL** (A→UTF-16) | — |
+| GetCurrentThreadId | **REAL** (= pid de la tarea) | — |
 | VirtualAlloc | win_malloc(size) | OK para el caso común |
 | VirtualFree | no-op TRUE | OK |
 | GetModuleFileNameA | "C:\\MyOS\\"+selfname | OK |
-| VirtualProtect | **no exportada** | no-op TRUE (sin DEP) |
-| Toda versión W | **no existe** | thunks W→A |
+| VirtualProtect | no-op TRUE (sin DEP) | OK |
+| CriticalSections | spinlock de 1 bit | OK (MSVC las trata opacas) |
+| Toda versión W de archivos/user32 | **no existe** | thunks W→A (paso 2) |
 
 ## Thunking W→A (el núcleo)
 
@@ -102,14 +141,12 @@ Implementar el reloj de verdad, no un stub:
 ## El plan de desarrollo
 
 ### 1. Set de inicialización W (lo primero — sin esto ningún MSVC arranca)
-`GetCommandLineW` (devolver UTF-16 de la línea de comandos real),
-`GetEnvironmentStringsW`, `GetModuleFileNameW`, `GetTickCount`,
-`QueryPerformanceCounter` (real), `GetSystemTimeAsFileTime` (REAL,
-ver "Reloj real"), `GetCurrentProcessId`, `GetCurrentThreadId`,
-`InitializeCriticalSection` / `EnterCriticalSection` /
-`LeaveCriticalSection` / `DeleteCriticalSection` (estructura de 4
-dwords en memoria del caller, sin bloqueo real o con el lock del
-scheduler), `VirtualProtect` (no-op TRUE).
+**COMPLETADO** (ver "Progreso"): GetCommandLineW, GetEnvironmentStringsW,
+GetModuleFileNameW, GetTickCount, QueryPerformanceCounter (SYS_QPC 45),
+GetSystemTimeAsFileTime (reloj real con origen 2024-01-01),
+GetCurrentProcessId, GetCurrentThreadId, secciones críticas,
+VirtualProtect (no-op TRUE). Validado con `tools/test_fase25w2a1.py`
+y w2atest.exe.
 
 ### 2. Thunks W→A de kernel32 (~50)
 CreateFileW, FindFirstFileW, FindNextFileW, GetModuleFileNameW,

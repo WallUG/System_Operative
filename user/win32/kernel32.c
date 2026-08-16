@@ -30,6 +30,12 @@
 #define SYS_FLUSH   29
 #define SYS_THREADCREATE 39 /* Fase 24-P2.2: ebx=fn, ecx=param, edx=&tid */
 #define SYS_THREADEXIT 40   /* Fase 24-P2.2: ebx=code */
+#define SYS_TICKS   41      /* ticks del timer (100 Hz) */
+#define SYS_QPC     45      /* edx:eax = contador PIT alta resolucion */
+
+/* Fase 25 (W2A): la frecuencia del PIT como QPC (1193182 Hz nominal;
+ * el divisor cargado es 1193182/100 = 11931 unidades por tick). */
+#define QPC_FREQ 1193182ull
 
 #define INVALID_HANDLE_VALUE ((uint32_t)-1)
 
@@ -194,6 +200,27 @@ static uint32_t sys_getpid(void)
 
 uint32_t __attribute__((stdcall)) GetCurrentProcessId(void)  { return sys_getpid(); }
 
+/* Fase 25: GetCurrentThreadId — cada hilo del kernel tiene su propio
+ * pid (task_create_thread los numeran), asi que el pid de la tarea
+ * actual ES el id del hilo. La semantica Windows (pid != tid, tid del
+ * hilo principal == pid del proceso) queda aproximada. */
+uint32_t __attribute__((stdcall)) GetCurrentThreadId(void) { return sys_getpid(); }
+
+static uint32_t sys_ticks(void)
+{
+    uint32_t r;
+    __asm__ volatile("int $0x80" : "=a"(r) : "a"(SYS_TICKS));
+    return r;
+}
+
+/* Contador PIT de alta resolucion (edx:eax). */
+static uint64_t sys_qpc(void)
+{
+    uint32_t lo, hi;
+    __asm__ volatile("int $0x80" : "=a"(lo), "=d"(hi) : "a"(SYS_QPC));
+    return ((uint64_t)hi << 32) | lo;
+}
+
 static uint32_t sys_selfname(char *buf, uint32_t max)
 {
     uint32_t r;
@@ -228,11 +255,33 @@ uint32_t __attribute__((stdcall)) GetModuleFileNameA(uint32_t hmodule, char *buf
     return plen + n;
 }
 
+/* Fase 25: GetModuleFileNameW (MSVC): la A rellena ASCII; convertir
+ * A->UTF-16 en el buffer W del caller (max en wchar_t). */
+uint32_t __attribute__((stdcall)) GetModuleFileNameW(uint32_t hmodule, uint16_t *buf,
+                                                    uint32_t max)
+{
+    char a[64];
+    uint32_t n, i;
+
+    if (buf == 0 || max == 0)
+        return 0;
+    n = GetModuleFileNameA(hmodule, a, sizeof(a));
+    if (n == 0)
+        return 0;
+    if (n >= max)
+        n = max - 1;
+    for (i = 0; i < n; i++)
+        buf[i] = (uint16_t)(uint8_t)a[i];
+    buf[i] = 0;
+    return n;
+}
+
 /* Linea de comandos real del proceso: el kernel la copia al TIB de la
  * tarea (WIN32_TIB_CMDLINE_OFF) al lanzarla o hacer exec; %fs:0x18 da
  * la base del TIB de la tarea actual. */
 #define WIN32_TIB_VA          0x84000000u
 #define WIN32_TIB_CMDLINE_OFF 0x100u
+#define WIN32_TIB_CMDLINE_LEN 128u
 
 char *__attribute__((stdcall)) GetCommandLineA(void)
 {
@@ -242,10 +291,35 @@ char *__attribute__((stdcall)) GetCommandLineA(void)
     return (char *)(tib + WIN32_TIB_CMDLINE_OFF);
 }
 
+/* Fase 25: GetCommandLineW real (MSVC): convierte la linea ASCII del
+ * TIB a UTF-16 en un buffer estatico (las DLLs se mapean por proceso,
+ * asi que el buffer es privado de cada proceso). */
+static uint16_t w_cmdline[WIN32_TIB_CMDLINE_LEN];
+
+uint16_t *__attribute__((stdcall)) GetCommandLineW(void)
+{
+    char *a = GetCommandLineA();
+    int i;
+    for (i = 0; i < WIN32_TIB_CMDLINE_LEN - 1 && a[i]; i++)
+        w_cmdline[i] = (uint16_t)(uint8_t)a[i];
+    w_cmdline[i] = 0;
+    return w_cmdline;
+}
+
 static char *env_block[] = { (char *)"PATH=.\0HOME=.\0", 0 };
 
 char **__attribute__((stdcall)) GetEnvironmentStringsA(void) { return env_block; }
 void  __attribute__((stdcall)) FreeEnvironmentStringsA(char **p) { (void)p; }
+
+/* Fase 25: bloque de entorno en UTF-16 ("PATH=.\0HOME=.\0\0"). */
+static uint16_t w_env_block[] = {
+    'P', 'A', 'T', 'H', '=', '.', 0,
+    'H', 'O', 'M', 'E', '=', '.', 0,
+    0
+};
+
+uint16_t *__attribute__((stdcall)) GetEnvironmentStringsW(void) { return w_env_block; }
+void __attribute__((stdcall)) FreeEnvironmentStringsW(uint16_t *p) { (void)p; }
 
 /* --- errores --- */
 
@@ -467,15 +541,48 @@ int __attribute__((stdcall)) IsDebuggerPresent(void) { return 0; }
 
 void __attribute__((stdcall)) Sleep(uint32_t ms)
 {
-    (void)ms;
-    for (volatile uint32_t i = 0; i < 100000; i++) ;
+    uint32_t end = sys_ticks() * 10 + ms;   /* GetTickCount + ms */
+    while (sys_ticks() * 10 < end) ;         /* espera real por ticks */
 }
 
-uint32_t __attribute__((stdcall)) GetTickCount(void) { return 0; }
+uint32_t __attribute__((stdcall)) GetTickCount(void) { return sys_ticks() * 10; }
 
-void __attribute__((stdcall)) GetSystemTimeAsFileTime(uint32_t *t) { if (t) { t[0] = 0; t[1] = 0; } }
-uint32_t QueryPerformanceCounter(void *c) { if (c) *(uint64_t *)c = 0; return 1; }
-uint32_t __attribute__((stdcall)) QueryPerformanceFrequency(void *c) { if (c) *(uint64_t *)c = 1000; return 1; }
+/* Fase 25: reloj REAL (no stub). FILETIME = unidades de 100 ns desde
+ * 1601-01-01. Origen fijo: 2024-01-01T00:00:00Z (unix 1704067200) +
+ * offset 1601->1970 (11644473600) = 13348540800 s -> x10^7.
+ * Todo aritmetica 32-bit (sin __udivdi3 en ring 3); la fuente es el
+ * PIT a 100 Hz, asi que la resolucion es de 10 ms (suficiente para
+ * time()/_time64, semilla de rand y tmpnam). */
+#define FT_EPOCH_2024 133485408000000000ull
+
+void __attribute__((stdcall)) GetSystemTimeAsFileTime(uint32_t *t)
+{
+    uint32_t ticks = sys_ticks();
+    uint32_t sec = ticks / 100;
+    uint32_t ms = (ticks % 100) * 10;   /* 0..990 */
+    uint64_t ft;
+
+    if (!t)
+        return;
+    ft = FT_EPOCH_2024 + (uint64_t)sec * 10000000ull
+         + (uint64_t)ms * 10000ull;
+    t[0] = (uint32_t)ft;
+    t[1] = (uint32_t)(ft >> 32);
+}
+
+uint32_t __attribute__((stdcall)) QueryPerformanceCounter(void *c)
+{
+    if (c)
+        *(uint64_t *)c = sys_qpc();
+    return 1;
+}
+
+uint32_t __attribute__((stdcall)) QueryPerformanceFrequency(void *c)
+{
+    if (c)
+        *(uint64_t *)c = QPC_FREQ;
+    return 1;
+}
 
 uint32_t GetSystemTime(uint32_t *t)
 {
@@ -1754,11 +1861,14 @@ win32_export_t __exports[] __attribute__((section(".exports"))) = {
     { "ExitProcess",           (uint32_t)&ExitProcess },
     { "GetCurrentProcess",     (uint32_t)&GetCurrentProcess },
     { "GetCurrentProcessId",   (uint32_t)&GetCurrentProcessId },
+    { "GetCurrentThreadId",    (uint32_t)&GetCurrentThreadId },
     { "TerminateProcess",      (uint32_t)&TerminateProcess },
     { "GetCommandLineA",       (uint32_t)&GetCommandLineA },
-    { "GetCommandLineW",       (uint32_t)&GetCommandLineA },
+    { "GetCommandLineW",       (uint32_t)&GetCommandLineW },
     { "GetEnvironmentStringsA",(uint32_t)&GetEnvironmentStringsA },
     { "FreeEnvironmentStringsA",(uint32_t)&FreeEnvironmentStringsA },
+    { "GetEnvironmentStringsW",(uint32_t)&GetEnvironmentStringsW },
+    { "FreeEnvironmentStringsW",(uint32_t)&FreeEnvironmentStringsW },
     { "GetLastError",          (uint32_t)&GetLastError },
     { "SetLastError",          (uint32_t)&SetLastError },
     { "InitializeCriticalSection", (uint32_t)&InitializeCriticalSection },
@@ -1771,6 +1881,7 @@ win32_export_t __exports[] __attribute__((section(".exports"))) = {
     { "TlsSetValue",           (uint32_t)&TlsSetValue },
     { "GetModuleHandleA",      (uint32_t)&GetModuleHandleA },
     { "GetModuleFileNameA",    (uint32_t)&GetModuleFileNameA },
+    { "GetModuleFileNameW",    (uint32_t)&GetModuleFileNameW },
     { "GetProcAddress",        (uint32_t)&GetProcAddress },
     { "LoadLibraryA",          (uint32_t)&LoadLibraryA },
     { "FreeLibrary",           (uint32_t)&FreeLibrary },
@@ -1784,6 +1895,7 @@ win32_export_t __exports[] __attribute__((section(".exports"))) = {
     { "IsDBCSLeadByte",        (uint32_t)&IsDBCSLeadByte },
     { "GetTickCount",          (uint32_t)&GetTickCount },
     { "GetSystemTimeAsFileTime", (uint32_t)&GetSystemTimeAsFileTime },
+    { "QueryPerformanceCounter", (uint32_t)&QueryPerformanceCounter },
     { "QueryPerformanceFrequency", (uint32_t)&QueryPerformanceFrequency },
     { "VirtualProtect",        (uint32_t)&VirtualProtect },
     { "VirtualQuery",          (uint32_t)&VirtualQuery },

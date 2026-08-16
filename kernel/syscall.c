@@ -392,6 +392,13 @@ void syscall_handler(registers_t *regs)
         regs->eax = timer_get_ticks();
         break;
     }
+    case SYS_QPC: { /* Fase 25 (W2A): contador PIT de alta resolucion
+                     * (QueryPerformanceCounter real, edx:eax) */
+        uint64_t q = timer_qpc();
+        regs->eax = (uint32_t)q;
+        regs->edx = (uint32_t)(q >> 32);
+        break;
+    }
     case SYS_REDRAW_RECT: { /* ebx=&{x,y,w,h} en coords de PANTALLA:
                              * restaura el fondo + repinta las ventanas
                              * que lo intersectan (cierre de dialogos

@@ -184,6 +184,16 @@ $(BUILD)/user/win32/bootpaths.exe: user/win32/bootpaths.c
 	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
 	           -Wl,--subsystem,console -s -o $@ $< -luser32 -lkernel32
 
+# w2atest.exe: set de inicializacion W (Fase 25-W2A paso 1):
+# GetCommandLineW/GetModuleFileNameW/GetEnvironmentStringsW/tid real,
+# GetTickCount/QPC/GetSystemTimeAsFileTime reales.
+WIN_APPS  += $(BUILD)/user/win32/w2atest.exe
+
+$(BUILD)/user/win32/w2atest.exe: user/win32/w2atest.c
+	@mkdir -p $(dir $@)
+	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
+	           -Wl,--subsystem,console -s -o $@ $< -luser32 -lkernel32
+
 # thrtest.exe: CreateThread preemptivo (Fase 24-P2.2).
 WIN_APPS  += $(BUILD)/user/win32/thrtest.exe
 
