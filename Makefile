@@ -116,7 +116,8 @@ WIN32_REGION = 0xB0000000
 DLL_SRCS  = user/win32/kernel32.c user/win32/user32.c user/win32/ntdll.c \
             user/win32/msvcrt.c user/win32/gdi32.c user/win32/comctl32.c \
             user/win32/comdlg32.c user/win32/advapi32.c user/win32/shell32.c \
-            user/win32/ole32.c user/win32/shlwapi.c user/win32/winspool.c
+            user/win32/ole32.c user/win32/shlwapi.c user/win32/winspool.c \
+            user/win32/winmm.c
 DLL_ELFS  = $(patsubst user/win32/%.c,$(BUILD)/user/win32/%.elf,$(DLL_SRCS))
 
 # Fase 9/11/12: .exe compilado con la toolchain REAL de Windows (CRT de
@@ -203,6 +204,15 @@ $(BUILD)/user/win32/w2demo.exe: user/win32/w2demo.c
 	@mkdir -p $(dir $@)
 	$(MINGW32) -m32 -O1 -municode -Wl,--image-base,0x80000000 \
 	           -Wl,--subsystem,console -s -o $@ $< -luser32 -lkernel32
+
+# wavplay.exe: winmm (Fase 25-W2A paso 5): genera tone.wav, lo
+# reproduce con PlaySoundA + waveOutWrite + mciSendStringA.
+WIN_APPS  += $(BUILD)/user/win32/wavplay.exe
+
+$(BUILD)/user/win32/wavplay.exe: user/win32/wavplay.c
+	@mkdir -p $(dir $@)
+	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
+	           -Wl,--subsystem,console -s -o $@ $< -lwinmm -lkernel32
 
 # thrtest.exe: CreateThread preemptivo (Fase 24-P2.2).
 WIN_APPS  += $(BUILD)/user/win32/thrtest.exe
@@ -328,6 +338,7 @@ $(BUILD)/user/win32/%.elf: user/win32/%.c tools/dll32.ld
 	        ole32)    echo $$(( $(WIN32_REGION) + 0x900000 )) ;; \
 	        shlwapi)  echo $$(( $(WIN32_REGION) + 0xA00000 )) ;; \
 	        winspool) echo $$(( $(WIN32_REGION) + 0xB00000 )) ;; \
+	        winmm)    echo $$(( $(WIN32_REGION) + 0xC00000 )) ;; \
 	        *) echo $(WIN32_REGION) ;; esac) \
 	      -o $@ $(BUILD)/user/win32/$*.o
 

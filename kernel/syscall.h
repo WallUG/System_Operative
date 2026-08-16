@@ -59,6 +59,8 @@
 #define SYS_WINFIND 44       /* ebx=pid -> id de ventana (0 si ninguna)   */
 #define SYS_QPC 45           /* edx:eax = contador PIT de alta resolucion
                                 (unidades = divisor del PIT, Fase 25)    */
+#define SYS_AUDIO_PLAY 46    /* ebx=user buf PCM 16-bit stereo, ecx=bytes,
+                                edx=rate: reproduce (bloquea; Fase 25-W2A) */
 
 void syscall_init(void);            /* registra el gate 0x80 (DPL=3) */
 void syscall_handler(registers_t *regs);

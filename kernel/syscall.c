@@ -30,6 +30,7 @@
 #include "drivers/serial.h"
 #include "drivers/keyboard.h"
 #include "drivers/mouse.h"
+#include "drivers/ac97.h"
 #include "drivers/vbe.h"
 #include "winmgr.h"
 #include "fs/mefs.h"
@@ -397,6 +398,54 @@ void syscall_handler(registers_t *regs)
         uint64_t q = timer_qpc();
         regs->eax = (uint32_t)q;
         regs->edx = (uint32_t)(q >> 32);
+        break;
+    }
+    case SYS_AUDIO_PLAY: { /* Fase 25-W2A: reproduce PCM del usuario
+                            * (16-bit stereo a edx Hz) por el AC'97.
+                            * Copia a un buffer del kernel (el DMA no
+                            * toca paginas de usuario) y bloquea. */
+        uint32_t bytes = regs->ecx, rate = regs->edx, off = 0;
+        uint32_t cksum = 0;
+        int r = 0;
+        const uint32_t CHUNK = 192 * 1024;   /* 1 s a 48 kHz stereo */
+        if (bytes == 0 || bytes > 1024u * 1024u) {
+            regs->eax = -1;
+            break;
+        }
+        for (off = 0; off < bytes && r == 0; off += CHUNK) {
+            uint32_t n = bytes - off;
+            uint8_t *tmp;
+            if (n > CHUNK)
+                n = CHUNK;
+            tmp = kmalloc(n);
+            if (tmp == 0) {
+                r = -1;
+                break;
+            }
+            if (user_memcpy_in(tmp, (const void *)(regs->ebx + off), n,
+                               pd) != 0) {
+                kfree(tmp);
+                r = -1;
+                break;
+            }
+            {
+                uint32_t i;
+                for (i = 0; i < n; i++)
+                    cksum += tmp[i];
+            }
+            r = ac97_play_kernel(tmp, n, rate);
+            kfree(tmp);
+        }
+        kprint("ac97: play rate=");
+        kprint_uint(rate);
+        kprint(" bytes=");
+        kprint_uint(bytes);
+        kprint(" cksum=");
+        kprint_hex32(cksum);
+        kprint(" res=");
+        kprint_uint((uint32_t)r);
+        kprint("\n");
+        regs->eax = (int32_t)r;
         break;
     }
     case SYS_REDRAW_RECT: { /* ebx=&{x,y,w,h} en coords de PANTALLA:

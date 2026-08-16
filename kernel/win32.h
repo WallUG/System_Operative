@@ -33,7 +33,7 @@
 #define WIN32_DLL_OLE32     9   /* base + 0x900000  ole32.dll */
 #define WIN32_DLL_SHLWAPI   10  /* base + 0xA00000  shlwapi.dll */
 #define WIN32_DLL_WINSPOOL  11  /* base + 0xB00000  winspool.dll */
-#define WIN32_MAX_DLLS      12
+#define WIN32_MAX_DLLS      16
 
 /* Fase 20-C: desplazamiento de la base de carga de las DLLs respecto a
  * la base de enlazado (WIN32_REGION_BASE + i*1MiB). 0 = comportamiento
