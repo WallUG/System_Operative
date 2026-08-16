@@ -36,6 +36,9 @@
 #define SYS_FWRITE 27
 #define SYS_FLUSH 29
 #define SYS_TICKS 41
+#define SYS_REDRAW_RECT 42
+#define SYS_WINVIS 43
+#define SYS_WINFIND 44
 
 /* --- eventos (kernel/drivers/mouse.h) --- */
 #define EV_MOVE         1
@@ -255,6 +258,34 @@ static inline uint32_t sys_ticks(void)
 {
     uint32_t r;
     __asm__ volatile("int $0x80" : "=a"(r) : "a"(SYS_TICKS));
+    return r;
+}
+
+/* Fase 24-P4: redibuja un rect en coords de PANTALLA (fondo + ventanas). */
+static inline void sys_redraw_rect(int x, int y, int w, int h)
+{
+    uint32_t r[4];
+    r[0] = (uint32_t)x; r[1] = (uint32_t)y;
+    r[2] = (uint32_t)w; r[3] = (uint32_t)h;
+    __asm__ volatile("int $0x80" : : "a"(SYS_REDRAW_RECT), "b"(r)
+                     : "memory");
+}
+
+/* Fase 24-P4: mostrar/ocultar una ventana (minimizar/restaurar). */
+static inline int sys_winvis(uint32_t id, int on)
+{
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_WINVIS), "b"(id), "c"(on) : "memory");
+    return r;
+}
+
+/* Fase 24-P4: id de la ventana del proceso pid (0 si no tiene). */
+static inline int sys_winfind(uint32_t pid)
+{
+    int r;
+    __asm__ volatile("int $0x80" : "=a"(r)
+                     : "a"(SYS_WINFIND), "b"(pid) : "memory");
     return r;
 }
 

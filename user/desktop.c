@@ -70,6 +70,7 @@ static uint32_t last_ticks;
 static int pending_x;               /* test: cerrar metapad con el X */
 static uint32_t x_ticks;
 static int x_tries;
+static int min_then_x;              /* test P4: MIN antes del X */
 
 #define X_PERIOD 250                /* 2.5 s entre inyecciones del X */
 #define X_TRIES  14                 /* ventana de ~35 s para el cierre */
@@ -485,7 +486,12 @@ static void paint_wallpaper(uint32_t *bg, int bw, int bh)
                 COLOR_HINT);
 }
 
-/* Lanza la app i-esima como hijo (fork + exec). */
+/* Lanza la app i-esima como hijo (fork + exec). Fase 24-P4: guarda
+ * el pid para restaurar su ventana si esta minimizada. */
+static int app_pids[MAX_APPS];
+
+static void log_dec(const char *pre, uint32_t v);
+
 static void launch_app(int i)
 {
     int kid;
@@ -510,7 +516,25 @@ static void launch_app(int i)
         sys_exit(2);
     } else if (kid < 0) {
         sys_write("esc: fork fallo\n", 16);
+    } else {
+        app_pids[i] = kid;
     }
+}
+
+/* Fase 24-P4: clic en el taskbar -> si la app ya tiene una ventana
+ * (minimizada o no) se restaura/muestra; si no, se lanza. Devuelve 1
+ * si se restauro. */
+static int taskbar_restore(int i)
+{
+    int wid;
+    if (i < 0 || i >= MAX_APPS || app_pids[i] <= 0)
+        return 0;
+    wid = sys_winfind((uint32_t)app_pids[i]);
+    if (wid <= 0)
+        return 0;
+    sys_winvis((uint32_t)wid, 1);
+    sys_write("esc: restaurando ventana\n", 24);
+    return 1;
 }
 
 /* Log de texto plano al serial. */
@@ -618,6 +642,17 @@ int _start(void)
 
         if (pending_x && (sys_ticks() - x_ticks >= X_PERIOD)) {
             x_ticks = sys_ticks();
+            if (min_then_x) {
+                /* Fase 24-P4: primer inyectado = MIN de la app (metapad
+                 * en 80,40: boton 630..646, y 42..58); luego X. */
+                min_then_x = 0;
+                sys_mouse_inject(EV_MOVE, 638, 50, 1, 0);
+                sys_mouse_inject(EV_BUTTON_DOWN, 638, 50, 1, 0);
+                sys_mouse_inject(EV_BUTTON_UP, 638, 50, 1, 0);
+                sys_write("esc: inj MIN\n", 13);
+                x_tries = 0;
+                continue;
+            }
             if (++x_tries >= X_TRIES)
                 pending_x = 0;
             sys_mouse_inject(EV_MOVE, 676, 43, 1, 0);
@@ -632,6 +667,10 @@ int _start(void)
         case EV_KEY:
             if (ev[4] == 'q')
                 goto salir;
+            if (ev[4] == 'm')      /* test P4: MIN antes del X */
+                min_then_x = 1;
+            if (ev[4] == 'r')      /* test P4: restaurar app 1 (METAPAD) */
+                taskbar_restore(1);
             if (ev[4] >= '1' && ev[4] <= '0' + MAX_APPS)
                 launch_app((int)(ev[4] - '1'));
             if (ev[4] == 'i') {      /* test: clic simple en icono 1 */
@@ -684,7 +723,8 @@ int _start(void)
             if (ai >= 0) {
                 tb_button(tb, 6 + ai * 136, 128, apps[ai].label, 0);
                 sys_winupdate(idt);
-                launch_app(ai);
+                if (!taskbar_restore(ai))
+                    launch_app(ai);
                 break;
             }
             hi = hit_icon((int)ev[1], (int)ev[2]);

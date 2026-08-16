@@ -392,6 +392,28 @@ void syscall_handler(registers_t *regs)
         regs->eax = timer_get_ticks();
         break;
     }
+    case SYS_REDRAW_RECT: { /* ebx=&{x,y,w,h} en coords de PANTALLA:
+                             * restaura el fondo + repinta las ventanas
+                             * que lo intersectan (cierre de dialogos
+                             * modales/messagebox dibujados al LFB) */
+        int32_t r[4];
+        if (user_memcpy_in(r, (const void *)regs->ebx, sizeof(r), pd)
+            != 0) {
+            regs->eax = -1;
+            break;
+        }
+        wm_redraw_rect(r[0], r[1], r[2], r[3]);
+        regs->eax = 0;
+        break;
+    }
+    case SYS_WINVIS: { /* ebx=id, ecx=0/1: mostrar/ocultar (P4 botones) */
+        regs->eax = wm_vis((int)regs->ebx, (int)regs->ecx);
+        break;
+    }
+    case SYS_WINFIND: { /* ebx=pid -> id de ventana del proceso */
+        regs->eax = (uint32_t)wm_find_by_pid(regs->ebx);
+        break;
+    }
     case SYS_FWRITE: { /* ebx=nombre, ecx=buf, edx=len: sobrescribe */
         char name[32];
         void *tmp;

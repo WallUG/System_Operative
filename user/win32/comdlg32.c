@@ -13,6 +13,7 @@
 #define SYS_DLIST   13
 #define SYS_GFXINFO 15
 #define SYS_EVENT   17
+#define SYS_REDRAW_RECT 42
 
 #define EV_MOVE         1
 #define EV_BUTTON_DOWN  2
@@ -158,6 +159,15 @@ static int sys_event(uint32_t *ev)
                      : "a"(SYS_EVENT), "b"(ev)
                      : "memory");
     return r;
+}
+
+/* Fase 24-P4: redibuja un rect en coords de PANTALLA (fondo + ventanas). */
+static void sys_redraw_rect(int x, int y, int w, int h)
+{
+    int32_t r[4];
+    r[0] = x; r[1] = y; r[2] = w; r[3] = h;
+    __asm__ volatile("int $0x80" : : "a"(SYS_REDRAW_RECT), "b"(r)
+                     : "memory");
 }
 
 /* --- lista de archivos del MEFS --- */
@@ -713,6 +723,10 @@ static uint32_t dlg_run(const void *ofn, int is_save)
             break;
         }
     }
+
+    /* Fase 24-P4: el dialogo se dibujo directo al LFB: restaurar el
+     * rect (fondo + ventanas) al cerrar para no dejar pixeles. */
+    sys_redraw_rect(dl_x - 3, dl_y - 3, DIALOG_W + 6, DIALOG_H + 6);
 
     if (result) {
         const char *src;

@@ -23,6 +23,7 @@
 #define SYS_WINTITLE 23
 #define SYS_EXEBASE 24
 #define SYS_MENUBAR 25
+#define SYS_REDRAW_RECT 42
 
 #define EV_MOVE         1
 #define EV_BUTTON_DOWN  2
@@ -151,6 +152,17 @@ static int sys_winupdate_rect(uint32_t id, const int32_t *rect)
                      : "a"(SYS_WINUPDATE), "b"(id), "c"(rect)
                      : "memory");
     return r;
+}
+
+/* Fase 24-P4: redibuja un rect en coords de PANTALLA (restaura fondo +
+ * ventanas). Para cerrar dialogos modales/messagebox dibujados al LFB
+ * (SYS_REDRAW_RECT 42). */
+static void sys_redraw_rect(int x, int y, int w, int h)
+{
+    int32_t r[4];
+    r[0] = x; r[1] = y; r[2] = w; r[3] = h;
+    __asm__ volatile("int $0x80" : : "a"(SYS_REDRAW_RECT), "b"(r)
+                     : "memory");
 }
 
 static int sys_wintitle(uint32_t id, const char *title)
@@ -674,15 +686,19 @@ uint32_t __attribute__((stdcall)) LoadAcceleratorsA(uint32_t hinst, uint32_t nam
     if (name == 0 || name > 0xFFFF)
         return 0;
     acc = find_resource(RT_ACCELERATOR, name, &size);
-    if (acc == 0 || size < 6)
+    if (acc == 0 || size < 8)
         return 0;
-    n = size / 6;
+    /* Formato real del recurso (Fase 24-P4): SOLO entradas de 8 bytes
+     * {fFlags, wAnsi, wId, pad} (sin DWORD count; 768 B = 96 entradas
+     * en metapad). Antes se parseaba con stride de 6 -> claves basura
+     * y Ctrl+S no abria el dialogo de Guardar. */
+    n = size / 8;
     if (n > ACCEL_MAX)
         n = ACCEL_MAX;
     for (i = 0; i < n; i++) {
-        accel_flags[i] = (uint8_t)rd16u(acc + i * 6);   /* fFlags */
-        accel_key[i] = rd16u(acc + i * 6 + 2);          /* wAnsi */
-        accel_id[i] = rd16u(acc + i * 6 + 4);           /* wId */
+        accel_flags[i] = (uint8_t)rd16u(acc + i * 8);   /* fFlags */
+        accel_key[i] = rd16u(acc + i * 8 + 2);          /* wAnsi */
+        accel_id[i] = rd16u(acc + i * 8 + 4);           /* wId */
     }
     accel_count = (int)n;
     console_print("[user32] LoadAcceleratorsA id=");
@@ -2564,6 +2580,13 @@ uint32_t builtin_wndproc(uint32_t hwnd, uint32_t m, uint32_t a, uint32_t b)
                               (hwnd - CHILD_BASE + 1) << 16 | 6, 0);
                 return 0;
             }
+            if (a == 't') {         /* test P4: secuencia botones */
+                uint32_t parent = child_parent[i];
+                if (parent < MAX_WNDPROCS && wnd_proc[parent])
+                    msgq_push(parent, WM_COMMAND,
+                              (hwnd - CHILD_BASE + 1) << 16 | 7, 0);
+                return 0;
+            }
             return 0;
         }
         /* Fase 24-P2.1: trackbar/treeview con teclado. */
@@ -3390,6 +3413,9 @@ static uint32_t dialog_modal(const uint8_t *tpl, uint32_t size, uint32_t f,
         if (dlg_done)
             break;
     }
+    /* Fase 24-P4: el dialogo se dibujo directo al LFB: restaurar el
+     * rect (fondo + ventanas) al cerrar para no dejar pixeles. */
+    sys_redraw_rect(wx - 3, wy - 3, ww + 6, wh + 6);
     return (uint32_t)dlg_result;
 }
 
@@ -3483,7 +3509,14 @@ uint32_t __attribute__((stdcall)) GetMenu(uint32_t hwnd) { (void)hwnd; return 0;
 
 static uint32_t menu_win_hwnd;      /* hwnd con la barra de menu        */
 
-/* Labels top-level (depth 0) en flat NUL-separados para el kernel. */
+static void menu_label(const menu_item_t *it, char *out, uint32_t max);
+
+/* Labels top-level (depth 0) en flat NUL-separados para el kernel.
+ * Fase 24-P4: igual que menu_label (sin '&' ni shortcut), para que el
+ * kernel dibuje los labels limpios y avance 8*len+16 con el MISMO
+ * largo que el hit-test menu_bar_top_at (antes el '&' crudo hacia
+ * derivar las posiciones 8 px por menu y el clic abria el popup
+ * equivocado). */
 static void menu_build_flat(char *flat, uint32_t max)
 {
     uint32_t k = 0;
@@ -3494,9 +3527,10 @@ static void menu_build_flat(char *flat, uint32_t max)
         menu_item_t *it = &loaded_menu.items[i];
         if (it->depth == 0 && it->type == MNU_POP) {
             uint32_t j = 0;
-            while (it->text[j] && j < 47 && k < max - 2) {
-                flat[k++] = it->text[j++];
-            }
+            char clean[48];
+            menu_label(it, clean, sizeof(clean));
+            while (clean[j] && j < 47 && k < max - 2)
+                flat[k++] = clean[j++];
             flat[k++] = 0;
         }
     }
@@ -4040,23 +4074,42 @@ int __attribute__((stdcall)) MessageBoxA(void *h, const char *text, const char *
     /* Bucle de eventos (no bloqueante): clic sobre OK o Enter (EV_KEY)
      * cierran el dialogo. El scheduler desaloja el bucle ocupado por
      * tick, asi que no congela el resto del sistema. */
-    for (;;) {
-        if (sys_event(ev) != 0)
-            continue;
-        if (user32_button_feed(&btn1, ev))
-            return yesno ? 6 : 1;
-        if (yesno && user32_button_feed(&btn2, ev))
-            return 7;
-        if (ev[0] == EV_KEY && ev[4] == '\n')
-            return yesno ? 6 : 1;
-        if (ev[0] == EV_KEY && yesno) {
-            if (ev[4] == 'y' || ev[4] == 'Y')
-                return 6;
-            if (ev[4] == 'n' || ev[4] == 'N')
-                return 7;
-            if (ev[4] == 27)
-                return 7;
+    {
+        int res = yesno ? 6 : 1;
+        for (;;) {
+            if (sys_event(ev) != 0)
+                continue;
+            if (user32_button_feed(&btn1, ev)) {
+                res = yesno ? 6 : 1;
+                goto out;
+            }
+            if (yesno && user32_button_feed(&btn2, ev)) {
+                res = 7;
+                goto out;
+            }
+            if (ev[0] == EV_KEY && ev[4] == '\n') {
+                res = yesno ? 6 : 1;
+                goto out;
+            }
+            if (ev[0] == EV_KEY && yesno) {
+                if (ev[4] == 'y' || ev[4] == 'Y') {
+                    res = 6;
+                    goto out;
+                }
+                if (ev[4] == 'n' || ev[4] == 'N') {
+                    res = 7;
+                    goto out;
+                }
+                if (ev[4] == 27) {
+                    res = 7;
+                    goto out;
+                }
+            }
         }
+    out:
+        /* Fase 24-P4: restaurar el rect del dialogo (fondo + ventanas). */
+        sys_redraw_rect(wx - 3, wy - 3, ww + 6, wh + 6);
+        return res;
     }
 }
 

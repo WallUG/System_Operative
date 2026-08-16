@@ -23,6 +23,7 @@
 #include "drivers/vbe.h"
 #include "drivers/mouse.h"
 #include "drivers/keyboard.h"
+#include "task/task.h"
 #include "kprint.h"
 
 #define C_FRAME     0x00C0C0C0u
@@ -30,6 +31,7 @@
 #define C_TITLE_TX  0x00FFFFFFu
 #define C_X_BG      0x00CC3333u
 #define C_X_TX      0x00FFFFFFu
+#define C_BTN_BG    0x00A0A0A0u   /* Fase 24-P4: minimizar/maximizar  */
 #define C_MENU      0x00D0D0D0u
 #define C_MENU_TX   0x00000000u
 
@@ -56,11 +58,15 @@ typedef struct {
     uint32_t buf_va;              /* buffer del cliente (ring 3)       */
     uint32_t buf_sz;
     uint32_t pd;                  /* PD de la app duena                 */
+    uint32_t pid;                 /* pid de la app duena (Fase 24-P4)  */
     uint32_t flags;               /* WM_FLAG_*                          */
     int      z;                   /* 0 = fondo; mayor = mas arriba      */
     int      visible;
     int      dragging;
     int      drag_dx, drag_dy;    /* offset del clic dentro de la vent */
+    int      maximized;           /* Fase 24-P4: estado de maximizado  */
+    int      saved_x, saved_y, saved_w, saved_h;  /* rect pre-max      */
+    int      saved_cw, saved_ch;   /* cliente pre-max (cota del blit)  */
     int      has_menu;            /* Fase D: barra de menu activa      */
     int      menu_n;              /* top-levels visibles               */
     char     menu_tx[8][24];
@@ -78,7 +84,7 @@ static int wm_active = 0;         /* hay alguna ventana visible         */
 
 /* Fase 23-A1: redibuja un rect en coordenadas de pantalla (fondo +
  * ventanas en orden z). Nucleo del blit por regiones. */
-static void wm_redraw_rect(int rx, int ry, int rw, int rh);
+void wm_redraw_rect(int rx, int ry, int rw, int rh);
 
 /* Fase 17: cola de eventos por app (PD). Cada app solo recibe los
  * eventos de sus ventanas (y del foco); el escritorio es otra app mas. */
@@ -149,7 +155,7 @@ static win_t *wm_find(int id)
 {
     int i;
     for (i = 0; i < WM_MAX_WINS; i++)
-        if (wins[i].visible && wins[i].id == id)
+        if (wins[i].id == id)
             return &wins[i];
     return NULL;
 }
@@ -209,6 +215,14 @@ static void wm_blit_client(const win_t *w)
 
     if (!w->buf_va)
         return;
+    /* Fase 24-P4: maximizado -> el cliente crece pero el buffer de la
+     * app sigue siendo el original; no leer mas alla de saved_cw/ch. */
+    if (w->maximized) {
+        if (w->saved_cw < bw)
+            bw = w->saved_cw;
+        if (w->saved_ch < bh)
+            bh = w->saved_ch;
+    }
     if (w->dirty_w > 0 && w->dirty_h > 0) {
         bx = w->dirty_x;
         by = w->dirty_y;
@@ -395,17 +409,50 @@ static void wm_draw_one(const win_t *w)
                 }
             }
         }
-        /* boton X (16x16, arriba a la derecha) */
+        /* Fase 24-P4: tres botones de titulo: minimizar (—),
+         * maximizar/restaurar (□/❐) y cerrar (×), 16x16 c/u. */
         {
-            int bx0 = w->x + w->w - WM_FRAME - WM_X_BTN;
-            for (j = 0; j < WM_X_BTN; j++) {
-                int k;
-                for (k = 0; k < WM_X_BTN; k++) {
-                    int xx = bx0 + k, yy = w->y + WM_FRAME + j;
-                    if (xx >= 0 && xx < VBE_SCREEN_W && yy >= 0 &&
-                        yy < VBE_SCREEN_H)
-                        lfb[yy * VBE_SCREEN_W + xx] = px_disp(C_X_BG);
-                }
+            int bx0 = w->x + w->w - WM_FRAME - 3 * WM_X_BTN;
+            int b;
+            for (b = 0; b < 3; b++) {
+                int x0 = bx0 + b * WM_X_BTN;
+                uint32_t bg = (b == 2) ? C_X_BG : C_BTN_BG;
+                int j, k;
+                for (j = 0; j < WM_X_BTN; j++)
+                    for (k = 0; k < WM_X_BTN; k++) {
+                        int xx = x0 + k, yy = w->y + WM_FRAME + j;
+                        if (xx >= 0 && xx < VBE_SCREEN_W && yy >= 0 &&
+                            yy < VBE_SCREEN_H)
+                            lfb[yy * VBE_SCREEN_W + xx] = px_disp(bg);
+                    }
+                /* glifo: b=0 '—', b=1 '□'/'❐' segun estado, b=2 '×' */
+                for (j = 2; j < 14; j++)
+                    for (k = 2; k < 14; k++) {
+                        int xx = x0 + k, yy = w->y + WM_FRAME + j;
+                        int on = 0;
+                        if (xx < 0 || xx >= VBE_SCREEN_W || yy < 0 ||
+                            yy >= VBE_SCREEN_H)
+                            continue;
+                        if (b == 0) {
+                            on = (j == 8 || j == 9);
+                        } else if (b == 2) {
+                            int d1 = j - k, d2 = j - (15 - k);
+                            on = (d1 >= -1 && d1 <= 1) ||
+                                 (d2 >= -1 && d2 <= 1);
+                        } else if (!w->maximized) {
+                            on = (j == 2 || j == 13 || k == 2 || k == 13);
+                        } else {
+                            /* restauracion: dos cuadros superpuestos */
+                            on = (j >= 2 && j <= 11 && k >= 4 && k <= 13 &&
+                                  (j == 2 || j == 11 || k == 4 || k == 13))
+                                 ||
+                                 (j >= 6 && j <= 13 && k >= 2 && k <= 9 &&
+                                  (j == 6 || j == 13 || k == 2 || k == 9));
+                        }
+                        if (on)
+                            lfb[yy * VBE_SCREEN_W + xx] =
+                                px_disp(C_X_TX);
+                    }
             }
         }
     }
@@ -525,6 +572,7 @@ int wm_create(const char *title, int x, int y, int w, int h,
     win->buf_va = buf_va;
     win->buf_sz = buf_sz;
     win->pd = pd;
+    win->pid = sched_current_pid();   /* Fase 24-P4: para SYS_WINFIND */
     win->visible = 1;
     wm_focus_pd = pd;               /* la app que crea gana el foco    */
     /* Fase 22-fix: el input tecleado antes de crear la ventana (p.ej.
@@ -550,6 +598,32 @@ int wm_close(int id, uint32_t pd)
     wm_recompute();
     /* Fase 23-A1: redibujar solo donde estaba la ventana cerrada. */
     wm_redraw_rect(x, y, ww, hh);
+    return 0;
+}
+
+/* Fase 24-P4: mostrar/ocultar una ventana (minimizar/restaurar). El
+ * taskbar del escritorio restaura con SYS_WINVIS(id, 1). */
+int wm_vis(int id, int on)
+{
+    win_t *w = wm_find(id);
+    int x, y, ww, hh;
+    if (!w)
+        return -1;
+    x = w->x; y = w->y; ww = w->w; hh = w->h;
+    w->visible = on ? 1 : 0;
+    wm_redraw_rect(x, y, ww, hh);
+    wm_recompute();
+    return 0;
+}
+
+/* Fase 24-P4: ventana (id) del proceso pid, visible o minimizada;
+ * 0 si no tiene. */
+int wm_find_by_pid(uint32_t pid)
+{
+    int i;
+    for (i = 0; i < WM_MAX_WINS; i++)
+        if (wins[i].pid == pid && wins[i].id > 0)
+            return wins[i].id;
     return 0;
 }
 
@@ -647,7 +721,7 @@ int wm_update_rect(int id, const int32_t *rect)
  * intersectan en orden z (las fijas al final). Es el nucleo del blit
  * por regiones que evita recomponer toda la pantalla (y el parpadeo).
  * clip a la pantalla. */
-static void wm_redraw_rect(int rx, int ry, int rw, int rh)
+void wm_redraw_rect(int rx, int ry, int rw, int rh)
 {
     volatile uint32_t *lfb = (volatile uint32_t *)vbe_lfb_phys;
     int zz, i;
@@ -889,7 +963,7 @@ int wm_route(mouse_event_t *ev)
             return (int)w->pd;
         }
         if (ev->y >= w->cy) {       /* area cliente: raise + entregar */
-            if (ev->x < w->x + w->w - WM_FRAME - WM_X_BTN) {
+            if (ev->x < w->x + w->w - WM_FRAME - 3 * WM_X_BTN) {
                 /* Fase 23-A3: wm_raise cambia el z-order pero no pinta;
                  * la ventana subida debe repintarse sobre las que
                  * estaban encima (el area la tapaba la antigua topmost).
@@ -904,11 +978,53 @@ int wm_route(mouse_event_t *ev)
          * desplegable), no es un drag de la ventana. */
         if (w->has_menu && ev->y >= w->y + WM_TITLE_H + WM_FRAME)
             return (int)w->pd;
-        if (ev->x >= w->x + w->w - WM_FRAME - WM_X_BTN) {
-            /* boton X: la app decide cerrar con SYS_WINCLOSE */
-            ev->type = EV_WINCLOSE;
-            ev->key = w->id;
-            return (int)w->pd;
+        /* Fase 24-P4: tres botones de titulo (16 px c/u a la derecha):
+         * minimizar (oculta), maximizar/restaurar (pantalla completa),
+         * cerrar (EV_WINCLOSE). El clic en la franja de titulo restante
+         * arrastra la ventana. */
+        {
+            int bx0 = w->x + w->w - WM_FRAME - 3 * WM_X_BTN;
+            if (ev->x >= bx0) {
+                int btn = (ev->x - bx0) / WM_X_BTN;
+                if (btn == 2) {
+                    /* boton X: la app decide cerrar con SYS_WINCLOSE */
+                    ev->type = EV_WINCLOSE;
+                    ev->key = w->id;
+                    return (int)w->pd;
+                }
+                if (btn == 1) {
+                    int ox = w->x, oy = w->y, ow = w->w, oh = w->h;
+                    if (!w->maximized) {
+                        w->saved_x = w->x; w->saved_y = w->y;
+                        w->saved_w = w->w; w->saved_h = w->h;
+                        w->saved_cw = w->cw; w->saved_ch = w->ch;
+                        w->x = 0; w->y = 0;
+                        w->w = VBE_SCREEN_W; w->h = VBE_SCREEN_H;
+                        w->maximized = 1;
+                    } else {
+                        w->x = w->saved_x; w->y = w->saved_y;
+                        w->w = w->saved_w; w->h = w->saved_h;
+                        w->maximized = 0;
+                    }
+                    wm_layout(w);
+                    {
+                        int ux = ox < w->x ? ox : w->x;
+                        int uy = oy < w->y ? oy : w->y;
+                        int ux2 = (ox + ow) > (w->x + w->w)
+                                      ? (ox + ow) : (w->x + w->w);
+                        int uy2 = (oy + oh) > (w->y + w->h)
+                                      ? (oy + oh) : (w->y + w->h);
+                        wm_redraw_rect(ux, uy, ux2 - ux, uy2 - uy);
+                    }
+                    return WM_ROUTE_CONSUMED;
+                }
+                /* btn == 0: minimizar (ocultar; el taskbar del
+                 * escritorio restaura con SYS_WINVIS) */
+                w->visible = 0;
+                wm_redraw_rect(w->x, w->y, w->w, w->h);
+                wm_recompute();
+                return WM_ROUTE_CONSUMED;
+            }
         }
         /* barra de titulo: iniciar arrastre */
         w->dragging = 1;

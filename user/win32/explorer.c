@@ -62,6 +62,9 @@ static uint32_t last_ticks;
 static int pending_x;
 static uint32_t x_ticks;
 static int x_tries;
+static int btn_armed;               /* test P4: secuencia MAX/rest/MIN/X */
+static int btn_stage;
+static int x_skip;                  /* periodos a saltar antes del X */
 
 /* --- syscalls --- */
 
@@ -446,6 +449,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             logstr("exp: sin .exe\n");
             return 0;
         }
+        if (LOWORD(wp) == 7) {              /* test 't': armar secuencia P4 */
+            btn_armed = 1;
+            btn_stage = 0;
+            logstr("exp: secuencia botones armada\n");
+            return 0;
+        }
         return 0;
     }
     if (msg == WM_KEYDOWN) {
@@ -593,17 +602,48 @@ int main(void)
 
     /* Bucle de mensajes con poll del boton X (las apps lanzadas se
      * cierran inyectando clics periodicos: el teclado ya no llega al
-     * explorador mientras la app tiene el foco). */
+     * explorador mientras la app tiene el foco). Test P4 ('t' + 'm'):
+     * la secuencia inyecta MAX -> restaurar -> MIN -> X en los botones
+     * de titulo de la app lanzada (metapad en 80,40). */
     for (;;) {
         MSG msg;
         if (pending_x && (sys_ticks() - x_ticks >= X_PERIOD)) {
             x_ticks = sys_ticks();
-            if (++x_tries >= X_TRIES)
-                pending_x = 0;
-            sys_mouse_inject(1, X_X, X_Y);      /* EV_MOVE */
-            sys_mouse_inject(2, X_X, X_Y);      /* DOWN */
-            sys_mouse_inject(3, X_X, X_Y);      /* UP */
-            logstr("exp: inj X\n");
+            if (x_skip > 0) {
+                x_skip--;
+            } else if (btn_armed && btn_stage < 2) {
+                int bx = 654, by = 50;      /* MAX (646..662) */
+                if (btn_stage == 1) {
+                    bx = 774;               /* restaurar: el titulo del
+                                             * max esta arriba (0,0,800,600):
+                                             * boton 766..782, y 2..18 */
+                    by = 10;
+                }
+                sys_mouse_inject(1, bx, by);
+                sys_mouse_inject(2, bx, by);
+                sys_mouse_inject(3, bx, by);
+                if (btn_stage == 0)
+                    logstr("exp: inj MAX\n");
+                else
+                    logstr("exp: inj rest\n");
+                btn_stage++;
+                if (btn_stage == 2) {
+                    /* Test P4: pausa larga antes del X para que el test
+                     * abra/cierre el dialogo de Guardar (el X cerraria
+                     * la app antes). x_skip = 10 periodos = 25 s. */
+                    x_tries = 0;
+                    x_skip = 10;
+                }
+            } else {
+                if (++x_tries >= X_TRIES) {
+                    pending_x = 0;
+                    btn_armed = 0;
+                }
+                sys_mouse_inject(1, X_X, X_Y);      /* EV_MOVE */
+                sys_mouse_inject(2, X_X, X_Y);      /* DOWN */
+                sys_mouse_inject(3, X_X, X_Y);      /* UP */
+                logstr("exp: inj X\n");
+            }
         }
         if (PeekMessageA(&msg, 0, 0, 0, 1)) {
             if (msg.message == WM_QUIT)

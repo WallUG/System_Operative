@@ -46,6 +46,9 @@ int wm_update(int id);
 /* Fase 20-D: actualiza solo el rect (blit por regiones). rect =
  * {x,y,w,h} en coordenadas del cliente de la ventana. */
 int wm_update_rect(int id, const int32_t *rect);
+void wm_redraw_rect(int rx, int ry, int rw, int rh);
+int wm_vis(int id, int on);           /* Fase 24-P4: mostrar/ocultar   */
+int wm_find_by_pid(uint32_t pid);     /* Fase 24-P4: id de la ventana  */
 int wm_set_title(int id, const char *title);
 int wm_info(int id, uint32_t *out);
 

@@ -17,6 +17,8 @@
 #include "drivers/vga.h"
 #include "drivers/serial.h"
 #include "drivers/timer.h"
+#include "drivers/ac97.h"
+#include "drivers/rtl8139.h"
 #include "drivers/keyboard.h"
 #include "drivers/vbe.h"
 #include "drivers/vgafx.h"
@@ -159,6 +161,17 @@ void kmain(uint32_t boot_info_ptr)
     idt_init();
     pic_remap();
     timer_init(100);            /* 100 ticks/segundo */
+
+    /* Fase 24-P4: audio AC'97 (QEMU -device AC97). El beep de
+     * arranque valida codec + DMA; sin dispositivo PCI no hace nada.
+     * El ping de red va tras sti(): sus polls usan timer_get_ticks. */
+    if (ac97_init() == 0)
+        ac97_beep(150);
+
+    /* Fase 24-P4: red RTL8139 (QEMU -netdev user). Solo el init aqui;
+     * el ping (que espera respuestas con el timer) se hace al final
+     * del arranque, con las interrupciones activas. */
+    rtl8139_init();
     keyboard_init();
 
     sti();                      /* solo ahora: IDT y PIC listos */
@@ -209,5 +222,10 @@ void kmain(uint32_t boot_info_ptr)
     bootscreen_status("Listo. Iniciando shell...", 100);
     bs_delay();
     bootscreen_done();
+
+    /* Fase 24-P4: con las IRQs activas, validar TX+RX de la red
+     * (ARP + ICMP echo contra el gateway del user-net de QEMU). */
+    if (rtl8139_ready())
+        net_ping();
     shell_loop();
 }

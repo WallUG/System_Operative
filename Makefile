@@ -49,6 +49,8 @@ OBJS      = $(BUILD)/entry.o \
             $(BUILD)/drivers/vbe.o \
             $(BUILD)/drivers/vgafx.o \
             $(BUILD)/drivers/mouse.o \
+            $(BUILD)/drivers/ac97.o \
+            $(BUILD)/drivers/rtl8139.o \
             $(BUILD)/libc/string.o
 
 # VPATH: las fuentes .c viven en kernel/ o libc/; los .o replican su ruta

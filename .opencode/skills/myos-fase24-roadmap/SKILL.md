@@ -297,6 +297,39 @@ bootscreen (sin swap) aparece como (B,G,R), ojo al comparar).
   margen; (5) el FS de la raíz varía según los residuos de tests
   previos (registry.ini de metapad) → `make persist_disk` en cada run.
 
+### P4. Pulido visual + drivers (completado en un bloque)
+
+**Fase 24-P4 (bugs visuales)**:
+- **SYS_REDRAW_RECT 42** = `wm_redraw_rect` en coords de PANTALLA
+  (restaura fondo + ventanas). Los diálogos modales (comdlg32,
+  dialog_modal de user32, MessageBoxA) se dibujan directo al LFB y al
+  cerrar dejaban pixeles — ahora repintan su rect.
+- **Aceleradores**: el recurso RT_ACCELERATOR NO tiene DWORD count y
+  usa entradas de 8 bytes {fFlags,wAnsi,wId,pad} (768 B = 96 en
+  metapad). El parse con stride 6 rompía Ctrl+S (Guardar).
+- **Barra de menú**: el flat que recibe el kernel iba con '&' crudo →
+  los labels dibujados y el hit-test derivaban 8 px por menú (clic
+  abría el popup equivocado). El flat ahora sale limpio (menu_label).
+- **Botones de título**: X (rojo, glifo ×), minimizar (—) y
+  maximizar/restaurar (□/❐) dibujados por el kernel; clic → ocultar
+  (SYS_WINVIS 43) / full-screen toggle (rect guardado + blit acotado
+  a saved_cw/ch) / EV_WINCLOSE. SYS_WINFIND 44 = id de ventana por
+  pid (el taskbar del escritorio restaura minimizadas; hook 'r').
+
+**Fase 24-P4.5 (drivers QEMU)**:
+- **AC'97**: PCI clase 0x0401 → NAM/NABM; reset del codec en el
+  registro RESET del NAM (offset **0x00**, no 0x7C); 48 kHz; DMA con
+  BD de 8 B (len = halfwords, sin -1). Beep de arranque.
+- **RTL8139** (10EC:8139): RX ring 8K+16 (RCR bits size en 11-12),
+  TX con descriptores rotativos (el QEMU transmite el descriptor
+  actual), ARP + ICMP contra 10.0.2.2 (user-net). El reply ICMP llega
+  al netdev (filter-dump) pero la 2ª recepción del ring no entrega
+  (quirk); el ARP hace el round trip completo.
+- **REGLA DE ORO del DMA en QEMU**: sin el bit BUS MASTER (0x04 bit 2)
+  del PCI command register, el DMA devuelve CEROS silenciosamente.
+  Además los arrays estáticos de la BSS del kernel se leen como 0x00
+  por DMA: usar kmalloc (heap) para los buffers de DMA.
+
 ## Orden sugerido de ejecución
 
 1. P1.1 (recursos PE .rsrc) — desbloquea P1.2.
@@ -308,6 +341,8 @@ bootscreen (sin swap) aparece como (B,G,R), ojo al comparar).
 7. P2.3 (GDI blits + clipboard).
 8. P3.1 (desktop iconos).
 9. P3.2 (explorer Win32).
+10. P4 (pulido: diálogos/menús/botones) — COMPLETADO.
+11. P4.5 (audio AC'97 + red RTL8139) — COMPLETADO.
 
 Cada ítem termina con: compilación OK, test QEMU del ítem, regresión
 completa, y un commit.
