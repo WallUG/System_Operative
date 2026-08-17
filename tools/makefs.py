@@ -28,7 +28,7 @@ import argparse
 import os
 import struct
 
-LBA_FS_START = 129
+LBA_FS_START = 145
 MAGIC = b"MEFS02\n\0"
 DIR_ENTRY = 32
 MAX_FILES = 96

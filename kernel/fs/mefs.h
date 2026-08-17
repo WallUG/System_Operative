@@ -30,7 +30,7 @@
 
 #define MEFS_NAME_LEN   16
 #define MEFS_MAX_FILES  96          /* root + subdirectorios */
-#define MEFS_FS_START   129         /* LBA donde empieza el FS (boot+kernel) */
+#define MEFS_FS_START   145         /* LBA donde empieza el FS (1 boot + 144 kernel) */
 
 #define MEFS_FLAG_DIR   1           /* entrada es un directorio */
 #define MEFS_ROOT       0xFFFFFFFFu /* parent de la raiz */

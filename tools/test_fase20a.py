@@ -107,7 +107,7 @@ check('docs dir persiste tras reinicio', '/docs' in log)
 
 # Verificar disco: nf >= 29, bitmap consistente
 img = open(WORK,'rb').read()
-nf = struct.unpack('<I', img[129*512+8:129*512+12])[0]
+nf = struct.unpack('<I', img[145*512+8:145*512+12])[0]
 check('nf refleja archivos creados', nf >= 29)
 
 # Sesion 3: format borra todo

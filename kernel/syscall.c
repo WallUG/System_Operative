@@ -31,6 +31,7 @@
 #include "drivers/keyboard.h"
 #include "drivers/mouse.h"
 #include "drivers/ac97.h"
+#include "drivers/net.h"
 #include "drivers/vbe.h"
 #include "winmgr.h"
 #include "fs/mefs.h"
@@ -178,6 +179,12 @@ static void sys_exec(const char *name, registers_t *regs)
 void syscall_handler(registers_t *regs)
 {
     uint32_t pd = sched_current_cr3();
+
+    /* Fase 25-W2A: los syscalls bloqueantes (net/audio) sondean con
+     * timer_get_ticks(); sin sti el PIT no puede disparar durante el
+     * syscall y los timeouts nunca expiran. El tick puede
+     * adelantarse (ya lo hacen SYS_READ etc.). */
+    sti();
 
     switch (regs->eax) {
     case SYS_PRINT: {
@@ -763,6 +770,129 @@ void syscall_handler(registers_t *regs)
             break;
         }
         regs->eax = win32_resolve_base(regs->ebx, name);
+        break;
+    }
+    case SYS_NET_ARP: { /* ebx=&ip, ecx=&mac */
+        uint8_t ip[4], mac[6];
+        if (user_memcpy_in(ip, (const void *)regs->ebx, 4, pd) != 0) {
+            regs->eax = -1;
+            break;
+        }
+        if (net_arp_resolve(ip, mac) != 0) {
+            regs->eax = -1;
+            break;
+        }
+        if (user_memcpy_out((void *)regs->ecx, mac, 6, pd) != 0) {
+            regs->eax = -1;
+            break;
+        }
+        regs->eax = 0;
+        break;
+    }
+    case SYS_NET_TCP_CONNECT: { /* ebx=&ip, ecx=port */
+        uint8_t ip[4];
+        if (user_memcpy_in(ip, (const void *)regs->ebx, 4, pd) != 0) {
+            regs->eax = -1;
+            break;
+        }
+        regs->eax = (int32_t)net_tcp_connect(ip, (uint16_t)regs->ecx);
+        break;
+    }
+    case SYS_NET_TCP_SEND: { /* ebx=buf, ecx=len */
+        uint8_t *tmp;
+        uint32_t len = regs->ecx;
+        if (len == 0 || len > 1400) {
+            regs->eax = -1;
+            break;
+        }
+        tmp = kmalloc(len);
+        if (tmp == 0) {
+            regs->eax = -1;
+            break;
+        }
+        if (user_memcpy_in(tmp, (const void *)regs->ebx, len, pd) != 0) {
+            kfree(tmp);
+            regs->eax = -1;
+            break;
+        }
+        regs->eax = (int32_t)net_tcp_send(tmp, (int)len);
+        kfree(tmp);
+        break;
+    }
+    case SYS_NET_TCP_RECV: { /* ebx=buf, ecx=max, edx=timeout_ms */
+        int32_t n;
+        uint8_t *tmp;
+        uint32_t max = regs->ecx;
+        if (max == 0 || max > 65536) {
+            regs->eax = -1;
+            break;
+        }
+        tmp = kmalloc(max);
+        if (tmp == 0) {
+            regs->eax = -1;
+            break;
+        }
+        n = net_tcp_recv(tmp, (int)max, (int)regs->edx);
+        if (n > 0 &&
+            user_memcpy_out((void *)regs->ebx, tmp, (uint32_t)n, pd) != 0)
+            n = -1;
+        kfree(tmp);
+        regs->eax = (uint32_t)n;
+        break;
+    }
+    case SYS_NET_TCP_CLOSE: {
+        regs->eax = (uint32_t)net_tcp_close();
+        break;
+    }
+    case SYS_NET_UDP_SEND: { /* ebx=&ip, ecx=src, edx=dst, esi=buf, edi=len */
+        uint8_t ip[4];
+        uint8_t *tmp;
+        uint32_t len = regs->edi;
+        if (len == 0 || len > 1400) {
+            regs->eax = -1;
+            break;
+        }
+        if (user_memcpy_in(ip, (const void *)regs->ebx, 4, pd) != 0) {
+            regs->eax = -1;
+            break;
+        }
+        tmp = kmalloc(len);
+        if (tmp == 0) {
+            regs->eax = -1;
+            break;
+        }
+        if (user_memcpy_in(tmp, (const void *)regs->esi, len, pd) != 0) {
+            kfree(tmp);
+            regs->eax = -1;
+            break;
+        }
+        regs->eax = (int32_t)net_udp_send(ip, (uint16_t)regs->ecx,
+                                          (uint16_t)regs->edx, tmp,
+                                          (int)len);
+        kfree(tmp);
+        break;
+    }
+    case SYS_NET_UDP_RECV: { /* ebx=src_port, ecx=buf, edx=max,
+                              * esi=timeout_ms */
+        int32_t n;
+        uint8_t *tmp;
+        uint32_t max = regs->edx;
+        if (max == 0 || max > 1400) {
+            regs->eax = -1;
+            break;
+        }
+        tmp = kmalloc(max);
+        if (tmp == 0) {
+            regs->eax = -1;
+            break;
+        }
+        n = net_udp_recv((uint16_t)regs->ebx, tmp, (int)max,
+                         (int)regs->esi, 0, 0);
+        if (n > 0 &&
+            user_memcpy_out((void *)regs->ecx, tmp, (uint32_t)n, pd) != 0)
+            n = -1;
+        kfree(tmp);
+        regs->eax = (uint32_t)n;
         break;
     }
     default:

@@ -19,6 +19,7 @@
 #include "drivers/timer.h"
 #include "drivers/ac97.h"
 #include "drivers/rtl8139.h"
+#include "drivers/net.h"
 #include "drivers/keyboard.h"
 #include "drivers/vbe.h"
 #include "drivers/vgafx.h"
@@ -225,7 +226,9 @@ void kmain(uint32_t boot_info_ptr)
 
     /* Fase 24-P4: con las IRQs activas, validar TX+RX de la red
      * (ARP + ICMP echo contra el gateway del user-net de QEMU). */
-    if (rtl8139_ready())
+    if (rtl8139_ready()) {
+        net_init_stack();
         net_ping();
+    }
     shell_loop();
 }

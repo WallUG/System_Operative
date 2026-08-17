@@ -33,10 +33,10 @@
  * entrar; con esp == TOP la lectura caeria en la primera pagina no
  * mapeada (#PF 0xC0000000). */
 #define USER_ESP0_INIT      (USER_ESP0_TOP - 8)
-/* Pila de usuario: 16 paginas (64 KiB). Los CRTs de Windows (msvcrt
- * de mingw-w64) arrancan con bastante consumo de pila, asi que se
- * mapean 64 KiB al crear/exec de cualquier tarea. */
-#define USER_STACK_SIZE     (16 * PAGE_SIZE)
+/* Pila de usuario: 32 paginas (128 KiB). Los CRTs de Windows (msvcrt
+ * de mingw-w64) arrancan con bastante consumo de pila (Fase 25-W2A:
+ * netget.exe pide un frame de 64 KiB, asi que 64 KiB no bastaban). */
+#define USER_STACK_SIZE     (32 * PAGE_SIZE)
 
 /* Kernel identity: 0-1 GiB (PDEs 0..255). */
 #define KERNEL_PDE_END      256

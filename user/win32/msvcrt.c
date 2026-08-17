@@ -592,6 +592,20 @@ int    strncmp(const char *a, const char *b, unsigned int n) { return u_strncmp(
 unsigned int strlen(const char *s) { return u_strlen(s); }
 void *memcpy(void *d, const void *s, unsigned int n) { return u_memcpy(d, s, n); }
 
+/* Fase 25-W2A paso 6: memcmp (netget.exe lo pide por msvcrt). */
+int memcmp(const void *a, const void *b, unsigned int n)
+{
+    const unsigned char *x = (const unsigned char *)a;
+    const unsigned char *y = (const unsigned char *)b;
+    while (n--) {
+        if (*x != *y)
+            return (int)*x - (int)*y;
+        x++;
+        y++;
+    }
+    return 0;
+}
+
 /* Fase 24-P2.3: strcpy/strcmp (blitclip usa ambos; antes crasheaban). */
 char *strcpy(char *d, const char *s)
 {
@@ -1232,6 +1246,7 @@ win32_export_t __exports[] __attribute__((section(".exports"))) = {
     { "localeconv",         (uint32_t)localeconv },
     { "malloc",             (uint32_t)malloc },
     { "memcpy",             (uint32_t)memcpy },
+    { "memcmp",             (uint32_t)memcmp },
     { "putchar",            (uint32_t)putchar },
     { "puts",               (uint32_t)puts },
     { "realloc",            (uint32_t)realloc },

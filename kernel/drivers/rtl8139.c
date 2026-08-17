@@ -37,12 +37,14 @@
 #define CMD_TXEN   0x04
 #define TX_HOSTOWNS 0x2000u
 
-/* RX ring: 8 KB + 16 (espacio de 16 entradas + el buffer) */
-#define RX_RING_SIZE (8192 + 16)
-#define RX_ENTRIES   16
+/* RX ring: 64 KB + 16 (RBLEN=3, Fase 25-W2A: con 8 KB el ring hace
+ * wrap durante una transferencia TCP grande y el recv relee paquetes
+ * viejos) */
+#define RX_RING_SIZE (65536 + 16)
+#define RX_WRAP      65536
 
 static uint32_t rtl_io;
-static volatile uint8_t  rx_ring[RX_RING_SIZE] __attribute__((aligned(8)));
+static volatile uint8_t *rx_ring;
 static int rtl_ready;
 static volatile uint8_t *tx_pkt;
 static uint32_t tx_desc;            /* descriptor TX rotativo */
@@ -84,7 +86,7 @@ int rtl8139_init(void)
     uint8_t bus, dev;
     uint32_t id, bar, i;
 
-    tx_pkt = (volatile uint8_t *)kmalloc(96);
+    tx_pkt = (volatile uint8_t *)kmalloc(2048);
     if (tx_pkt == 0)
         return -1;
 
@@ -119,10 +121,14 @@ int rtl8139_init(void)
     for (i = 0; i < 6; i++)
         mac[i] = inb(rtl_io + R_MAC0 + i);
 
-    /* RX ring: RCR = aceptar phys/broadcast/multicast + wrap, 8 KB */
+    /* RX ring en el heap (el DMA de QEMU lee la BSS como 0x00).
+     * RCR = aceptar phys/broadcast/multicast + wrap, RBLEN=3 -> 64 KB */
+    rx_ring = (volatile uint8_t *)kmalloc(RX_RING_SIZE);
+    if (rx_ring == 0)
+        return -1;
     outl(rtl_io + R_RBSTART, (uint32_t)(uintptr_t)rx_ring);
     outw(rtl_io + R_CAPR, 0);
-    outl(rtl_io + R_RCR, 0x0000008Eu);
+    outl(rtl_io + R_RCR, 0x0000188Eu);
     outb(rtl_io + R_CHIPCMD, CMD_RXEN | CMD_TXEN);
     outw(rtl_io + R_IMR, 0x0000);       /* sin IRQ (polling) */
 
@@ -145,40 +151,55 @@ int rtl8139_ready(void)
     return rtl_ready;
 }
 
-/* Envia tx_pkt[0..len) por el descriptor rotativo (el QEMU transmite
- * el descriptor actual tras cada TSD write). Devuelve 0 si el DMA
- * arranco. */
-static int net_tx(int len)
+void rtl8139_mac_get(uint8_t out[6])
+{
+    int i;
+    for (i = 0; i < 6; i++)
+        out[i] = mac[i];
+}
+
+/* Envia pkt[0..len) por el descriptor rotativo (el QEMU transmite el
+ * descriptor actual tras cada TSD write). Devuelve 0 si el DMA
+ * arranco. Fase 25-W2A: copia desde el buffer del caller (el stack
+ * arma el paquete en su propio buffer). */
+int rtl8139_tx(const uint8_t *pkt, int len)
 {
     uint32_t desc = tx_desc;
+    if (len > 2048)
+        len = 2048;
+    /* net_ping construye el paquete DENTRO de tx_pkt y pasa tx_pkt
+     * como pkt: un memcpy auto-copia con memset previo borraria el
+     * paquete. Solo copiar cuando el caller trae su propio buffer. */
+    if (pkt != tx_pkt)
+        memcpy((void *)tx_pkt, pkt, (uint32_t)len);
     outl(rtl_io + R_TSAD0 + desc * 4, (uint32_t)(uintptr_t)tx_pkt);
+    /* Fase 25-W2A: el transmit de QEMU es SINCRONO (el TSD write
+     * transmite el descriptor antes de retornar), asi que el poll del
+     * OWN es innecesario (y en el rtl8139 de QEMU el TSD1 de la 2ª
+     * rotacion se lee 0 aunque el paquete salga). */
     outl(rtl_io + R_TSD0 + desc * 4, (uint32_t)len);  /* quita OWN */
-    {
-        uint32_t t0 = timer_get_ticks();
-        while (timer_get_ticks() - t0 < 100) {  /* 1 s */
-            uint32_t tsd = inl(rtl_io + R_TSD0 + desc * 4);
-            if (tsd & TX_HOSTOWNS)
-                break;
-            if (tsd & 0x4000u)                  /* underrun */
-                return -1;
-        }
-        if (timer_get_ticks() - t0 >= 100)
-            return -1;
-    }
     tx_desc = (tx_desc + 1) & 3;
     return 0;
 }
 
 /* Lee un paquete del ring (bloquea hasta timeout). El layout del ring
  * (modo legacy): header 4 B {status | len<<16}, datos, crc. Devuelve
- * el largo del paquete o -1. */
-static int net_rx(uint8_t *dst, int max, int timeout_ms)
+ * el largo del paquete o -1.
+ * Fase 25-W2A: el driver lleva su propio puntero (rx_capr estatico) —
+ * la LECTURA del CAPR devuelve RxBufPtr-16, no la posicion del
+ * siguiente paquete. El CAPR se ESCRIBE como (siguiente - 16): QEMU
+ * hace RxBufPtr = CAPR + 16, asi que con el offset exacto el espacio
+ * libre quedaba en 16 B y la siguiente recepcion se descartaba como
+ * overflow (el quirk de la "2ª recepcion" de la Fase 24-P4.5; el
+ * driver Linux escribe RTL_W16(RxBufPtr, cur_rx - 16)). */
+static uint32_t rx_capr;        /* offset del siguiente paquete */
+
+int rtl8139_rx(uint8_t *dst, int max, int timeout_ms)
 {
-    uint32_t capr = inw(rtl_io + R_CAPR);
+    uint32_t capr = rx_capr;
     uint32_t t0 = timer_get_ticks();
     for (;;) {
         uint32_t hdr;
-        uint32_t len;
         uint32_t i;
         if (capr + 4 > RX_RING_SIZE)
             capr = 0;
@@ -187,19 +208,37 @@ static int net_rx(uint8_t *dst, int max, int timeout_ms)
               | ((uint32_t)rx_ring[capr + 2] << 16)
               | ((uint32_t)rx_ring[capr + 3] << 24);
         if (hdr & 0x0001) {                     /* ROK */
-            len = (hdr >> 16) & 0xFFFF;
-            if (len - 4 > (uint32_t)max)
-                len = (uint32_t)max + 4;
-            for (i = 0; i < len - 4; i++)
+            uint32_t raw = (hdr >> 16) & 0xFFFF;
+            uint32_t copy = raw;
+            if (raw < 4 || raw - 4 > (uint32_t)max) {
+                copy = (uint32_t)max + 4;
+                if (raw < 4)
+                    return -1;
+            }
+            for (i = 0; i < copy - 4; i++)
                 dst[i] = rx_ring[capr + 4 + i];
             /* header(4) + frame + crc(4): el campo len del header ya
-             * incluye el crc, asi que el total es len + 4 */
-            capr = (capr + len + 4 + 3) & ~3u;
-            if (capr >= RX_RING_SIZE)
-                capr = 0;
-            outw(rtl_io + R_CAPR, (uint16_t)capr);
-            return (int)(len - 4);
+             * incluye el crc, asi que el total es len + 4. El avance
+             * usa el LEN REAL (no el recortado por el buffer del
+             * caller: clampear el avance desalinea el ring). El chip
+             * realinea mod 8192; el tail de 16 B aguanta el cruce. */
+            capr = (capr + raw + 4 + 3) & ~3u;
+            if (capr >= RX_WRAP)
+                capr -= RX_WRAP;
+            rx_capr = capr;
+            /* CAPR = (siguiente - 16) mod 8192: el wrap u16 hace que
+             * QEMU compute RxBufPtr = CAPR + 16 = siguiente (mod). */
+            outw(rtl_io + R_CAPR, (uint16_t)(capr - 16));
+            return (int)(copy - 4);
         }
+        /* Fase 25-W2A: sin paquete, re-escribir el CAPR fuerza el
+         * qemu_flush_queued_packets del netdev: si no, el rtl8139 de
+         * QEMU entrega los paquetes entrantes con retraso (~1-2 s) y
+         * los timeouts del stack son flaky. */
+        if (rx_capr > 16)
+            outw(rtl_io + R_CAPR, (uint16_t)(rx_capr - 16));
+        else
+            outw(rtl_io + R_CAPR, (uint16_t)(rx_capr + RX_WRAP - 16));
         if (timer_get_ticks() - t0 > (uint32_t)(timeout_ms / 10))
             return -1;
     }
@@ -298,7 +337,7 @@ void net_ping(void)
     tx_pkt[39] = 0;
     tx_pkt[40] = 2;
     tx_pkt[41] = 2;                             /* tpa 10.0.2.2 */
-    if (net_tx(42) != 0) {
+    if (rtl8139_tx((const uint8_t *)tx_pkt, 42) != 0) {
         kprint("net: tx arp fallo\n");
         return;
     }
@@ -307,7 +346,7 @@ void net_ping(void)
     /* 2) esperar la respuesta ARP */
     for (i = 0; i < 50; i++) {
         uint8_t r[64];
-        int n = net_rx(r, sizeof(r), 200);
+        int n = rtl8139_rx(r, sizeof(r), 200);
         if (n < 42)
             continue;
         if (r[12] == 0x08 && r[13] == 0x06 && r[21] == 0x02 &&
@@ -331,7 +370,7 @@ void net_ping(void)
 arp_ok:
     /* 3) ICMP echo request al gateway */
     build_icmp((uint8_t *)tx_pkt, gwmac, id);
-    if (net_tx(106) != 0) {
+    if (rtl8139_tx((const uint8_t *)tx_pkt, 106) != 0) {
         kprint("net: tx icmp fallo\n");
         return;
     }
@@ -340,7 +379,7 @@ arp_ok:
     /* 4) esperar el echo reply (type 0, id, seq) */
     for (i = 0; i < 100; i++) {
         uint8_t r[96];
-        int n = net_rx(r, sizeof(r), 200);
+        int n = rtl8139_rx(r, sizeof(r), 200);
         if (n < 42)
             continue;
         if (r[12] == 0x08 && r[13] == 0x00 && r[23] == 1 &&

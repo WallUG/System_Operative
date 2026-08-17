@@ -125,7 +125,7 @@ except: qemu.kill()
 
 # 4) verificar persistencia física en el disco de trabajo
 import struct
-fs = open(WORK,'rb').read()[129*512:]
+fs = open(WORK,'rb').read()[145*512:]
 nf = struct.unpack('<I', fs[8:12])[0]
 found = [None, None]
 for k in range(nf):

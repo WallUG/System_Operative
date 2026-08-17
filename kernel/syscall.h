@@ -61,6 +61,17 @@
                                 (unidades = divisor del PIT, Fase 25)    */
 #define SYS_AUDIO_PLAY 46    /* ebx=user buf PCM 16-bit stereo, ecx=bytes,
                                 edx=rate: reproduce (bloquea; Fase 25-W2A) */
+#define SYS_NET_ARP 47       /* ebx=&ip(4B user), ecx=&mac(6B out):
+                                resuelve por ARP (Fase 25-W2A paso 6)   */
+#define SYS_NET_TCP_CONNECT 48 /* ebx=&ip, ecx=port: SYN->EST (bloquea)  */
+#define SYS_NET_TCP_SEND 49  /* ebx=buf, ecx=len: envia (espera ACK)     */
+#define SYS_NET_TCP_RECV 50  /* ebx=buf, ecx=max, edx=timeout_ms:
+                                >0 bytes, 0=FIN, -1=timeout              */
+#define SYS_NET_TCP_CLOSE 51 /* cierra (FIN)                             */
+#define SYS_NET_UDP_SEND 52  /* ebx=&ip, ecx=src_port, edx=dst_port,
+                                esi=buf, edi=len: datagrama UDP          */
+#define SYS_NET_UDP_RECV 53  /* ebx=src_port, ecx=buf, edx=max,
+                                esi=timeout_ms -> payload o -1           */
 
 void syscall_init(void);            /* registra el gate 0x80 (DPL=3) */
 void syscall_handler(registers_t *regs);

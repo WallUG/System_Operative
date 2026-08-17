@@ -6,7 +6,7 @@ CC        = gcc
 LD        = ld
 OBJCOPY   = objcopy
 QEMU      = qemu-system-i386
-KERNEL_SECTORS = 128            # tamano de kernel en sectores (1 = 512 bytes)
+KERNEL_SECTORS = 144            # tamano de kernel en sectores (1 = 512 bytes)
 FS_SECTORS     = 2400           # fs.bin rellenado a 2400 sectores (1.2 MB; apps + margen Fase E; boot.asm usa el mismo valor)
 
 BUILD     = build
@@ -51,6 +51,7 @@ OBJS      = $(BUILD)/entry.o \
             $(BUILD)/drivers/mouse.o \
             $(BUILD)/drivers/ac97.o \
             $(BUILD)/drivers/rtl8139.o \
+            $(BUILD)/drivers/net.o \
             $(BUILD)/libc/string.o
 
 # VPATH: las fuentes .c viven en kernel/ o libc/; los .o replican su ruta
@@ -117,7 +118,7 @@ DLL_SRCS  = user/win32/kernel32.c user/win32/user32.c user/win32/ntdll.c \
             user/win32/msvcrt.c user/win32/gdi32.c user/win32/comctl32.c \
             user/win32/comdlg32.c user/win32/advapi32.c user/win32/shell32.c \
             user/win32/ole32.c user/win32/shlwapi.c user/win32/winspool.c \
-            user/win32/winmm.c
+            user/win32/winmm.c user/win32/ws2_32.c
 DLL_ELFS  = $(patsubst user/win32/%.c,$(BUILD)/user/win32/%.elf,$(DLL_SRCS))
 
 # Fase 9/11/12: .exe compilado con la toolchain REAL de Windows (CRT de
@@ -204,6 +205,15 @@ $(BUILD)/user/win32/w2demo.exe: user/win32/w2demo.c
 	@mkdir -p $(dir $@)
 	$(MINGW32) -m32 -O1 -municode -Wl,--image-base,0x80000000 \
 	           -Wl,--subsystem,console -s -o $@ $< -luser32 -lkernel32
+
+# netget.exe: ws2_32 (Fase 25-W2A paso 6): HTTP GET + DNS por UDP
+# contra el user-net del host (-netdev user + python http.server).
+WIN_APPS  += $(BUILD)/user/win32/netget.exe
+
+$(BUILD)/user/win32/netget.exe: user/win32/netget.c
+	@mkdir -p $(dir $@)
+	$(MINGW32) -m32 -O1 -Wl,--image-base,0x80000000 \
+	           -Wl,--subsystem,console -s -o $@ $< -lws2_32 -lkernel32
 
 # wavplay.exe: winmm (Fase 25-W2A paso 5): genera tone.wav, lo
 # reproduce con PlaySoundA + waveOutWrite + mciSendStringA.
@@ -339,6 +349,7 @@ $(BUILD)/user/win32/%.elf: user/win32/%.c tools/dll32.ld
 	        shlwapi)  echo $$(( $(WIN32_REGION) + 0xA00000 )) ;; \
 	        winspool) echo $$(( $(WIN32_REGION) + 0xB00000 )) ;; \
 	        winmm)    echo $$(( $(WIN32_REGION) + 0xC00000 )) ;; \
+	        ws2_32)   echo $$(( $(WIN32_REGION) + 0xD00000 )) ;; \
 	        *) echo $(WIN32_REGION) ;; esac) \
 	      -o $@ $(BUILD)/user/win32/$*.o
 

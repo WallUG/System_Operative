@@ -29,7 +29,7 @@
 
 KERNEL_LOAD_SEG  equ 0x1000        ; segmento:0x1000 -> fisica 0x10000
 KERNEL_OFFSET    equ 0x0000
-KERNEL_SECTORS   equ 128           ; 128 sectores = 64 KB (kernel pad)
+KERNEL_SECTORS   equ 144           ; 144 sectores = 72 KB (kernel pad)
 FS_SECTORS       equ 2400          ; fs.bin rellenado a 2400 sectores (Makefile)
 CODE_SEG         equ gdt_code - gdt_start
 DATA_SEG         equ gdt_data - gdt_start
@@ -38,7 +38,7 @@ MMAP_ENTRIES     equ 32
 BOOTINFO_ADDR    equ 0x7000        ; estructura boot_info (kernel/bootinfo.h)
 BOOTINFO_MAGIC   equ 0x4D594F53    ; 'MYOS'
 BOOTINFO_MODE_CD equ 1
-MEFS_FS_LBA      equ 129           ; sector absoluto del FS (1 boot + 128 kernel)
+MEFS_FS_LBA      equ 145           ; sector absoluto del FS (1 boot + 144 kernel)
 FS_RAM_DEST      equ 0x176000      ; copia de la imagen MEFS en RAM (modo CD)
 IMG_BOOT         equ 0x7C00        ; base de la imagen completa en RAM (CD)
 FS_RAM_SRC       equ IMG_BOOT + 512 + KERNEL_SECTORS * 512   ; 0x17E00
@@ -100,16 +100,31 @@ halt:
 
 ; Carga el kernel usando int 0x13 extensiones LBA (funcion 0x42) en
 ; bloques de a lo sumo 127 sectores: la especificacion limita count a
-; 127 por llamada y el kernel actual ocupa 160. DS debe ser 0.
+; 127 por llamada y el kernel actual ocupa 138+. DS debe ser 0.
 ; ------------------------------------------------------------------
 load_kernel:
+    mov word [dap_lba_lo], 1    ; LBA inicial: sector 1 (kernel)
+    mov word [dap_seg], KERNEL_LOAD_SEG
+    mov bx, KERNEL_SECTORS      ; sectores restantes
+.loop:
+    mov ax, bx
+    mov cx, 127
+    cmp ax, cx
+    jbe .one
+    mov ax, cx                  ; min(restantes, 127)
+.one:
+    mov word [dap_count], ax
     mov si, dap
     mov ah, 0x42
     mov dl, [BOOT_DRIVE]
     int 0x13
     jc disk_error
-    test ah, ah
-    jnz disk_error
+    add [dap_lba_lo], ax        ; LBA += count
+    mov cx, ax
+    shl cx, 5                   ; count * 32 (512 B por segmento)
+    add [dap_seg], cx           ; buffer +=
+    sub bx, ax                  ; restantes -=
+    jnz .loop
     ret
 
 disk_error:
@@ -132,7 +147,7 @@ write_bootinfo:
 ; ------------------------------------------------------------------
 ; Modo CD (El Torito no-emulation): la BIOS cargo la imagen completa
 ; (boot + kernel + fs.bin) en 0x7C00. Mapa en RAM:
-;   0x7C00 boot (512 B) | 0x7E00 kernel (KERNEL_SECTORS*512 = 64 KB)
+;   0x7C00 boot (512 B) | 0x7E00 kernel (KERNEL_SECTORS*512 = 80 KB)
 ;   0x17E00: imagen MEFS (FS_SECTORS*512 = 286 KB, max 560 sectores:
 ;   0x176000 + 0x46000 = 0x186000, borde del rango reservado del PMM)
 ; Copias con rep movsd: el 66 fija operando (movsd + ECX) y el 67
@@ -203,37 +218,12 @@ get_mmap:
 ; de check_a20 detecta fallo y se puede anadir fallback 0x92 despues.
 ; ------------------------------------------------------------------
 enable_a20:
-    call a20_wait_input
-    mov al, 0xAD
-    out 0x64, al                ; deshabilitar teclado
-    call a20_wait_input
-    mov al, 0xD0
-    out 0x64, al                ; comando: leer output port
-    call a20_wait_output
-    in al, 0x60
-    push ax
-    call a20_wait_input
-    mov al, 0xD1
-    out 0x64, al                ; comando: escribir output port
-    call a20_wait_input
-    pop ax
+    ; Fase 25-W2A: metodo rapido del system control port A (0x92),
+    ; soportado por QEMU y suficiente para el test (ahorra ~35 B del
+    ; sector de boot para el load_kernel en bloques de <= 127).
+    in al, 0x92
     or al, 0x02                 ; bit A20
-    out 0x60, al
-    call a20_wait_input
-    mov al, 0xAE
-    out 0x64, al                ; re-habilitar teclado
-    ret
-
-a20_wait_input:                 ; espera buffer de comando libre (bit 2 = 0)
-    in al, 0x64
-    test al, 0x02
-    jnz a20_wait_input
-    ret
-
-a20_wait_output:                ; espera dato disponible (bit 1 = 1)
-    in al, 0x64
-    test al, 0x01
-    jz a20_wait_output
+    out 0x92, al
     ret
 
 ; ------------------------------------------------------------------
@@ -293,10 +283,15 @@ msg_disk_err   db "DISK FAIL", 0
 dap:                            ; Disk Address Packet (int 0x13, ah=0x42)
     db 0x10                     ; tamano del paquete (16 bytes)
     db 0x00                     ; reservado
-    dw KERNEL_SECTORS           ; sectores a leer
+dap_count:
+    dw 0                        ; sectores de este bloque (<= 127)
     dw KERNEL_OFFSET            ; offset destino
+dap_seg:
     dw KERNEL_LOAD_SEG          ; segmento destino
-    dq 1                        ; LBA inicial (0 = boot, 1 = kernel)
+dap_lba_lo:
+    dw 1                        ; LBA inicial (0 = boot, 1 = kernel)
+dap_lba_hi:
+    dw 0
 
 ; GDT: descriptor nulo + code + data, ambos flat (base 0, limite 4 GiB,
 ; granulosidad 4K). Un solo par code/data alcanza para este kernel.
