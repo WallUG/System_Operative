@@ -292,26 +292,45 @@ Notas del binario W:
   waveOutGetNumDevs, GetShortPathNameA, etc.) — wavplay cubre el
   camino.
 
-**Internet (stack TCP/IP — primero, los navegadores lo necesitan)**:
-- El driver RTL8139 hoy hace ARP + ICMP. Para navegar hace falta
-  **TCP** (y UDP para DNS). Plan mínimo:
-  a) **UDP** primero (más simple): probar contra el user-net con el
-     DNS de 10.0.2.3 o el echo — valida RX de segunda recepción
-     (¡el quirk del ring de QEMU en la 2ª recepción! — verificar si
-     afecta a UDP o si era solo el ICMP).
-  b) **TCP cliente** (connect/send/recv sobre el RTL8139, sin
-     estado de servidor): suficiente para HTTP GET.
-  c) Probarlo con **wget.exe / curl.exe de GnuWin32** (consola,
-     imports kernel32+msvcrt — compatibles con el set W) contra el
-     user-net (el slirp redirige 10.0.2.2:80 → host).
-- **Navegadores**: los gráficos modernos (Chrome/Firefox) son
-  imposibles. Los navegadores de **texto** (links.exe, w3m, lynx —
-  consola, ~100-300 KB, sin GDI) son el objetivo realista: tras el
-  stack TCP + set W + msvcrt, `links -dump http://10.0.2.2/` es
-  alcanzable. Un navegador gráfico antiguo (IE6, Netscape) requiere
-  demasiada superficie (COM, ActiveX, GDI avanzado) — fuera de
-  alcance a corto plazo.
-- Métrica: `wget` baja un archivo por HTTP y el checksum coincide.
+**Internet (stack TCP/IP — HECHO, commit 20ecd61)**:
+- **stack kernel/drivers/net.c**: ARP (cache + resolucion bloqueante),
+  UDP send/recv y TCP cliente (SYN/SYN+ACK/EST/data/FIN, retransmit x3,
+  seq 32-bit con wrap). Syscalls SYS_NET_* 47-53. Checksum IP/TCP/UDP
+  siempre (el slirp descarta los mal).
+- **ws2_32.dll** (14ª DLL, 0xB0D00000): WSAStartup, socket/connect/send/
+  recv/closesocket/shutdown, gethostbyname (IP literal o DNS por UDP a
+  10.0.2.3:53), inet_addr (orden de red), htons/ntohs/ntohl/htonl,
+  select, getaddrinfo/freeaddrinfo, getsockopt/setsockopt, ...
+- **netget.exe** (mingw -lws2_32): DNS (example.com) + TCP + GET
+  HTTP/1.0 a 10.0.2.2:8080 (python http.server del host); verifica el
+  checksum del cuerpo (c=c*33+byte). test_fase25w2a6.py 6/6 PASS.
+- **Lecciones de QEMU (rtl8139)**:
+  * el CAPR se ESCRIBE como (siguiente-16): QEMU hace RxBufPtr=CAPR+16;
+    el driver Linux hace RTL_W16(RxBufPtr, cur_rx-16). El driver lleva
+    su propio puntero (NO relee el CAPR: devuelve -16).
+  * el avance usa el LEN REAL del header (clampear el buffer del caller
+    desalinea el ring).
+  * re-escribir el CAPR en cada poll sin paquete fuerza el
+    qemu_flush_queued_packets; si no, QEMU entrega paquetes ~1-2 s tarde
+    (timeouts flaky).
+  * anillo RX 8KB -> 64KB (RBLEN=3, kmalloc): con 8KB el ring hace wrap
+    en una transferencia TCP y el recv relee paquetes viejos.
+  * el TX de QEMU es SINCRONO (el TSD write transmite antes de retornar);
+    el poll del OWN es innecesario y el TSD1 de la 2ª rotacion se lee 0
+    aunque el paquete salga (quitar el poll, no rotar a ciegas).
+  * el segmento con FIN puede llevar la COLA (slirp cierra con
+    data+FIN): entregarla antes de marcar EOF.
+- **Sistema > 64 KB**: el bootloader cargaba 128 sectores; con el kernel
+  mayor hay que subir KERNEL_SECTORS Y cargar en bloques de <=127
+  (int 0x13 limita el count a 127; con 144 en una llamada la BIOS
+  fallaba 'DISK FAIL'). Tambien MEFS_FS_START y makefs LBA_FS_START
+  (129 -> 145) y la pila de usuario 64KB->128KB (CRTs con frames grandes).
+- Ojo con el orden de tests: test_fase20a/faseE FORMATEAN el disco
+  (lo dejan con solo post.txt); los tests de apps (w2a5/w2a6) necesitan
+  `make persist_disk` antes.
+- sndrec32.exe / navegadores de texto (links/w3m): el stack + ws2_32 ya
+  estan; falta la superficie (sndrec32 necesita waveOutGetNumDevs etc.;
+  links necesita termios/ncurses) si se quiere probar un .exe real.
 
 ## Patrones de test (QEMU headless)
 
